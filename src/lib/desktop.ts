@@ -80,3 +80,11 @@ export async function subscribeToDownloads(refresh: () => void): Promise<() => v
   const { listen } = await import("@tauri-apps/api/event");
   return listen("downloads-updated", refresh);
 }
+
+export async function subscribeToDownloadErrors(notify: (message: string) => void): Promise<() => void> {
+  if (!desktopRuntime) {
+    return () => undefined;
+  }
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<string>("download-capture-error", (event) => notify(event.payload));
+}

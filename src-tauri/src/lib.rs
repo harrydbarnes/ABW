@@ -16,7 +16,7 @@ use url::Url;
 use uuid::Uuid;
 
 const WRIKE_HOME: &str = "https://www.wrike.com/workspace.htm";
-const MAX_PREVIEW_BYTES: u64 = 100 * 1024 * 1024;
+const MAX_PDF_PREVIEW_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,6 +72,7 @@ struct PendingDownload {
 struct CaptureContext {
     pending: Mutex<HashMap<PathBuf, PendingDownload>>,
     page_title: Mutex<String>,
+    page_url: Mutex<Option<String>>,
 }
 
 #[tauri::command]
@@ -85,8 +86,11 @@ fn read_download(app: AppHandle, id: String) -> Result<Vec<u8>, String> {
     let size = fs::metadata(&path)
         .map_err(|error| format!("Unable to inspect download: {error}"))?
         .len();
-    if size > MAX_PREVIEW_BYTES {
-        return Err("This file is too large to preview inside ABW.".into());
+    if size > MAX_PDF_PREVIEW_BYTES {
+        return Err(format!(
+            "This PDF is {} MB. In-app PDF preview currently supports files up to 512 MB.",
+            size.div_ceil(1024 * 1024)
+        ));
     }
     fs::read(path).map_err(|error| format!("Unable to read download: {error}"))
 }
@@ -179,9 +183,13 @@ fn open_wrike_at(app: &AppHandle, destination: &str) -> Result<(), String> {
 
     let spell_check = read_settings(app)?.spell_check;
     let context = Arc::new(CaptureContext::default());
-    let download_context = Arc::clone(&context);
     let title_context = Arc::clone(&context);
-    let download_app = app.clone();
+    let navigation_context = Arc::clone(&context);
+    let popup_context = Arc::clone(&context);
+    let popup_app = app.clone();
+    if let Ok(mut latest) = context.page_url.lock() {
+        *latest = Some(destination.to_owned());
+    }
 
     WebviewWindowBuilder::new(app, "wrike", WebviewUrl::External(parsed))
         .title("ABW - Wrike workspace")
@@ -189,12 +197,54 @@ fn open_wrike_at(app: &AppHandle, destination: &str) -> Result<(), String> {
         .min_inner_size(840.0, 600.0)
         .zoom_hotkeys_enabled(true)
         .initialization_script(&apply_spell_check_script(spell_check))
-        .on_navigation(is_safe_remote_destination)
-        .on_new_window(|url, _features| {
-            if is_safe_remote_destination(&url) {
-                NewWindowResponse::Allow
-            } else {
-                NewWindowResponse::Deny
+        .on_navigation(move |url| {
+            let allowed = is_safe_remote_destination(url);
+            if allowed {
+                if let Ok(mut latest) = navigation_context.page_url.lock() {
+                    *latest = Some(url.to_string());
+                }
+            }
+            allowed
+        })
+        .on_new_window(move |url, features| {
+            if !is_safe_remote_destination(&url) {
+                return NewWindowResponse::Deny;
+            }
+            let parent_provenance = captured_provenance(&popup_context);
+            let child_title_context = Arc::clone(&popup_context);
+            let child_download_context = Arc::clone(&popup_context);
+            let label = format!("wrike-popup-{}", Uuid::new_v4());
+            let blank = Url::parse("about:blank").expect("about:blank is a valid URL");
+            let child = WebviewWindowBuilder::new(
+                &popup_app,
+                label,
+                WebviewUrl::External(blank),
+            )
+            .title("ABW - Wrike")
+            .window_features(features)
+            .zoom_hotkeys_enabled(true)
+            .on_navigation(is_safe_remote_destination)
+            .on_document_title_changed(move |window, title| {
+                if let Ok(mut latest) = child_title_context.page_title.lock() {
+                    *latest = title.clone();
+                }
+                let _ = window.set_title(&format!("ABW - {title}"));
+            })
+            .on_download(download_handler(
+                popup_app.clone(),
+                child_download_context,
+                Some(parent_provenance),
+            ))
+            .build();
+            match child {
+                Ok(window) => NewWindowResponse::Create { window },
+                Err(error) => {
+                    emit_download_capture_error(
+                        &popup_app,
+                        format!("Unable to open the Wrike file window: {error}"),
+                    );
+                    NewWindowResponse::Deny
+                }
             }
         })
         .on_document_title_changed(move |window, title| {
@@ -203,64 +253,85 @@ fn open_wrike_at(app: &AppHandle, destination: &str) -> Result<(), String> {
             }
             let _ = window.set_title(&format!("ABW - {title}"));
         })
-        .on_download(move |webview, event| {
-            match event {
-                DownloadEvent::Requested { url: _, destination } => {
-                    let suggested_name = destination
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("wrike-download");
-                    let path = match unique_download_path(&download_app, suggested_name) {
-                        Ok(path) => path,
-                        Err(_) => return false,
-                    };
-                    let source_url = webview.url().ok().map(|current| current.to_string());
-                    let source_label = download_context
-                        .page_title
-                        .lock()
-                        .ok()
-                        .map(|title| clean_wrike_title(&title))
-                        .filter(|title| !title.is_empty())
-                        .unwrap_or_else(|| "Wrike task".to_owned());
-                    if let Ok(mut pending) = download_context.pending.lock() {
-                        pending.insert(
-                            path.clone(),
-                            PendingDownload {
-                                source_url,
-                                source_label,
-                            },
-                        );
-                    }
-                    *destination = path;
-                }
-                DownloadEvent::Finished {
-                    url: _,
-                    path,
-                    success,
-                } => {
-                    if success {
-                        let Some(path) = path else {
-                            return true;
-                        };
-                        let pending = download_context
-                            .pending
-                            .lock()
-                            .ok()
-                            .and_then(|mut entries| entries.remove(&path));
-                        let provenance = pending.unwrap_or(PendingDownload {
-                            source_url: None,
-                            source_label: "Wrike task".into(),
-                        });
-                        let _ = record_completed_download(&download_app, &path, provenance);
-                    }
-                }
-                _ => {}
-            }
-            true
-        })
+        .on_download(download_handler(app.clone(), Arc::clone(&context), None))
         .build()
         .map_err(|error| format!("Unable to open Wrike workspace: {error}"))?;
     Ok(())
+}
+
+fn download_handler(
+    app: AppHandle,
+    context: Arc<CaptureContext>,
+    provenance_override: Option<PendingDownload>,
+) -> impl Fn(tauri::Webview, DownloadEvent<'_>) -> bool + Send + Sync + 'static {
+    move |webview, event| {
+        match event {
+            DownloadEvent::Requested { url: _, destination } => {
+                let suggested_name = destination
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("wrike-download");
+                let path = match unique_download_path(&app, suggested_name) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        emit_download_capture_error(&app, error);
+                        return false;
+                    }
+                };
+                let provenance = provenance_override.clone().unwrap_or_else(|| PendingDownload {
+                    source_url: webview.url().ok().map(|current| current.to_string()),
+                    source_label: captured_provenance(&context).source_label,
+                });
+                if let Ok(mut pending) = context.pending.lock() {
+                    pending.insert(path.clone(), provenance);
+                }
+                *destination = path;
+            }
+            DownloadEvent::Finished {
+                url: _,
+                path,
+                success,
+            } => {
+                if success {
+                    let Some(path) = path else {
+                        emit_download_capture_error(
+                            &app,
+                            "Wrike completed a download without reporting its saved location.".into(),
+                        );
+                        return true;
+                    };
+                    let provenance = context
+                        .pending
+                        .lock()
+                        .ok()
+                        .and_then(|mut entries| entries.remove(&path))
+                        .unwrap_or_else(|| captured_provenance(&context));
+                    if let Err(error) = record_completed_download(&app, &path, provenance) {
+                        emit_download_capture_error(&app, error);
+                    }
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+}
+
+fn captured_provenance(context: &CaptureContext) -> PendingDownload {
+    PendingDownload {
+        source_url: context.page_url.lock().ok().and_then(|url| url.clone()),
+        source_label: context
+            .page_title
+            .lock()
+            .ok()
+            .map(|title| clean_wrike_title(&title))
+            .filter(|title| !title.is_empty())
+            .unwrap_or_else(|| "Wrike task".to_owned()),
+    }
+}
+
+fn emit_download_capture_error(app: &AppHandle, message: String) {
+    let _ = app.emit("download-capture-error", message);
 }
 
 fn record_completed_download(

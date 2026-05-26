@@ -15,6 +15,7 @@ import {
   loadSettings,
   saveSettings,
   sendTestNotification,
+  subscribeToDownloadErrors,
   subscribeToDownloads,
 } from "./lib/desktop";
 import type { DownloadRecord, FileFilter, Settings } from "./types";
@@ -47,10 +48,19 @@ export function App() {
     refresh();
     void loadSettings().then(setSettings);
     let dispose: () => void = () => undefined;
+    let disposeErrors: () => void = () => undefined;
     void subscribeToDownloads(refresh).then((unsubscribe) => {
       dispose = unsubscribe;
     });
-    return () => dispose();
+    void subscribeToDownloadErrors((message) => {
+      setNotice(`Download was not added to Files: ${message}`);
+    }).then((unsubscribe) => {
+      disposeErrors = unsubscribe;
+    });
+    return () => {
+      dispose();
+      disposeErrors();
+    };
   }, []);
 
   const visibleDownloads = useMemo(() => {
@@ -93,7 +103,7 @@ export function App() {
       <aside className="sidebar" aria-label="ABW navigation">
         <div className="brand" aria-label="ABW">
           <img className="brand-wordmark" src="/abw-wordmark.svg" alt="ABW" />
-          <span>Better Wrike</span>
+          <span>Wrike, but better</span>
         </div>
         <nav className="navigation">
           <button className="nav-item wrike-launch" onClick={() => void openWrike()}>

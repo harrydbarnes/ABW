@@ -1,6 +1,6 @@
 [package]
 name = "abw"
-version = "0.1.0"
+version = "0.1.1"
 description = "ABW - a lightweight Better Wrike desktop client"
 authors = ["Inside Media"]
 edition = "2021"

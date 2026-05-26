@@ -24,9 +24,9 @@ export default function PreviewPanel({ record }: { record: DownloadRecord | null
           setBytes(result);
         }
       })
-      .catch(() => {
+      .catch((problem: unknown) => {
         if (live) {
-          setError("This file could not be read for preview.");
+          setError(typeof problem === "string" ? problem : "This PDF could not be read for preview.");
         }
       });
     return () => {

@@ -118,7 +118,8 @@ on a Windows runner when local Rust/MSVC build tools are unavailable.
   bootstrap page needed by authentication flows); the remote window has no local ABW command
   permissions.
 - Preview/open commands resolve only files present in ABW's tracked download directory.
-- PDF preview is capped at 100 MB; spreadsheet output is capped to 250 rows and 50 columns per
-  sheet in the current viewer to keep the UI responsive.
+- PDF preview is capped at 512 MB with a displayed size explanation when exceeded; spreadsheet
+  output is capped to 250 rows and 50 columns per sheet in the current viewer to keep the UI
+  responsive.
 - Workbooks are parsed in the trusted Rust process using `calamine 0.35`, rather than executing a
   large JavaScript parser in the UI or Wrike webview.
