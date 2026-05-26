@@ -92,11 +92,8 @@ export function App() {
     <div className="app-shell" spellCheck={settings.spellCheck}>
       <aside className="sidebar" aria-label="ABW navigation">
         <div className="brand" aria-label="ABW">
-          <div className="brand-mark">A</div>
-          <div>
-            <strong>ABW</strong>
-            <span>Better Wrike</span>
-          </div>
+          <img className="brand-wordmark" src="/abw-wordmark.svg" alt="ABW" />
+          <span>Better Wrike</span>
         </div>
         <nav className="navigation">
           <button className="nav-item wrike-launch" onClick={() => void openWrike()}>

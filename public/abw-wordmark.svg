@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420">
+  <defs>
+    <linearGradient id="bright" x1="16" y1="370" x2="1056" y2="52" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#03bb69"/>
+      <stop offset=".52" stop-color="#05cb63"/>
+      <stop offset="1" stop-color="#45dc68"/>
+    </linearGradient>
+    <linearGradient id="shadow" x1="248" y1="55" x2="985" y2="372" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#00ad72"/>
+      <stop offset="1" stop-color="#00a56c"/>
+    </linearGradient>
+    <linearGradient id="fold" x1="98" y1="370" x2="690" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#18c874"/>
+      <stop offset="1" stop-color="#42dd69"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#bright)" d="M18 365 151 56h62L84 365Z"/>
+  <path fill="url(#shadow)" d="M151 56h62l149 309h-68L181 134Z"/>
+  <path fill="url(#fold)" d="M84 365h40l82-91-22-48h-34L62 327l-19 38Z"/>
+  <path fill="url(#shadow)" d="M353 56h71v159h-71Z"/>
+  <path fill="url(#bright)" d="M424 56h89c70 0 112 38 112 97 0 34-16 60-45 82 31 18 49 47 49 83 0 30-12 47-31 47h-170l58-58h59c15 0 25-12 25-26 0-18-14-30-33-30h-58l53-56h16c15 0 24-12 24-26 0-15-10-25-28-25h-100Z"/>
+  <path fill="url(#fold)" d="M353 230 401 272 483 192h54L373 365h-20Z"/>
+  <path fill="url(#shadow)" d="M646 56h66l94 226-44 83Z"/>
+  <path fill="url(#bright)" d="M762 365h45l67-126 37 77-28 49h-55l-30-60Z"/>
+  <path fill="url(#shadow)" d="M875 206h67l49 105-39 72Z"/>
+  <path fill="url(#bright)" d="M952 383 1084 56h76L991 383Z"/>
+</svg>

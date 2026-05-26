@@ -1,4 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="16" fill="#315de8"/>
-  <path fill="#fff" d="M14 48 27 15h10l13 33H40l-2.5-7H26.2l-2.5 7Zm15-15h6L32 24.6Z"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="a-bright" x1="38" y1="438" x2="230" y2="70" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#03bc68"/>
+      <stop offset="1" stop-color="#05d05a"/>
+    </linearGradient>
+    <linearGradient id="a-dark" x1="214" y1="72" x2="417" y2="442" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#059a69"/>
+      <stop offset="1" stop-color="#008f65"/>
+    </linearGradient>
+    <linearGradient id="a-fold" x1="88" y1="444" x2="263" y2="261" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#13c970"/>
+      <stop offset="1" stop-color="#40dc67"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#a-bright)" d="M38 442 204 70h75L115 442Z"/>
+  <path fill="url(#a-dark)" d="M204 70h75l191 372h-82L239 155Z"/>
+  <path fill="url(#a-fold)" d="M115 442h54l99-116-28-62h-38L88 397l-24 45Z"/>
 </svg>
