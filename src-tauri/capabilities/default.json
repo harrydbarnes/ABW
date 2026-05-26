@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "Capabilities for ABW's trusted local Files window.",
+  "windows": ["main"],
+  "permissions": ["core:default", "core:event:allow-listen"]
+}
+
