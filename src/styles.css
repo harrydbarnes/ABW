@@ -59,6 +59,15 @@ input:focus-visible {
   flex: none;
 }
 
+.material-icon {
+  width: 19px;
+  height: 19px;
+  flex: none;
+  display: block;
+  fill: currentColor;
+  aspect-ratio: 1;
+}
+
 .app-shell {
   height: 100%;
   display: grid;
@@ -126,10 +135,6 @@ input:focus-visible {
   background: var(--nav-active);
 }
 
-.workspace-tab.selected {
-  box-shadow: inset 0 -2px #6587f6;
-}
-
 .new-tab {
   width: 34px;
   justify-content: center;
@@ -141,7 +146,7 @@ input:focus-visible {
   background: var(--nav-active);
 }
 
-.new-tab .icon {
+.new-tab .material-icon {
   width: 16px;
   height: 16px;
 }
@@ -175,6 +180,7 @@ input:focus-visible {
   background: var(--nav-active);
 }
 
+.workspace-tab.selected::after,
 .nav-item.selected::after {
   content: "";
   position: absolute;
@@ -184,6 +190,10 @@ input:focus-visible {
   height: 2px;
   border-radius: 3px 3px 0 0;
   background: #6587f6;
+}
+
+.workspace-tab {
+  position: relative;
 }
 
 .external-dot {
