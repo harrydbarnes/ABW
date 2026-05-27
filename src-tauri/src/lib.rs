@@ -8,8 +8,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tauri::{
-    webview::{DownloadEvent, NewWindowResponse, WebviewWindowBuilder},
-    AppHandle, Emitter, Manager, WebviewUrl,
+    webview::{
+        DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder, WebviewWindowBuilder,
+    },
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl,
 };
 use tauri_plugin_notification::NotificationExt;
 use url::Url;
@@ -17,6 +19,7 @@ use uuid::Uuid;
 
 const WRIKE_HOME: &str = "https://www.wrike.com/workspace.htm";
 const MAX_PDF_PREVIEW_BYTES: u64 = 512 * 1024 * 1024;
+const TASKBAR_HEIGHT: f64 = 50.0;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -135,8 +138,8 @@ fn get_settings(app: AppHandle) -> Result<Settings, String> {
 #[tauri::command]
 fn update_settings(app: AppHandle, settings: Settings) -> Result<Settings, String> {
     write_json(settings_path(&app)?, &settings)?;
-    if let Some(window) = app.get_webview_window("wrike") {
-        window
+    if let Some(webview) = app.get_webview("wrike") {
+        webview
             .eval(&apply_spell_check_script(settings.spell_check))
             .map_err(|error| format!("Unable to apply spell-check preference: {error}"))?;
     }
@@ -155,7 +158,24 @@ fn send_test_notification(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 async fn launch_wrike(app: AppHandle) -> Result<(), String> {
+    if let Some(webview) = app.get_webview("wrike") {
+        webview
+            .show()
+            .map_err(|error| format!("Unable to display the Wrike workspace: {error}"))?;
+        webview.set_focus().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
     open_wrike_at(&app, WRIKE_HOME)
+}
+
+#[tauri::command]
+fn hide_wrike(app: AppHandle) -> Result<(), String> {
+    if let Some(webview) = app.get_webview("wrike") {
+        webview
+            .hide()
+            .map_err(|error| format!("Unable to hide the Wrike workspace: {error}"))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -172,15 +192,27 @@ async fn open_source_task(app: AppHandle, url: String) -> Result<(), String> {
 
 fn open_wrike_at(app: &AppHandle, destination: &str) -> Result<(), String> {
     let parsed = Url::parse(destination).map_err(|error| format!("Invalid Wrike URL: {error}"))?;
-    if let Some(window) = app.get_webview_window("wrike") {
-        window
+    if let Some(webview) = app.get_webview("wrike") {
+        webview
             .navigate(parsed)
             .map_err(|error| format!("Unable to open the task in Wrike: {error}"))?;
-        window.show().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
+        webview.show().map_err(|error| error.to_string())?;
+        webview.set_focus().map_err(|error| error.to_string())?;
         return Ok(());
     }
 
+    let host = app
+        .get_window("main")
+        .ok_or_else(|| "Unable to locate the ABW application window.".to_owned())?;
+    let scale = host.scale_factor().map_err(|error| error.to_string())?;
+    let host_size = host
+        .inner_size()
+        .map_err(|error| error.to_string())?
+        .to_logical::<f64>(scale);
+    let content_size = LogicalSize::new(
+        host_size.width,
+        (host_size.height - TASKBAR_HEIGHT).max(1.0),
+    );
     let spell_check = read_settings(app)?.spell_check;
     let context = Arc::new(CaptureContext::default());
     let title_context = Arc::clone(&context);
@@ -191,10 +223,8 @@ fn open_wrike_at(app: &AppHandle, destination: &str) -> Result<(), String> {
         *latest = Some(destination.to_owned());
     }
 
-    WebviewWindowBuilder::new(app, "wrike", WebviewUrl::External(parsed))
-        .title("ABW - Wrike workspace")
-        .inner_size(1360.0, 860.0)
-        .min_inner_size(840.0, 600.0)
+    let builder = WebviewBuilder::new("wrike", WebviewUrl::External(parsed))
+        .auto_resize()
         .zoom_hotkeys_enabled(true)
         .initialization_script(&apply_spell_check_script(spell_check))
         .on_navigation(move |url| {
@@ -215,15 +245,30 @@ fn open_wrike_at(app: &AppHandle, destination: &str) -> Result<(), String> {
             let child_download_context = Arc::clone(&popup_context);
             let label = format!("wrike-popup-{}", Uuid::new_v4());
             let blank = Url::parse("about:blank").expect("about:blank is a valid URL");
-            let child = WebviewWindowBuilder::new(
+            let completion_app = popup_app.clone();
+            let child_builder = WebviewWindowBuilder::new(
                 &popup_app,
                 label,
                 WebviewUrl::External(blank),
             )
             .title("ABW - Wrike")
             .window_features(features)
+            .skip_taskbar(true)
             .zoom_hotkeys_enabled(true)
+            .initialization_script(&apply_spell_check_script(spell_check))
             .on_navigation(is_safe_remote_destination)
+            .on_page_load(move |window, payload| {
+                if matches!(payload.event(), PageLoadEvent::Finished)
+                    && is_wrike_workspace_destination(payload.url())
+                {
+                    if let Some(workspace) = completion_app.get_webview("wrike") {
+                        let _ = workspace.navigate(payload.url().clone());
+                        let _ = workspace.show();
+                        let _ = workspace.set_focus();
+                    }
+                    let _ = window.close();
+                }
+            })
             .on_document_title_changed(move |window, title| {
                 if let Ok(mut latest) = child_title_context.page_title.lock() {
                     *latest = title.clone();
@@ -234,8 +279,8 @@ fn open_wrike_at(app: &AppHandle, destination: &str) -> Result<(), String> {
                 popup_app.clone(),
                 child_download_context,
                 Some(parent_provenance),
-            ))
-            .build();
+            ));
+            let child = child_builder.build();
             match child {
                 Ok(window) => NewWindowResponse::Create { window },
                 Err(error) => {
@@ -247,14 +292,17 @@ fn open_wrike_at(app: &AppHandle, destination: &str) -> Result<(), String> {
                 }
             }
         })
-        .on_document_title_changed(move |window, title| {
+        .on_document_title_changed(move |_webview, title| {
             if let Ok(mut latest) = title_context.page_title.lock() {
                 *latest = title.clone();
             }
-            let _ = window.set_title(&format!("ABW - {title}"));
         })
-        .on_download(download_handler(app.clone(), Arc::clone(&context), None))
-        .build()
+        .on_download(download_handler(app.clone(), Arc::clone(&context), None));
+    host.add_child(
+        builder,
+        LogicalPosition::new(0.0, TASKBAR_HEIGHT),
+        content_size,
+    )
         .map_err(|error| format!("Unable to open Wrike workspace: {error}"))?;
     Ok(())
 }
@@ -492,6 +540,13 @@ fn is_safe_remote_destination(url: &Url) -> bool {
     url.scheme() == "https" || url.as_str() == "about:blank"
 }
 
+fn is_wrike_workspace_destination(url: &Url) -> bool {
+    let is_wrike = url
+        .host_str()
+        .is_some_and(|host| host == "wrike.com" || host.ends_with(".wrike.com"));
+    url.scheme() == "https" && is_wrike && url.path().ends_with("/workspace.htm")
+}
+
 fn apply_spell_check_script(enabled: bool) -> String {
     format!(
         r#"
@@ -514,15 +569,9 @@ fn apply_spell_check_script(enabled: bool) -> String {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
-        .setup(|app| {
-            let settings = read_settings(app.handle()).map_err(std::io::Error::other)?;
-            if settings.launch_wrike_on_start {
-                open_wrike_at(app.handle(), WRIKE_HOME).map_err(std::io::Error::other)?;
-            }
-            Ok(())
-        })
         .invoke_handler(tauri::generate_handler![
             get_settings,
+            hide_wrike,
             launch_wrike,
             list_downloads,
             open_download,

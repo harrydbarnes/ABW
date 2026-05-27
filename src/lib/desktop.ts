@@ -3,6 +3,10 @@ import { DEFAULT_SETTINGS, DEMO_DOWNLOADS } from "../data/demo";
 
 const desktopRuntime = "__TAURI_INTERNALS__" in window;
 
+export function isDesktopRuntime(): boolean {
+  return desktopRuntime;
+}
+
 async function invokeDesktop<T>(command: string, payload?: Record<string, unknown>) {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(command, payload);
@@ -68,8 +72,12 @@ export async function openSourceTask(record: DownloadRecord): Promise<void> {
 export async function launchWrike(): Promise<void> {
   if (desktopRuntime) {
     await invokeDesktop("launch_wrike");
-  } else {
-    window.open("https://www.wrike.com/workspace.htm", "_blank", "noopener,noreferrer");
+  }
+}
+
+export async function hideWrike(): Promise<void> {
+  if (desktopRuntime) {
+    await invokeDesktop("hide_wrike");
   }
 }
 

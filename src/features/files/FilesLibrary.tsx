@@ -5,6 +5,7 @@ interface Props {
   downloads: DownloadRecord[];
   filter: FileFilter;
   onFilterChange: (filter: FileFilter) => void;
+  onOpenSourceTask: () => void;
   onSearchChange: (search: string) => void;
   onSelect: (id: string) => void;
   search: string;
@@ -22,6 +23,7 @@ export function FilesLibrary({
   downloads,
   filter,
   onFilterChange,
+  onOpenSourceTask,
   onSearchChange,
   onSelect,
   search,
@@ -80,7 +82,9 @@ export function FilesLibrary({
               </button>
               <button
                 className="row-task-link"
-                onClick={() => void openSourceTask(file)}
+                onClick={() => {
+                  void openSourceTask(file).then(onOpenSourceTask);
+                }}
                 title={`Open ${file.sourceLabel} in Wrike`}
               >
                 {file.sourceLabel}

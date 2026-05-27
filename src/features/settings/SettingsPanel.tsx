@@ -11,7 +11,7 @@ export function SettingsPanel({ settings, onChange, onTestNotification }: Props)
     <section className="settings-panel">
       <header>
         <h1>Settings</h1>
-        <p>Preferences apply to ABW and the Wrike workspace window.</p>
+        <p>Preferences apply to ABW and the live Wrike workspace tab.</p>
       </header>
       <div className="setting-group">
         <SettingToggle
@@ -22,8 +22,8 @@ export function SettingsPanel({ settings, onChange, onTestNotification }: Props)
         />
         <SettingToggle
           checked={settings.launchWrikeOnStart}
-          description="Open the Wrike sign-in or workspace window alongside Files whenever ABW starts."
-          label="Open Wrike workspace on launch"
+          description="Show the live Wrike sign-in or workspace tab whenever ABW starts."
+          label="Show Wrike workspace on launch"
           onChange={(launchWrikeOnStart) => onChange({ ...settings, launchWrikeOnStart })}
         />
         <SettingToggle
@@ -37,7 +37,7 @@ export function SettingsPanel({ settings, onChange, onTestNotification }: Props)
         <div>
           <h2>Wrike notifications</h2>
           <p>
-            Comments, mentions and assignments use Wrike notifications in the workspace window.
+            Comments, mentions and assignments use Wrike notifications in the live workspace tab.
             Keep it open and enable notifications when Wrike prompts you.
           </p>
         </div>

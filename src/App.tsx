@@ -11,6 +11,8 @@ import { FilesLibrary } from "./features/files/FilesLibrary";
 import { SettingsPanel } from "./features/settings/SettingsPanel";
 import {
   launchWrike,
+  hideWrike,
+  isDesktopRuntime,
   loadDownloads,
   loadSettings,
   saveSettings,
@@ -22,10 +24,10 @@ import type { DownloadRecord, FileFilter, Settings } from "./types";
 
 const PreviewPanel = lazy(() => import("./features/preview/PreviewPanel"));
 
-type Screen = "files" | "settings";
+type Screen = "wrike" | "files" | "settings";
 
 export function App() {
-  const [screen, setScreen] = useState<Screen>("files");
+  const [screen, setScreen] = useState<Screen>("wrike");
   const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -46,7 +48,14 @@ export function App() {
       });
     };
     refresh();
-    void loadSettings().then(setSettings);
+    void loadSettings().then((next) => {
+      setSettings(next);
+      if (next.launchWrikeOnStart) {
+        void showWrike();
+      } else {
+        setScreen("files");
+      }
+    });
     let dispose: () => void = () => undefined;
     let disposeErrors: () => void = () => undefined;
     void subscribeToDownloads(refresh).then((unsubscribe) => {
@@ -78,9 +87,14 @@ export function App() {
   const selectedRecord =
     visibleDownloads.find((record) => record.id === selectedId) ?? visibleDownloads[0] ?? null;
 
-  async function openWrike() {
+  async function showWrike() {
     await launchWrike();
-    setNotice("Wrike workspace opened in its ABW desktop window.");
+    setScreen("wrike");
+  }
+
+  async function showLocalScreen(next: Exclude<Screen, "wrike">) {
+    await hideWrike();
+    setScreen(next);
   }
 
   async function updateSettings(next: Settings) {
@@ -100,54 +114,70 @@ export function App() {
 
   return (
     <div className="app-shell" spellCheck={settings.spellCheck}>
-      <aside className="sidebar" aria-label="ABW navigation">
+      <header className="taskbar">
         <div className="brand" aria-label="ABW">
           <img className="brand-wordmark" src="/abw-wordmark.svg" alt="ABW" />
-          <span>Wrike, but better</span>
         </div>
-        <nav className="navigation">
-          <button className="nav-item wrike-launch" onClick={() => void openWrike()}>
+        <div className="workspace-tabs" role="tablist" aria-label="Wrike tabs">
+          <button
+            aria-selected={screen === "wrike"}
+            className={`workspace-tab ${screen === "wrike" ? "selected" : ""}`}
+            onClick={() => void showWrike()}
+            role="tab"
+          >
             <NavIcon kind="home" />
             Wrike
             <span className="external-dot" />
           </button>
-          <button className="nav-item" onClick={() => void openWrike()}>
-            <NavIcon kind="inbox" />
-            Inbox
+          <button
+            aria-label="New Wrike tab"
+            className="new-tab"
+            onClick={() => setNotice("Additional Wrike tabs are not available yet.")}
+            title="Additional Wrike tabs are not available yet"
+          >
+            <NavIcon kind="plus" />
           </button>
-          <button className="nav-item" onClick={() => void openWrike()}>
-            <NavIcon kind="check" />
-            My work
-          </button>
+          <span className="tab-space" aria-hidden="true" />
+        </div>
+        <div className={`spell-state ${settings.spellCheck ? "enabled" : ""}`}>
+          <NavIcon kind="spell" />
+          Spell check {settings.spellCheck ? "on" : "off"}
+        </div>
+        <nav className="task-navigation" aria-label="ABW navigation">
           <button
             className={`nav-item ${screen === "files" ? "selected" : ""}`}
-            onClick={() => setScreen("files")}
+            onClick={() => void showLocalScreen("files")}
           >
             <NavIcon kind="file" />
             Files
           </button>
-        </nav>
-        <div className="sidebar-foot">
-          <div className={`spell-state ${settings.spellCheck ? "enabled" : ""}`}>
-            <NavIcon kind="spell" />
-            Spell check {settings.spellCheck ? "on" : "off"}
-          </div>
           <button
             className={`nav-item ${screen === "settings" ? "selected" : ""}`}
-            onClick={() => setScreen("settings")}
+            onClick={() => void showLocalScreen("settings")}
           >
             <NavIcon kind="gear" />
             Settings
           </button>
-        </div>
-      </aside>
+        </nav>
+      </header>
       <main className="content">
-        {screen === "files" ? (
+        {screen === "wrike" ? (
+          <section className="wrike-surface" aria-label="Wrike workspace">
+            <NavIcon kind="home" />
+            <h1>Wrike</h1>
+            <p>
+              {isDesktopRuntime()
+                ? "Loading your live workspace..."
+                : "Your live Wrike workspace displays here in the desktop app."}
+            </p>
+          </section>
+        ) : screen === "files" ? (
           <div className="files-screen">
             <FilesLibrary
               downloads={visibleDownloads}
               filter={filter}
               onFilterChange={setFilter}
+              onOpenSourceTask={() => setScreen("wrike")}
               onSearchChange={setSearch}
               onSelect={setSelectedId}
               search={search}
@@ -180,14 +210,13 @@ export function App() {
 function NavIcon({ kind }: { kind: string }) {
   const paths: Record<string, ReactElement> = {
     home: <path d="M3.5 9.3 12 3l8.5 6.3V20H14v-5h-4v5H3.5Z" />,
-    inbox: <path d="M4 5h16v13H4Zm0 8h5l2 2h2l2-2h5" />,
-    check: <path d="m4.5 12 5 5L20 6.5" />,
     file: <path d="M6 3.5h8l4 4V21H6Zm8 0v5h4M9 13h6M9 17h6" />,
     gear: (
       <path d="M12 8.4a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2Zm0-5 1.4 2.4 2.8-.1.2 2.8 2.5 1.3-1.3 2.5 1.3 2.5-2.5 1.3-.2 2.8-2.8-.1-1.4 2.4-1.4-2.4-2.8.1-.2-2.8-2.5-1.3 1.3-2.5-1.3-2.5 2.5-1.3.2-2.8 2.8.1Z" />
     ),
     spell: <path d="M5 19 10.2 5h3.6L19 19m-12-5h10M4 21h16" />,
     close: <path d="m6 6 12 12M18 6 6 18" />,
+    plus: <path d="M12 5v14M5 12h14" />,
   };
   return (
     <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">

@@ -62,59 +62,106 @@ input:focus-visible {
 .app-shell {
   height: 100%;
   display: grid;
-  grid-template-columns: 208px minmax(720px, 1fr);
+  grid-template-rows: 50px minmax(0, 1fr);
   background: var(--surface-soft);
 }
 
-.sidebar {
+.taskbar {
   color: var(--nav-soft);
   background: var(--nav);
-  padding: 24px 14px 16px;
+  padding: 0 16px;
   display: flex;
-  flex-direction: column;
-  gap: 33px;
+  align-items: center;
+  gap: 12px;
 }
 
 .brand {
-  padding: 0 10px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 5px;
+  padding-right: 15px;
+  border-right: 1px solid #293b61;
+  display: grid;
+  align-items: center;
 }
 
 .brand-wordmark {
-  width: 156px;
+  width: 94px;
   height: auto;
   display: block;
 }
 
-.brand span {
-  font-size: 11px;
-  color: var(--nav-soft);
+.task-navigation {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
-.navigation,
-.sidebar-foot {
+.workspace-tabs {
+  min-width: 250px;
+  flex: 1;
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 5px;
 }
 
-.sidebar-foot {
-  margin-top: auto;
-  gap: 14px;
+.workspace-tab,
+.new-tab {
+  height: 34px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  color: #bcc8de;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.workspace-tab {
+  min-width: 112px;
+  padding: 0 12px;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.workspace-tab:hover,
+.workspace-tab.selected {
+  color: #fff;
+  background: var(--nav-active);
+}
+
+.workspace-tab.selected {
+  box-shadow: inset 0 -2px #6587f6;
+}
+
+.new-tab {
+  width: 34px;
+  justify-content: center;
+  border: 1px solid #293b61;
+}
+
+.new-tab:hover {
+  color: #fff;
+  background: var(--nav-active);
+}
+
+.new-tab .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.tab-space {
+  height: 1px;
+  flex: 1;
+  min-width: 48px;
 }
 
 .nav-item {
   position: relative;
-  height: 46px;
-  width: 100%;
-  border-radius: 9px;
-  padding: 0 13px;
+  height: 34px;
+  min-width: 90px;
+  border-radius: 7px;
+  padding: 0 12px;
   display: flex;
   align-items: center;
-  gap: 13px;
+  justify-content: center;
+  gap: 8px;
   color: #bcc8de;
   font-size: 14px;
   font-weight: 500;
@@ -128,38 +175,38 @@ input:focus-visible {
   background: var(--nav-active);
 }
 
-.nav-item.selected::before {
+.nav-item.selected::after {
   content: "";
   position: absolute;
-  left: -14px;
-  height: 27px;
-  width: 3px;
-  border-radius: 0 3px 3px 0;
+  bottom: 0;
+  left: 12px;
+  right: 12px;
+  height: 2px;
+  border-radius: 3px 3px 0 0;
   background: #6587f6;
 }
 
 .external-dot {
   width: 6px;
   height: 6px;
-  margin-left: auto;
   background: var(--success);
   border-radius: 50%;
 }
 
 .spell-state {
-  height: 40px;
+  height: 32px;
   border: 1px solid #293b61;
   border-radius: 8px;
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 0 12px;
-  font-size: 12px;
+  padding: 0 10px;
+  font-size: 11px;
 }
 
 .spell-state .icon {
-  width: 17px;
-  height: 17px;
+  width: 15px;
+  height: 15px;
 }
 
 .spell-state.enabled {
@@ -170,6 +217,33 @@ input:focus-visible {
   position: relative;
   min-width: 0;
   overflow: hidden;
+}
+
+.wrike-surface {
+  height: 100%;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  color: #627188;
+  background: var(--surface);
+}
+
+.wrike-surface .icon {
+  width: 34px;
+  height: 34px;
+  color: var(--accent);
+}
+
+.wrike-surface h1 {
+  margin: 0;
+  font-size: 25px;
+  color: #101d35;
+}
+
+.wrike-surface p {
+  margin: 0;
+  font-size: 14px;
 }
 
 .files-screen {
@@ -844,41 +918,17 @@ input:focus-visible {
   height: 17px;
 }
 
-@media (max-width: 1080px) {
-  .app-shell {
-    grid-template-columns: 72px minmax(760px, 1fr);
+@media (max-width: 1120px) {
+  .spell-state {
+    display: none;
   }
 
-  .brand div:last-child,
-  .nav-item:not(.selected),
-  .nav-item.selected,
-  .spell-state {
-    font-size: 0;
+  .taskbar {
+    gap: 9px;
   }
 
   .brand {
-    padding: 0 3px;
-  }
-
-  .nav-item {
-    justify-content: center;
-    padding: 0;
-  }
-
-  .nav-item .icon {
-    width: 22px;
-    height: 22px;
-  }
-
-  .external-dot {
-    position: absolute;
-    right: 14px;
-    top: 12px;
-  }
-
-  .spell-state {
-    justify-content: center;
-    padding: 0;
+    padding-right: 10px;
   }
 }
 

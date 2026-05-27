@@ -20,6 +20,8 @@
   <path fill="url(#shadow)" d="M353 56h71v159h-71Z"/>
   <path fill="url(#bright)" d="M424 56h89c70 0 112 38 112 97 0 34-16 60-45 82 31 18 49 47 49 83 0 30-12 47-31 47h-170l58-58h59c15 0 25-12 25-26 0-18-14-30-33-30h-58l53-56h16c15 0 24-12 24-26 0-15-10-25-28-25h-100Z"/>
   <path fill="url(#fold)" d="M353 230 401 272 483 192h54L373 365h-20Z"/>
-  <path fill="url(#shadow)" d="M660 56h67l88 215 60-116 37 79-90 175h-57Z"/>
-  <path fill="url(#bright)" d="M875 155h64l55 116 94-215h76L1004 409h-57Z"/>
+  <g transform="translate(0 7) scale(1 .875)">
+    <path fill="url(#shadow)" d="M660 56h67l88 215 60-116 37 79-90 175h-57Z"/>
+    <path fill="url(#bright)" d="M875 155h64l55 116 94-215h76L1004 409h-57Z"/>
+  </g>
 </svg>
