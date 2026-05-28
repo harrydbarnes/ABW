@@ -900,74 +900,74 @@ fn is_wrike_workspace_destination(url: &Url) -> bool {
 }
 
 fn apply_spell_check_script(enabled: bool) -> String {
-    format!(
-        r#"
-        (() => {{
-          const enabled = {enabled};
-          const apply = () => {{
+    let enabled_literal = if enabled { "true" } else { "false" };
+    r##"
+        (() => {
+          const enabled = __ABW_SPELL_CHECK_ENABLED__;
+          const apply = () => {
             document.querySelectorAll('textarea, input[type="text"], [contenteditable="true"], [role="textbox"]')
               .forEach((element) => element.spellcheck = enabled);
-          }};
-          const isEditable = (element) => {{
-            for (let current = element; current; current = current.parentElement) {{
+          };
+          const isEditable = (element) => {
+            for (let current = element; current; current = current.parentElement) {
               if (
                 current instanceof HTMLTextAreaElement ||
                 current instanceof HTMLInputElement ||
                 current.isContentEditable ||
                 current.getAttribute('role') === 'textbox'
-              ) {{
+              ) {
                 return true;
-              }}
-            }}
+              }
+            }
             return false;
-          }};
-          const selectionIsActive = () => {{
+          };
+          const selectionIsActive = () => {
             const selection = window.getSelection();
             return Boolean(selection && !selection.isCollapsed && selection.toString().trim());
-          }};
-          const selectedWord = () => {{
+          };
+          const selectedWord = () => {
             const selection = window.getSelection();
             const text = selection && !selection.isCollapsed ? selection.toString() : "";
-            return (text.match(/[\\p{{L}}\\p{{N}}][\\p{{L}}\\p{{N}}'-]*/u) || [])[0] || "";
-          }};
-          const wordFromPoint = (event) => {{
+            return (text.match(/[\\p{L}\\p{N}][\\p{L}\\p{N}'-]*/u) || [])[0] || "";
+          };
+          const wordFromPoint = (event) => {
             const selected = selectedWord();
             if (selected) return selected;
-            if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {{
+            if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
               const value = event.target.value || "";
               const index = event.target.selectionStart || 0;
-              const left = value.slice(0, index).match(/[\\p{{L}}\\p{{N}}][\\p{{L}}\\p{{N}}'-]*$/u);
-              const right = value.slice(index).match(/^[\\p{{L}}\\p{{N}}'-]*/u);
-              return `${{left ? left[0] : ""}}${{right ? right[0] : ""}}`;
-            }}
+              const left = value.slice(0, index).match(/[\\p{L}\\p{N}][\\p{L}\\p{N}'-]*$/u);
+              const right = value.slice(index).match(/^[\\p{L}\\p{N}'-]*/u);
+              return `${left ? left[0] : ""}${right ? right[0] : ""}`;
+            }
             const range =
               document.caretRangeFromPoint?.(event.clientX, event.clientY) ||
-              (() => {{
+              (() => {
                 const position = document.caretPositionFromPoint?.(event.clientX, event.clientY);
                 if (!position) return null;
                 const next = document.createRange();
                 next.setStart(position.offsetNode, position.offset);
                 return next;
-              }})();
+              })();
             if (!range || !range.startContainer || range.startContainer.nodeType !== Node.TEXT_NODE) return "";
             const text = range.startContainer.textContent || "";
             let start = range.startOffset;
             let end = range.startOffset;
-            while (start > 0 && /[\\p{{L}}\\p{{N}}'-]/u.test(text[start - 1])) start -= 1;
-            while (end < text.length && /[\\p{{L}}\\p{{N}}'-]/u.test(text[end])) end += 1;
+            while (start > 0 && /[\\p{L}\\p{N}'-]/u.test(text[start - 1])) start -= 1;
+            while (end < text.length && /[\\p{L}\\p{N}'-]/u.test(text[end])) end += 1;
             return text.slice(start, end);
-          }};
+          };
           const closeDictionaryMenu = () => document.getElementById("abw-dictionary-menu")?.remove();
-          const showDictionaryMenu = (word, event) => {{
+          const showDictionaryMenu = (word, event) => {
             closeDictionaryMenu();
             const menu = document.createElement("button");
             menu.id = "abw-dictionary-menu";
             menu.type = "button";
-            menu.textContent = `Add "${{word}}" to dictionary`;
-            Object.assign(menu.style, {{
+            menu.textContent = `Add "${word}" to dictionary`;
+            Object.assign(menu.style, {
               position: "fixed",
-              left: `${{Math.max(8, event.clientX)}}px`,
-              top: `${{Math.max(8, event.clientY - 44)}}px`,
+              left: `${Math.max(8, event.clientX)}px`,
+              top: `${Math.max(8, event.clientY - 44)}px`,
               zIndex: "2147483647",
               padding: "9px 12px",
               border: "1px solid #d6dce8",
@@ -977,37 +977,37 @@ fn apply_spell_check_script(enabled: bool) -> String {
               boxShadow: "0 12px 32px rgba(17, 29, 59, .18)",
               font: "13px Segoe UI, sans-serif",
               cursor: "pointer"
-            }});
-            menu.addEventListener("click", () => {{
-              window.location.href = `abw-dictionary://add?word=${{encodeURIComponent(word)}}`;
+            });
+            menu.addEventListener("click", () => {
+              window.location.href = `abw-dictionary://add?word=${encodeURIComponent(word)}`;
               closeDictionaryMenu();
-            }});
+            });
             document.body.append(menu);
-            window.setTimeout(() => document.addEventListener("click", closeDictionaryMenu, {{ once: true, capture: true }}), 0);
-          }};
-          const keepWrikeEditorToolsVisible = (event) => {{
-            if (!isEditable(event.target)) {{
+            window.setTimeout(() => document.addEventListener("click", closeDictionaryMenu, { once: true, capture: true }), 0);
+          };
+          const keepWrikeEditorToolsVisible = (event) => {
+            if (!isEditable(event.target)) {
               closeDictionaryMenu();
               return;
-            }}
+            }
             const word = wordFromPoint(event);
-            if (word || selectionIsActive()) {{
+            if (word || selectionIsActive()) {
               event.preventDefault();
               if (word) showDictionaryMenu(word, event);
-            }}
-          }};
-          const start = () => {{
+            }
+          };
+          const start = () => {
             apply();
-            new MutationObserver(apply).observe(document.body, {{ childList: true, subtree: true }});
-            if (!window.__abwContextMenuGuard) {{
+            new MutationObserver(apply).observe(document.body, { childList: true, subtree: true });
+            if (!window.__abwContextMenuGuard) {
               document.addEventListener('contextmenu', keepWrikeEditorToolsVisible, true);
               window.__abwContextMenuGuard = true;
-            }}
-          }};
-          if (document.body) start(); else document.addEventListener('DOMContentLoaded', start, {{ once: true }});
-        }})();
-        "#
-    )
+            }
+          };
+          if (document.body) start(); else document.addEventListener('DOMContentLoaded', start, { once: true });
+        })();
+        "##
+    .replace("__ABW_SPELL_CHECK_ENABLED__", enabled_literal)
 }
 
 pub fn run() {
