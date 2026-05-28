@@ -73,6 +73,81 @@ input:focus-visible {
   display: grid;
   grid-template-rows: 50px minmax(0, 1fr);
   background: var(--surface-soft);
+  opacity: 0;
+  animation: app-view-reveal 720ms ease 2100ms forwards;
+}
+
+.launch-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 40%, rgb(19 201 112 / 13%), transparent 34%),
+    linear-gradient(135deg, #091426 0%, #122348 48%, #071221 100%);
+  animation: launch-splash-away 760ms ease 2080ms forwards;
+}
+
+.launch-splash::before {
+  content: "";
+  position: absolute;
+  inset: 18px;
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: 18px;
+}
+
+.launch-splash-mark {
+  width: 134px;
+  height: 134px;
+  border-radius: 30px;
+  display: grid;
+  place-items: center;
+  background: rgb(255 255 255 / 96%);
+  box-shadow:
+    0 26px 70px rgb(0 0 0 / 38%),
+    0 0 0 1px rgb(255 255 255 / 14%);
+  animation: launch-mark-intro 2100ms cubic-bezier(.18, .88, .24, 1) both;
+}
+
+.launch-splash-mark img {
+  width: 86px;
+  height: 86px;
+  display: block;
+}
+
+@keyframes launch-mark-intro {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(.78);
+    filter: blur(8px);
+  }
+  28% {
+    opacity: 1;
+    transform: translateY(0) scale(1.04);
+    filter: blur(0);
+  }
+  70% {
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(-4px) scale(.96);
+  }
+}
+
+@keyframes launch-splash-away {
+  to {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+@keyframes app-view-reveal {
+  to {
+    opacity: 1;
+  }
 }
 
 .taskbar {
@@ -1235,5 +1310,15 @@ input:focus-visible {
   *::before,
   *::after {
     transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+    animation-delay: 0ms !important;
+  }
+
+  .app-shell {
+    opacity: 1;
+  }
+
+  .launch-splash {
+    display: none;
   }
 }

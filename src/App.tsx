@@ -55,6 +55,7 @@ const INITIAL_WRIKE_TAB: WrikeTab = {
 };
 
 export function App() {
+  const [isLaunchSplashVisible, setIsLaunchSplashVisible] = useState(true);
   const [screen, setScreen] = useState<Screen>("wrike");
   const [wrikeTabs, setWrikeTabs] = useState<WrikeTab[]>([INITIAL_WRIKE_TAB]);
   const [activeWrikeTabId, setActiveWrikeTabId] = useState(INITIAL_WRIKE_TAB.id);
@@ -74,6 +75,11 @@ export function App() {
   });
   const [notice, setNotice] = useState<string | null>(null);
   const wrikeTabsRef = useRef(wrikeTabs);
+
+  useEffect(() => {
+    const splashTimer = window.setTimeout(() => setIsLaunchSplashVisible(false), 2800);
+    return () => window.clearTimeout(splashTimer);
+  }, []);
 
   useEffect(() => {
     wrikeTabsRef.current = wrikeTabs;
@@ -347,6 +353,7 @@ export function App() {
   }
 
   return (
+    <>
     <div className="app-shell" spellCheck={settings.spellCheck}>
       <header className="taskbar">
         <div className="brand" aria-label="ABW">
@@ -575,6 +582,14 @@ export function App() {
         ) : null}
       </main>
     </div>
+    {isLaunchSplashVisible ? (
+      <div className="launch-splash" aria-label="Opening ABW" role="status">
+        <div className="launch-splash-mark">
+          <img src="/abw.svg" alt="" />
+        </div>
+      </div>
+    ) : null}
+    </>
   );
 }
 
