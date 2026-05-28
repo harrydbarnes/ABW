@@ -82,6 +82,7 @@ struct WrikeTabUpdate {
     url: Option<String>,
     can_go_back: bool,
     can_go_forward: bool,
+    is_title_loading: bool,
 }
 
 #[derive(Default)]
@@ -96,6 +97,7 @@ struct CaptureContext {
     page_title: Mutex<String>,
     page_url: Mutex<Option<String>>,
     history: Mutex<NavigationHistory>,
+    is_title_loading: Mutex<bool>,
 }
 
 impl CaptureContext {
@@ -106,6 +108,7 @@ impl CaptureContext {
             page_title: Mutex::new(String::new()),
             page_url: Mutex::new(Some(url.to_owned())),
             history: Mutex::new(NavigationHistory::new(url)),
+            is_title_loading: Mutex::new(true),
         }
     }
 }
@@ -398,6 +401,8 @@ fn open_wrike_at(
     let title_app = app.clone();
     let navigation_context = Arc::clone(&context);
     let navigation_app = app.clone();
+    let load_context = Arc::clone(&context);
+    let load_app = app.clone();
     let popup_context = Arc::clone(&context);
     let popup_app = app.clone();
     let popup_workspace_label = label.clone();
@@ -419,6 +424,7 @@ fn open_wrike_at(
             }
             let allowed = is_safe_remote_destination(url);
             if allowed {
+                set_title_loading(&navigation_context, true);
                 record_wrike_navigation(&navigation_context, url.as_str());
                 emit_wrike_tab_update(&navigation_app, &navigation_context);
             }
@@ -481,9 +487,30 @@ fn open_wrike_at(
                 }
             }
         })
+        .on_page_load(move |_webview, payload| {
+            if matches!(payload.event(), PageLoadEvent::Started) {
+                set_title_loading(&load_context, true);
+            } else if matches!(payload.event(), PageLoadEvent::Finished) {
+                let has_title = load_context
+                    .page_title
+                    .lock()
+                    .ok()
+                    .map(|title| !clean_wrike_title(&title).is_empty())
+                    .unwrap_or(false);
+                if has_title {
+                    set_title_loading(&load_context, false);
+                }
+            }
+            emit_wrike_tab_update(&load_app, &load_context);
+        })
         .on_document_title_changed(move |webview, title| {
-            if let Ok(mut latest) = title_context.page_title.lock() {
-                *latest = title.clone();
+            if !clean_wrike_title(&title).is_empty() {
+                if let Ok(mut latest) = title_context.page_title.lock() {
+                    *latest = title.clone();
+                }
+                set_title_loading(&title_context, false);
+            } else {
+                set_title_loading(&title_context, true);
             }
             if let Ok(url) = webview.url() {
                 record_wrike_navigation(&title_context, url.as_str());
@@ -849,6 +876,12 @@ fn tab_can_go(state: &AppState, tab_id: &str, backwards: bool) -> bool {
         .unwrap_or(false)
 }
 
+fn set_title_loading(context: &CaptureContext, is_loading: bool) {
+    if let Ok(mut loading) = context.is_title_loading.lock() {
+        *loading = is_loading;
+    }
+}
+
 fn wrike_tab_update(context: &CaptureContext) -> WrikeTabUpdate {
     let title = context
         .page_title
@@ -864,12 +897,18 @@ fn wrike_tab_update(context: &CaptureContext) -> WrikeTabUpdate {
         .ok()
         .map(|history| (history.can_go_back(), history.can_go_forward()))
         .unwrap_or((false, false));
+    let is_title_loading = context
+        .is_title_loading
+        .lock()
+        .map(|loading| *loading)
+        .unwrap_or(false);
     WrikeTabUpdate {
         tab_id: context.tab_id.clone(),
         title,
         url,
         can_go_back,
         can_go_forward,
+        is_title_loading,
     }
 }
 
@@ -908,7 +947,8 @@ fn apply_spell_check_script(enabled: bool) -> String {
             document.querySelectorAll('textarea, input[type="text"], [contenteditable="true"], [role="textbox"]')
               .forEach((element) => element.spellcheck = enabled);
           };
-          const isEditable = (element) => {
+          const findEditable = (element) => {
+            const active = document.activeElement;
             for (let current = element; current; current = current.parentElement) {
               if (
                 current instanceof HTMLTextAreaElement ||
@@ -916,10 +956,18 @@ fn apply_spell_check_script(enabled: bool) -> String {
                 current.isContentEditable ||
                 current.getAttribute('role') === 'textbox'
               ) {
-                return true;
+                return current;
               }
             }
-            return false;
+            if (
+              active instanceof HTMLTextAreaElement ||
+              active instanceof HTMLInputElement ||
+              active?.isContentEditable ||
+              active?.getAttribute?.('role') === 'textbox'
+            ) {
+              return active;
+            }
+            return null;
           };
           const selectionIsActive = () => {
             const selection = window.getSelection();
@@ -930,15 +978,44 @@ fn apply_spell_check_script(enabled: bool) -> String {
             const text = selection && !selection.isCollapsed ? selection.toString() : "";
             return (text.match(/[\\p{L}\\p{N}][\\p{L}\\p{N}'-]*/u) || [])[0] || "";
           };
-          const wordFromPoint = (event) => {
+          const wordFromText = (text, offset) => {
+            if (!text) return "";
+            let start = Math.max(0, Math.min(offset, text.length));
+            let end = start;
+            while (start > 0 && /[\\p{L}\\p{N}'-]/u.test(text[start - 1])) start -= 1;
+            while (end < text.length && /[\\p{L}\\p{N}'-]/u.test(text[end])) end += 1;
+            return text.slice(start, end);
+          };
+          const nearestTextWord = (root, event) => {
+            if (!root) return "";
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            let best = "";
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              const text = node.textContent || "";
+              if (!/[\\p{L}\\p{N}]/u.test(text)) continue;
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              const rects = Array.from(range.getClientRects());
+              range.detach?.();
+              const rect = rects.find((candidate) =>
+                event.clientX >= candidate.left - 6 &&
+                event.clientX <= candidate.right + 6 &&
+                event.clientY >= candidate.top - 6 &&
+                event.clientY <= candidate.bottom + 6
+              );
+              if (!rect) continue;
+              const ratio = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0;
+              best = wordFromText(text, Math.round(Math.max(0, Math.min(1, ratio)) * text.length));
+              if (best) break;
+            }
+            return best;
+          };
+          const wordFromPoint = (event, editable) => {
             const selected = selectedWord();
             if (selected) return selected;
-            if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
-              const value = event.target.value || "";
-              const index = event.target.selectionStart || 0;
-              const left = value.slice(0, index).match(/[\\p{L}\\p{N}][\\p{L}\\p{N}'-]*$/u);
-              const right = value.slice(index).match(/^[\\p{L}\\p{N}'-]*/u);
-              return `${left ? left[0] : ""}${right ? right[0] : ""}`;
+            if (editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement) {
+              return wordFromText(editable.value || "", editable.selectionStart || 0);
             }
             const range =
               document.caretRangeFromPoint?.(event.clientX, event.clientY) ||
@@ -949,13 +1026,11 @@ fn apply_spell_check_script(enabled: bool) -> String {
                 next.setStart(position.offsetNode, position.offset);
                 return next;
               })();
-            if (!range || !range.startContainer || range.startContainer.nodeType !== Node.TEXT_NODE) return "";
+            if (!range || !range.startContainer || range.startContainer.nodeType !== Node.TEXT_NODE) {
+              return nearestTextWord(editable || event.target, event);
+            }
             const text = range.startContainer.textContent || "";
-            let start = range.startOffset;
-            let end = range.startOffset;
-            while (start > 0 && /[\\p{L}\\p{N}'-]/u.test(text[start - 1])) start -= 1;
-            while (end < text.length && /[\\p{L}\\p{N}'-]/u.test(text[end])) end += 1;
-            return text.slice(start, end);
+            return wordFromText(text, range.startOffset) || nearestTextWord(editable || event.target, event);
           };
           const closeDictionaryMenu = () => document.getElementById("abw-dictionary-menu")?.remove();
           const showDictionaryMenu = (word, event) => {
@@ -967,7 +1042,7 @@ fn apply_spell_check_script(enabled: bool) -> String {
             Object.assign(menu.style, {
               position: "fixed",
               left: `${Math.max(8, event.clientX)}px`,
-              top: `${Math.max(8, event.clientY - 44)}px`,
+              top: `${Math.max(8, event.clientY)}px`,
               zIndex: "2147483647",
               padding: "9px 12px",
               border: "1px solid #d6dce8",
@@ -986,11 +1061,12 @@ fn apply_spell_check_script(enabled: bool) -> String {
             window.setTimeout(() => document.addEventListener("click", closeDictionaryMenu, { once: true, capture: true }), 0);
           };
           const keepWrikeEditorToolsVisible = (event) => {
-            if (!isEditable(event.target)) {
+            const editable = findEditable(event.target);
+            if (!editable) {
               closeDictionaryMenu();
               return;
             }
-            const word = wordFromPoint(event);
+            const word = wordFromPoint(event, editable);
             if (word || selectionIsActive()) {
               event.preventDefault();
               if (word) showDictionaryMenu(word, event);

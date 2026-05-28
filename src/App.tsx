@@ -31,6 +31,7 @@ import {
   subscribeToWrikeTabUpdates,
   wrikeTabAction,
   type WrikeTabAction,
+  type WrikeTabUpdate,
 } from "./lib/desktop";
 import type { DownloadRecord, FileFilter, Settings } from "./types";
 
@@ -45,6 +46,7 @@ type WrikeTab = {
   url: string | null;
   canGoBack: boolean;
   canGoForward: boolean;
+  isTitleLoading: boolean;
   mode: WrikeTabMode;
 };
 
@@ -54,8 +56,28 @@ const INITIAL_WRIKE_TAB: WrikeTab = {
   url: null,
   canGoBack: false,
   canGoForward: false,
+  isTitleLoading: false,
   mode: "standard",
 };
+
+function applyWrikeTabUpdate(tab: WrikeTab, update: WrikeTabUpdate): WrikeTab {
+  const nextTitle = update.title.trim();
+  const isTitleLoading = tab.mode === "readOnly" ? false : update.isTitleLoading;
+  const title =
+    tab.mode === "readOnly"
+      ? "Read Only Mode"
+      : isTitleLoading
+        ? tab.title || nextTitle || "Wrike"
+        : nextTitle || tab.title || "Wrike";
+  return {
+    ...tab,
+    canGoBack: update.canGoBack,
+    canGoForward: update.canGoForward,
+    isTitleLoading,
+    title,
+    url: update.url,
+  };
+}
 
 export function App() {
   const [isLaunchSplashVisible, setIsLaunchSplashVisible] = useState(true);
@@ -119,15 +141,7 @@ export function App() {
     void subscribeToWrikeTabUpdates((update) => {
       setWrikeTabs((current) =>
         current.map((tab) =>
-          tab.id === update.tabId
-            ? {
-                ...tab,
-                canGoBack: update.canGoBack,
-                canGoForward: update.canGoForward,
-                title: tab.mode === "readOnly" ? "Read Only Mode" : update.title || "Wrike",
-                url: update.url,
-              }
-            : tab,
+          tab.id === update.tabId ? applyWrikeTabUpdate(tab, update) : tab,
         ),
       );
     }).then((unsubscribe) => {
@@ -188,17 +202,7 @@ export function App() {
     const update = await getWrikeTabState(tabId);
     if (update) {
       setWrikeTabs((current) =>
-        current.map((tab) =>
-          tab.id === tabId
-            ? {
-                ...tab,
-                canGoBack: update.canGoBack,
-                canGoForward: update.canGoForward,
-                title: tab.mode === "readOnly" ? "Read Only Mode" : update.title || "Wrike",
-                url: update.url,
-              }
-            : tab,
-        ),
+        current.map((tab) => (tab.id === tabId ? applyWrikeTabUpdate(tab, update) : tab)),
       );
     }
     setScreen("wrike");
@@ -217,6 +221,7 @@ export function App() {
       url: null,
       canGoBack: false,
       canGoForward: false,
+      isTitleLoading: true,
       mode: "standard",
     };
     setWrikeTabs((current) => [...current, next]);
@@ -235,6 +240,7 @@ export function App() {
       url: READ_ONLY_URL,
       canGoBack: false,
       canGoForward: false,
+      isTitleLoading: false,
       mode: "readOnly",
     };
     setWrikeTabs((current) => [...current, next]);
@@ -468,7 +474,7 @@ export function App() {
                 title={tab.title}
               >
                 <MaterialIcon kind={tab.mode === "readOnly" ? "description" : index === 0 ? "home" : "tab"} />
-                <span className="tab-title">{tab.title}</span>
+                <span className={`tab-title ${tab.isTitleLoading ? "loading" : ""}`}>{tab.title}</span>
                 {index === 0 ? <span className="external-dot" /> : null}
                 <span className="tab-actions" aria-label={`${tab.title} controls`}>
                   <button
@@ -514,7 +520,9 @@ export function App() {
           onClick={() => void toggleSpellCheck()}
           title={`Turn spell check ${settings.spellCheck ? "off" : "on"}`}
         >
-          <NavIcon kind="spell" />
+          <span className="icon-wrap">
+            <NavIcon kind="spell" />
+          </span>
           Spell check {settings.spellCheck ? "on" : "off"}
         </button>
         <nav className="task-navigation" aria-label="ABW navigation">

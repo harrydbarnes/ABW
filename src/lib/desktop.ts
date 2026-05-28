@@ -11,6 +11,7 @@ export type WrikeTabUpdate = {
   url: string | null;
   canGoBack: boolean;
   canGoForward: boolean;
+  isTitleLoading: boolean;
 };
 
 export function isDesktopRuntime(): boolean {

@@ -253,6 +253,31 @@ input:focus-visible {
   white-space: nowrap;
 }
 
+.workspace-tab .tab-title.loading {
+  color: transparent;
+  background:
+    linear-gradient(
+      100deg,
+      #bcc8de 0%,
+      #ffffff 42%,
+      #bcc8de 84%
+    );
+  background-size: 220% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: title-shimmer 1150ms ease-in-out infinite;
+}
+
+@keyframes title-shimmer {
+  from {
+    background-position: 120% 0;
+  }
+
+  to {
+    background-position: -120% 0;
+  }
+}
+
 .workspace-tab .material-icon:first-child {
   flex: none;
 }
@@ -535,6 +560,26 @@ input:focus-visible {
 .spell-state .icon {
   width: 15px;
   height: 15px;
+}
+
+.spell-state .icon-wrap {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+.spell-state:not(.enabled) .icon-wrap::after {
+  content: "";
+  position: absolute;
+  width: 20px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+  transform: rotate(-45deg);
+  transform-origin: center;
 }
 
 .spell-state.enabled {
