@@ -116,7 +116,8 @@ input:focus-visible {
 }
 
 .workspace-tab,
-.new-tab {
+.new-tab,
+.read-only-launcher {
   height: 34px;
   border-radius: 7px;
   display: flex;
@@ -155,6 +156,10 @@ input:focus-visible {
   background: var(--nav-active);
 }
 
+.workspace-tab.read-only.selected {
+  background: #253d63;
+}
+
 .workspace-tab:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -189,13 +194,20 @@ input:focus-visible {
   }
 }
 
+.new-tab-cluster {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .new-tab {
   width: 34px;
   justify-content: center;
   border: 1px solid #293b61;
 }
 
-.new-tab:hover {
+.new-tab:hover,
+.read-only-launcher:hover {
   color: #fff;
   background: var(--nav-active);
 }
@@ -203,6 +215,52 @@ input:focus-visible {
 .new-tab .material-icon {
   width: 16px;
   height: 16px;
+}
+
+.read-only-launcher {
+  width: 0;
+  padding: 0;
+  gap: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #f0f4fb;
+  font-size: 13px;
+  font-weight: 550;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transform: translateX(-8px) scale(.96);
+  transition:
+    width 160ms ease 1s,
+    padding 160ms ease 1s,
+    border-color 140ms ease 1s,
+    background-color 140ms ease 1s,
+    opacity 140ms ease 1s,
+    transform 160ms ease 1s;
+}
+
+.new-tab-cluster:hover .read-only-launcher,
+.new-tab-cluster:focus-within .read-only-launcher {
+  width: 132px;
+  padding: 0 11px;
+  border-color: #3a4d72;
+  background: #182b50;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0) scale(1);
+}
+
+.read-only-launcher span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.read-only-launcher .material-icon {
+  flex: none;
+  width: 17px;
+  height: 17px;
 }
 
 .tab-space {
@@ -244,6 +302,11 @@ input:focus-visible {
   height: 2px;
   border-radius: 3px 3px 0 0;
   background: #6587f6;
+}
+
+.workspace-tab.read-only.selected::after {
+  background: #ff9f2d;
+  box-shadow: 0 0 0 1px rgb(255 159 45 / 18%);
 }
 
 .workspace-tab {

@@ -32,14 +32,17 @@ import {
 import type { DownloadRecord, FileFilter, Settings } from "./types";
 
 const PreviewPanel = lazy(() => import("./features/preview/PreviewPanel"));
+const READ_ONLY_URL = "https://login.wrike.com/login/?forceLogin=false&read";
 
 type Screen = "wrike" | "files" | "settings";
+type WrikeTabMode = "standard" | "readOnly";
 type WrikeTab = {
   id: string;
   title: string;
   url: string | null;
   canGoBack: boolean;
   canGoForward: boolean;
+  mode: WrikeTabMode;
 };
 
 const INITIAL_WRIKE_TAB: WrikeTab = {
@@ -48,6 +51,7 @@ const INITIAL_WRIKE_TAB: WrikeTab = {
   url: null,
   canGoBack: false,
   canGoForward: false,
+  mode: "standard",
 };
 
 export function App() {
@@ -111,7 +115,7 @@ export function App() {
                 ...tab,
                 canGoBack: update.canGoBack,
                 canGoForward: update.canGoForward,
-                title: update.title || "Wrike",
+                title: tab.mode === "readOnly" ? "Read Only Mode" : update.title || "Wrike",
                 url: update.url,
               }
             : tab,
@@ -168,9 +172,10 @@ export function App() {
 
   async function showWrike(tabId = activeWrikeTabId) {
     const tabs = wrikeTabsRef.current;
+    const tab = tabs.find((candidate) => candidate.id === tabId);
     setActiveWrikeTabId(tabId);
     await hideWrike(tabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
-    await launchWrike(tabId);
+    await launchWrike(tabId, tab?.mode === "readOnly" ? READ_ONLY_URL : undefined);
     const update = await getWrikeTabState(tabId);
     if (update) {
       setWrikeTabs((current) =>
@@ -180,7 +185,7 @@ export function App() {
                 ...tab,
                 canGoBack: update.canGoBack,
                 canGoForward: update.canGoForward,
-                title: update.title || "Wrike",
+                title: tab.mode === "readOnly" ? "Read Only Mode" : update.title || "Wrike",
                 url: update.url,
               }
             : tab,
@@ -203,12 +208,31 @@ export function App() {
       url: null,
       canGoBack: false,
       canGoForward: false,
+      mode: "standard",
     };
     setWrikeTabs((current) => [...current, next]);
     setNewWrikeTabId(next.id);
     window.setTimeout(() => setNewWrikeTabId(null), 520);
     await hideWrike(wrikeTabs.map((tab) => tab.id));
     await launchWrike(next.id);
+    setActiveWrikeTabId(next.id);
+    setScreen("wrike");
+  }
+
+  async function addReadOnlyTab() {
+    const next: WrikeTab = {
+      id: `read-only-${Date.now().toString(36)}`,
+      title: "Read Only Mode",
+      url: READ_ONLY_URL,
+      canGoBack: false,
+      canGoForward: false,
+      mode: "readOnly",
+    };
+    setWrikeTabs((current) => [...current, next]);
+    setNewWrikeTabId(next.id);
+    window.setTimeout(() => setNewWrikeTabId(null), 520);
+    await hideWrike(wrikeTabs.map((tab) => tab.id));
+    await launchWrike(next.id, READ_ONLY_URL);
     setActiveWrikeTabId(next.id);
     setScreen("wrike");
   }
@@ -337,6 +361,7 @@ export function App() {
                 className={[
                   "workspace-tab",
                   selected ? "selected" : "",
+                  tab.mode === "readOnly" ? "read-only" : "",
                   newWrikeTabId === tab.id ? "entering" : "",
                   draggedTabId === tab.id ? "dragging" : "",
                 ].join(" ")}
@@ -360,7 +385,7 @@ export function App() {
                 tabIndex={0}
                 title={tab.title}
               >
-                <MaterialIcon kind={index === 0 ? "home" : "tab"} />
+                <MaterialIcon kind={tab.mode === "readOnly" ? "description" : index === 0 ? "home" : "tab"} />
                 <span className="tab-title">{tab.title}</span>
                 {index === 0 ? <span className="external-dot" /> : null}
                 <span className="tab-actions" aria-label={`${tab.title} controls`}>
@@ -411,14 +436,25 @@ export function App() {
               </div>
             );
           })}
-          <button
-            aria-label="New Wrike tab"
-            className="new-tab"
-            onClick={() => void addWrikeTab()}
-            title="New Wrike tab"
-          >
-            <MaterialIcon kind="add" />
-          </button>
+          <span className="new-tab-cluster">
+            <button
+              aria-label="New Wrike tab"
+              className="new-tab"
+              onClick={() => void addWrikeTab()}
+              title="New Wrike tab"
+            >
+              <MaterialIcon kind="add" />
+            </button>
+            <button
+              aria-label="New read only Wrike tab"
+              className="read-only-launcher"
+              onClick={() => void addReadOnlyTab()}
+              title="Read Only Mode"
+            >
+              <MaterialIcon kind="description" />
+              <span>Read Only</span>
+            </button>
+          </span>
           <span className="tab-space" aria-hidden="true" />
         </div>
         <button

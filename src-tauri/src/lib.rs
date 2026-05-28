@@ -245,8 +245,15 @@ async fn launch_wrike(
     app: AppHandle,
     state: State<'_, AppState>,
     tab_id: String,
+    url: Option<String>,
 ) -> Result<(), String> {
-    open_wrike_at(&app, state.inner(), &tab_id, WRIKE_HOME, false)
+    open_wrike_at(
+        &app,
+        state.inner(),
+        &tab_id,
+        url.as_deref().unwrap_or(WRIKE_HOME),
+        false,
+    )
 }
 
 #[tauri::command]

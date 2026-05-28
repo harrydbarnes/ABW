@@ -82,9 +82,9 @@ export async function openSourceTask(record: DownloadRecord): Promise<void> {
   }
 }
 
-export async function launchWrike(tabId: string): Promise<void> {
+export async function launchWrike(tabId: string, url?: string): Promise<void> {
   if (desktopRuntime) {
-    await invokeDesktop("launch_wrike", { tabId });
+    await invokeDesktop("launch_wrike", { tabId, url: url ?? null });
   }
 }
 
