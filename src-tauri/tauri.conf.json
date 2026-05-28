@@ -19,6 +19,7 @@
         "height": 880,
         "minWidth": 1100,
         "minHeight": 620,
+        "dragDropEnabled": false,
         "center": true,
         "resizable": true
       }

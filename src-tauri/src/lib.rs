@@ -11,7 +11,7 @@ use tauri::{
     webview::{
         DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder, WebviewWindowBuilder,
     },
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, WebviewUrl,
 };
 use tauri_plugin_notification::NotificationExt;
 use url::Url;
@@ -71,11 +71,75 @@ struct PendingDownload {
     source_label: String,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WrikeTabUpdate {
+    tab_id: String,
+    title: String,
+    url: Option<String>,
+    can_go_back: bool,
+    can_go_forward: bool,
+}
+
+#[derive(Default)]
+struct AppState {
+    wrike_tabs: Mutex<HashMap<String, Arc<CaptureContext>>>,
+}
+
 #[derive(Default)]
 struct CaptureContext {
+    tab_id: String,
     pending: Mutex<HashMap<PathBuf, PendingDownload>>,
     page_title: Mutex<String>,
     page_url: Mutex<Option<String>>,
+    history: Mutex<NavigationHistory>,
+}
+
+impl CaptureContext {
+    fn new(tab_id: &str, url: &str) -> Self {
+        Self {
+            tab_id: tab_id.to_owned(),
+            pending: Mutex::new(HashMap::new()),
+            page_title: Mutex::new(String::new()),
+            page_url: Mutex::new(Some(url.to_owned())),
+            history: Mutex::new(NavigationHistory::new(url)),
+        }
+    }
+}
+
+#[derive(Default)]
+struct NavigationHistory {
+    entries: Vec<String>,
+    position: usize,
+}
+
+impl NavigationHistory {
+    fn new(url: &str) -> Self {
+        Self {
+            entries: vec![url.to_owned()],
+            position: 0,
+        }
+    }
+
+    fn record(&mut self, url: &str) {
+        if let Some(index) = self.entries.iter().rposition(|entry| entry == url) {
+            self.position = index;
+            return;
+        }
+        if !self.entries.is_empty() && self.position + 1 < self.entries.len() {
+            self.entries.truncate(self.position + 1);
+        }
+        self.entries.push(url.to_owned());
+        self.position = self.entries.len().saturating_sub(1);
+    }
+
+    fn can_go_back(&self) -> bool {
+        self.position > 0
+    }
+
+    fn can_go_forward(&self) -> bool {
+        !self.entries.is_empty() && self.position + 1 < self.entries.len()
+    }
 }
 
 #[tauri::command]
@@ -136,12 +200,24 @@ fn get_settings(app: AppHandle) -> Result<Settings, String> {
 }
 
 #[tauri::command]
-fn update_settings(app: AppHandle, settings: Settings) -> Result<Settings, String> {
+fn update_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: Settings,
+) -> Result<Settings, String> {
     write_json(settings_path(&app)?, &settings)?;
-    if let Some(webview) = app.get_webview(&wrike_tab_label("home")?) {
-        webview
-            .eval(&apply_spell_check_script(settings.spell_check))
-            .map_err(|error| format!("Unable to apply spell-check preference: {error}"))?;
+    let script = apply_spell_check_script(settings.spell_check);
+    let tab_ids = state
+        .wrike_tabs
+        .lock()
+        .map(|tabs| tabs.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_else(|_| vec!["home".to_owned()]);
+    for tab_id in tab_ids {
+        if let Some(webview) = app.get_webview(&wrike_tab_label(&tab_id)?) {
+            webview
+                .eval(&script)
+                .map_err(|error| format!("Unable to apply spell-check preference: {error}"))?;
+        }
     }
     Ok(settings)
 }
@@ -157,8 +233,12 @@ fn send_test_notification(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn launch_wrike(app: AppHandle, tab_id: String) -> Result<(), String> {
-    open_wrike_at(&app, &tab_id, WRIKE_HOME, false)
+async fn launch_wrike(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    tab_id: String,
+) -> Result<(), String> {
+    open_wrike_at(&app, state.inner(), &tab_id, WRIKE_HOME, false)
 }
 
 #[tauri::command]
@@ -175,7 +255,11 @@ fn hide_wrike_tabs(app: AppHandle, tab_ids: Vec<String>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn open_source_task(app: AppHandle, url: String) -> Result<(), String> {
+async fn open_source_task(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    url: String,
+) -> Result<(), String> {
     let parsed = Url::parse(&url).map_err(|_| "Invalid source task link.".to_owned())?;
     let allowed_host = parsed
         .host_str()
@@ -183,11 +267,78 @@ async fn open_source_task(app: AppHandle, url: String) -> Result<(), String> {
     if parsed.scheme() != "https" || !allowed_host {
         return Err("Only HTTPS Wrike task links may be opened inside ABW.".into());
     }
-    open_wrike_at(&app, "home", parsed.as_str(), true)
+    open_wrike_at(&app, state.inner(), "home", parsed.as_str(), true)
+}
+
+#[tauri::command]
+fn close_wrike_tab(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    tab_id: String,
+) -> Result<(), String> {
+    let label = wrike_tab_label(&tab_id)?;
+    if let Some(webview) = app.get_webview(&label) {
+        webview
+            .close()
+            .map_err(|error| format!("Unable to close the Wrike tab: {error}"))?;
+    }
+    if let Ok(mut tabs) = state.wrike_tabs.lock() {
+        tabs.remove(&tab_id);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn wrike_tab_action(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    tab_id: String,
+    action: String,
+) -> Result<(), String> {
+    let label = wrike_tab_label(&tab_id)?;
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| "This Wrike tab is not open yet.".to_owned())?;
+    match action.as_str() {
+        "back" => {
+            if tab_can_go(state.inner(), &tab_id, true) {
+                webview
+                    .eval("window.history.back();")
+                    .map_err(|error| format!("Unable to go back in Wrike: {error}"))?;
+            }
+        }
+        "forward" => {
+            if tab_can_go(state.inner(), &tab_id, false) {
+                webview
+                    .eval("window.history.forward();")
+                    .map_err(|error| format!("Unable to go forward in Wrike: {error}"))?;
+            }
+        }
+        "reload" => {
+            webview
+                .reload()
+                .map_err(|error| format!("Unable to refresh Wrike: {error}"))?;
+        }
+        _ => return Err("Unsupported Wrike tab action.".into()),
+    }
+    if let Some(context) = find_wrike_context(state.inner(), &tab_id) {
+        emit_wrike_tab_update(&app, &context);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_wrike_tab_state(
+    state: State<'_, AppState>,
+    tab_id: String,
+) -> Result<Option<WrikeTabUpdate>, String> {
+    wrike_tab_label(&tab_id)?;
+    Ok(find_wrike_context(state.inner(), &tab_id).map(|context| wrike_tab_update(&context)))
 }
 
 fn open_wrike_at(
     app: &AppHandle,
+    state: &AppState,
     tab_id: &str,
     destination: &str,
     navigate_existing: bool,
@@ -199,11 +350,18 @@ fn open_wrike_at(
             webview
                 .navigate(parsed)
                 .map_err(|error| format!("Unable to open the task in Wrike: {error}"))?;
+            if let Some(context) = find_wrike_context(state, tab_id) {
+                record_wrike_navigation(&context, destination);
+                emit_wrike_tab_update(app, &context);
+            }
         }
         webview
             .show()
             .map_err(|error| format!("Unable to display the Wrike workspace: {error}"))?;
         webview.set_focus().map_err(|error| error.to_string())?;
+        if let Some(context) = find_wrike_context(state, tab_id) {
+            emit_wrike_tab_update(app, &context);
+        }
         return Ok(());
     }
 
@@ -220,12 +378,17 @@ fn open_wrike_at(
         (host_size.height - TASKBAR_HEIGHT).max(1.0),
     );
     let spell_check = read_settings(app)?.spell_check;
-    let context = Arc::new(CaptureContext::default());
+    let context = Arc::new(CaptureContext::new(tab_id, destination));
     let title_context = Arc::clone(&context);
+    let title_app = app.clone();
     let navigation_context = Arc::clone(&context);
+    let navigation_app = app.clone();
     let popup_context = Arc::clone(&context);
     let popup_app = app.clone();
     let popup_workspace_label = label.clone();
+    if let Ok(mut tabs) = state.wrike_tabs.lock() {
+        tabs.insert(tab_id.to_owned(), Arc::clone(&context));
+    }
     if let Ok(mut latest) = context.page_url.lock() {
         *latest = Some(destination.to_owned());
     }
@@ -237,9 +400,8 @@ fn open_wrike_at(
         .on_navigation(move |url| {
             let allowed = is_safe_remote_destination(url);
             if allowed {
-                if let Ok(mut latest) = navigation_context.page_url.lock() {
-                    *latest = Some(url.to_string());
-                }
+                record_wrike_navigation(&navigation_context, url.as_str());
+                emit_wrike_tab_update(&navigation_app, &navigation_context);
             }
             allowed
         })
@@ -300,10 +462,14 @@ fn open_wrike_at(
                 }
             }
         })
-        .on_document_title_changed(move |_webview, title| {
+        .on_document_title_changed(move |webview, title| {
             if let Ok(mut latest) = title_context.page_title.lock() {
                 *latest = title.clone();
             }
+            if let Ok(url) = webview.url() {
+                record_wrike_navigation(&title_context, url.as_str());
+            }
+            emit_wrike_tab_update(&title_app, &title_context);
         })
         .on_download(download_handler(app.clone(), Arc::clone(&context), None, false));
     host.add_child(
@@ -312,6 +478,7 @@ fn open_wrike_at(
         content_size,
     )
         .map_err(|error| format!("Unable to open Wrike workspace: {error}"))?;
+    emit_wrike_tab_update(app, &context);
     Ok(())
 }
 
@@ -548,6 +715,65 @@ fn clean_wrike_title(title: &str) -> String {
         .to_owned()
 }
 
+fn find_wrike_context(state: &AppState, tab_id: &str) -> Option<Arc<CaptureContext>> {
+    state
+        .wrike_tabs
+        .lock()
+        .ok()
+        .and_then(|tabs| tabs.get(tab_id).cloned())
+}
+
+fn record_wrike_navigation(context: &CaptureContext, url: &str) {
+    if let Ok(mut latest) = context.page_url.lock() {
+        *latest = Some(url.to_owned());
+    }
+    if let Ok(mut history) = context.history.lock() {
+        history.record(url);
+    }
+}
+
+fn tab_can_go(state: &AppState, tab_id: &str, backwards: bool) -> bool {
+    find_wrike_context(state, tab_id)
+        .and_then(|context| {
+            context.history.lock().ok().map(|history| {
+                if backwards {
+                    history.can_go_back()
+                } else {
+                    history.can_go_forward()
+                }
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn wrike_tab_update(context: &CaptureContext) -> WrikeTabUpdate {
+    let title = context
+        .page_title
+        .lock()
+        .ok()
+        .map(|title| clean_wrike_title(&title))
+        .filter(|title| !title.is_empty())
+        .unwrap_or_else(|| "Wrike".to_owned());
+    let url = context.page_url.lock().ok().and_then(|url| url.clone());
+    let (can_go_back, can_go_forward) = context
+        .history
+        .lock()
+        .ok()
+        .map(|history| (history.can_go_back(), history.can_go_forward()))
+        .unwrap_or((false, false));
+    WrikeTabUpdate {
+        tab_id: context.tab_id.clone(),
+        title,
+        url,
+        can_go_back,
+        can_go_forward,
+    }
+}
+
+fn emit_wrike_tab_update(app: &AppHandle, context: &CaptureContext) {
+    let _ = app.emit("wrike-tab-updated", wrike_tab_update(context));
+}
+
 fn wrike_tab_label(tab_id: &str) -> Result<String, String> {
     if tab_id.is_empty()
         || !tab_id
@@ -579,9 +805,35 @@ fn apply_spell_check_script(enabled: bool) -> String {
             document.querySelectorAll('textarea, input[type="text"], [contenteditable="true"], [role="textbox"]')
               .forEach((element) => element.spellcheck = enabled);
           }};
+          const isEditable = (element) => {{
+            for (let current = element; current; current = current.parentElement) {{
+              if (
+                current instanceof HTMLTextAreaElement ||
+                current instanceof HTMLInputElement ||
+                current.isContentEditable ||
+                current.getAttribute('role') === 'textbox'
+              ) {{
+                return true;
+              }}
+            }}
+            return false;
+          }};
+          const selectionIsActive = () => {{
+            const selection = window.getSelection();
+            return Boolean(selection && !selection.isCollapsed && selection.toString().trim());
+          }};
+          const keepWrikeEditorToolsVisible = (event) => {{
+            if (isEditable(event.target) && selectionIsActive()) {{
+              event.preventDefault();
+            }}
+          }};
           const start = () => {{
             apply();
             new MutationObserver(apply).observe(document.body, {{ childList: true, subtree: true }});
+            if (!window.__abwContextMenuGuard) {{
+              document.addEventListener('contextmenu', keepWrikeEditorToolsVisible, true);
+              window.__abwContextMenuGuard = true;
+            }}
           }};
           if (document.body) start(); else document.addEventListener('DOMContentLoaded', start, {{ once: true }});
         }})();
@@ -591,8 +843,11 @@ fn apply_spell_check_script(enabled: bool) -> String {
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(AppState::default())
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
+            close_wrike_tab,
+            get_wrike_tab_state,
             get_settings,
             hide_wrike_tabs,
             launch_wrike,
@@ -602,7 +857,8 @@ pub fn run() {
             preview_spreadsheet,
             read_download,
             send_test_notification,
-            update_settings
+            update_settings,
+            wrike_tab_action
         ])
         .run(tauri::generate_context!())
         .expect("error while running ABW");

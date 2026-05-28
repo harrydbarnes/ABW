@@ -3,6 +3,16 @@ import { DEFAULT_SETTINGS, DEMO_DOWNLOADS } from "../data/demo";
 
 const desktopRuntime = "__TAURI_INTERNALS__" in window;
 
+export type WrikeTabAction = "back" | "forward" | "reload";
+
+export type WrikeTabUpdate = {
+  tabId: string;
+  title: string;
+  url: string | null;
+  canGoBack: boolean;
+  canGoForward: boolean;
+};
+
 export function isDesktopRuntime(): boolean {
   return desktopRuntime;
 }
@@ -79,6 +89,35 @@ export async function hideWrike(tabIds: string[]): Promise<void> {
   if (desktopRuntime) {
     await invokeDesktop("hide_wrike_tabs", { tabIds });
   }
+}
+
+export async function closeWrikeTab(tabId: string): Promise<void> {
+  if (desktopRuntime) {
+    await invokeDesktop("close_wrike_tab", { tabId });
+  }
+}
+
+export async function wrikeTabAction(tabId: string, action: WrikeTabAction): Promise<void> {
+  if (desktopRuntime) {
+    await invokeDesktop("wrike_tab_action", { tabId, action });
+  }
+}
+
+export async function getWrikeTabState(tabId: string): Promise<WrikeTabUpdate | null> {
+  if (!desktopRuntime) {
+    return null;
+  }
+  return invokeDesktop<WrikeTabUpdate | null>("get_wrike_tab_state", { tabId });
+}
+
+export async function subscribeToWrikeTabUpdates(
+  notify: (update: WrikeTabUpdate) => void,
+): Promise<() => void> {
+  if (!desktopRuntime) {
+    return () => undefined;
+  }
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<WrikeTabUpdate>("wrike-tab-updated", (event) => notify(event.payload));
 }
 
 export async function subscribeToDownloads(refresh: () => void): Promise<() => void> {
