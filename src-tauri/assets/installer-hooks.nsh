@@ -1,0 +1,1 @@
+!define MUI_WELCOMEPAGE_TEXT "Setup will guide you through the installation of A Better Wrike.$\r$\n$\r$\nThis app is designed by Harry Barnes to improve upon the default Wrike client. No data is shared or processed differently to the standard Wrike client.$\r$\n$\r$\nClick next to continue."

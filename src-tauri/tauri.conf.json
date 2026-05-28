@@ -41,7 +41,8 @@
         "installerIcon": "icons/icon.ico",
         "uninstallerIcon": "icons/icon.ico",
         "headerImage": "assets/installer-header.bmp",
-        "sidebarImage": "assets/installer-sidebar.bmp"
+        "sidebarImage": "assets/installer-sidebar.bmp",
+        "installerHooks": "assets/installer-hooks.nsh"
       }
     }
   }

@@ -174,6 +174,38 @@ input:focus-visible {
   display: block;
 }
 
+.browser-controls {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+}
+
+.browser-controls button {
+  width: 31px;
+  height: 31px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  color: #c5d0e4;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.browser-controls button:hover:not(:disabled) {
+  color: #fff;
+  background: var(--nav-active);
+}
+
+.browser-controls button:disabled {
+  cursor: default;
+  opacity: 0.36;
+}
+
+.browser-controls .material-icon {
+  width: 17px;
+  height: 17px;
+}
+
 .task-navigation {
   display: flex;
   align-items: center;
@@ -394,8 +426,8 @@ input:focus-visible {
   display: flex;
   align-items: center;
   gap: 1px;
-  padding-left: 18px;
-  background: linear-gradient(90deg, rgb(35 54 95 / 0%), var(--nav-active) 18px);
+  padding-left: 14px;
+  background: linear-gradient(90deg, rgb(35 54 95 / 0%), var(--nav-active) 14px);
   opacity: 0;
   pointer-events: none;
   transition: opacity 120ms ease;

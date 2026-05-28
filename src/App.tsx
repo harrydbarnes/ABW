@@ -8,8 +8,11 @@ import {
   useState,
   type DragEvent,
   type KeyboardEvent,
+  type MouseEvent,
   type ReactElement,
 } from "react";
+import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { Menu } from "@tauri-apps/api/menu";
 import { FilesLibrary } from "./features/files/FilesLibrary";
 import { SettingsPanel } from "./features/settings/SettingsPanel";
 import {
@@ -328,7 +331,56 @@ export function App() {
     setDraggedTabId(null);
   }
 
+  async function showTabContextMenu(event: MouseEvent<HTMLDivElement>, tab: WrikeTab) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!isDesktopRuntime()) {
+      setTabMenu({ tabId: tab.id, x: event.clientX, y: event.clientY });
+      return;
+    }
+    try {
+      const menu = await Menu.new({
+        items: [
+          {
+            text: "Back",
+            enabled: tab.canGoBack,
+            action: () => void runWrikeTabAction(tab.id, "back"),
+          },
+          {
+            text: "Forward",
+            enabled: tab.canGoForward,
+            action: () => void runWrikeTabAction(tab.id, "forward"),
+          },
+          {
+            text: "Refresh",
+            action: () => void runWrikeTabAction(tab.id, "reload"),
+          },
+          { item: "Separator" },
+          {
+            text: "Copy link",
+            action: () => void copyTabLink(tab),
+          },
+          {
+            text: "Share",
+            action: () => void shareTab(tab),
+          },
+          { item: "Separator" },
+          {
+            text: "Close tab",
+            enabled: wrikeTabsRef.current.length > 1,
+            action: () => void closeTab(tab.id),
+          },
+        ],
+      });
+      await menu.popup(new LogicalPosition(event.clientX, event.clientY));
+    } catch {
+      setTabMenu({ tabId: tab.id, x: event.clientX, y: event.clientY });
+    }
+  }
+
   const menuTab = tabMenu ? wrikeTabs.find((tab) => tab.id === tabMenu.tabId) ?? null : null;
+  const activeWrikeTab =
+    wrikeTabs.find((tab) => tab.id === activeWrikeTabId) ?? wrikeTabs[0] ?? null;
 
   async function updateSettings(next: Settings) {
     const persisted = await saveSettings(next);
@@ -359,6 +411,33 @@ export function App() {
         <div className="brand" aria-label="ABW">
           <img className="brand-wordmark" src="/abw-wordmark.svg" alt="ABW" />
         </div>
+        {activeWrikeTab ? (
+          <div className="browser-controls" aria-label={`${activeWrikeTab.title} browser controls`}>
+            <button
+              aria-label={`Go back in ${activeWrikeTab.title}`}
+              disabled={!activeWrikeTab.canGoBack}
+              onClick={() => void runWrikeTabAction(activeWrikeTab.id, "back")}
+              title="Back"
+            >
+              <MaterialIcon kind="arrow_back" />
+            </button>
+            <button
+              aria-label={`Go forward in ${activeWrikeTab.title}`}
+              disabled={!activeWrikeTab.canGoForward}
+              onClick={() => void runWrikeTabAction(activeWrikeTab.id, "forward")}
+              title="Forward"
+            >
+              <MaterialIcon kind="arrow_forward" />
+            </button>
+            <button
+              aria-label={`Reload ${activeWrikeTab.title}`}
+              onClick={() => void runWrikeTabAction(activeWrikeTab.id, "reload")}
+              title="Reload"
+            >
+              <MaterialIcon kind="refresh" />
+            </button>
+          </div>
+        ) : null}
         <div className="workspace-tabs" role="tablist" aria-label="Wrike tabs">
           {wrikeTabs.map((tab, index) => {
             const selected = screen === "wrike" && activeWrikeTabId === tab.id;
@@ -375,11 +454,7 @@ export function App() {
                 draggable
                 key={tab.id}
                 onClick={() => void showWrike(tab.id)}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  setTabMenu({ tabId: tab.id, x: event.clientX, y: event.clientY });
-                }}
+                onContextMenu={(event) => void showTabContextMenu(event, tab)}
                 onDragEnd={() => setDraggedTabId(null)}
                 onDragOver={(event) => {
                   event.preventDefault();
@@ -396,38 +471,6 @@ export function App() {
                 <span className="tab-title">{tab.title}</span>
                 {index === 0 ? <span className="external-dot" /> : null}
                 <span className="tab-actions" aria-label={`${tab.title} controls`}>
-                  <button
-                    aria-label={`Go back in ${tab.title}`}
-                    disabled={!tab.canGoBack}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void runWrikeTabAction(tab.id, "back");
-                    }}
-                    title="Back"
-                  >
-                    <MaterialIcon kind="arrow_back" />
-                  </button>
-                  <button
-                    aria-label={`Go forward in ${tab.title}`}
-                    disabled={!tab.canGoForward}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void runWrikeTabAction(tab.id, "forward");
-                    }}
-                    title="Forward"
-                  >
-                    <MaterialIcon kind="arrow_forward" />
-                  </button>
-                  <button
-                    aria-label={`Reload ${tab.title}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void runWrikeTabAction(tab.id, "reload");
-                    }}
-                    title="Reload"
-                  >
-                    <MaterialIcon kind="refresh" />
-                  </button>
                   <button
                     aria-label={`Close ${tab.title}`}
                     disabled={wrikeTabs.length <= 1}
