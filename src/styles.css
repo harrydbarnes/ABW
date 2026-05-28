@@ -109,6 +109,8 @@ input:focus-visible {
   display: flex;
   align-items: center;
   gap: 5px;
+  perspective: 720px;
+  overflow: hidden;
 }
 
 .workspace-tab,
@@ -123,16 +125,50 @@ input:focus-visible {
 
 .workspace-tab {
   min-width: 112px;
+  max-width: 154px;
   padding: 0 12px;
   gap: 8px;
   font-size: 13px;
   font-weight: 550;
+  transform-origin: left center;
+  will-change: transform, opacity, filter;
+}
+
+.workspace-tab span:not(.external-dot) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workspace-tab:hover,
 .workspace-tab.selected {
   color: #fff;
   background: var(--nav-active);
+}
+
+.workspace-tab.entering {
+  animation: draw-tab-forward 520ms cubic-bezier(.18, .88, .24, 1) both;
+}
+
+@keyframes draw-tab-forward {
+  0% {
+    opacity: 0;
+    transform: translateX(-66px) translateY(5px) translateZ(-90px) rotateY(-18deg) scale(.72);
+    filter: brightness(.72) saturate(.8);
+    z-index: 0;
+  }
+  54% {
+    opacity: 1;
+    transform: translateX(8px) translateY(1px) translateZ(16px) rotateY(5deg) scale(1.04);
+    filter: brightness(1.05) saturate(1);
+    z-index: 3;
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0) translateY(0) translateZ(0) rotateY(0) scale(1);
+    filter: none;
+    z-index: 2;
+  }
 }
 
 .new-tab {

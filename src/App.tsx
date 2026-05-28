@@ -25,9 +25,18 @@ import type { DownloadRecord, FileFilter, Settings } from "./types";
 const PreviewPanel = lazy(() => import("./features/preview/PreviewPanel"));
 
 type Screen = "wrike" | "files" | "settings";
+type WrikeTab = {
+  id: string;
+  title: string;
+};
+
+const INITIAL_WRIKE_TAB: WrikeTab = { id: "home", title: "Wrike" };
 
 export function App() {
   const [screen, setScreen] = useState<Screen>("wrike");
+  const [wrikeTabs, setWrikeTabs] = useState<WrikeTab[]>([INITIAL_WRIKE_TAB]);
+  const [activeWrikeTabId, setActiveWrikeTabId] = useState(INITIAL_WRIKE_TAB.id);
+  const [newWrikeTabId, setNewWrikeTabId] = useState<string | null>(null);
   const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -51,7 +60,7 @@ export function App() {
     void loadSettings().then((next) => {
       setSettings(next);
       if (next.launchWrikeOnStart) {
-        void showWrike();
+        void showWrike(activeWrikeTabId);
       } else {
         setScreen("files");
       }
@@ -87,14 +96,31 @@ export function App() {
   const selectedRecord =
     visibleDownloads.find((record) => record.id === selectedId) ?? visibleDownloads[0] ?? null;
 
-  async function showWrike() {
-    await launchWrike();
+  async function showWrike(tabId = activeWrikeTabId) {
+    setActiveWrikeTabId(tabId);
+    await hideWrike(wrikeTabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
+    await launchWrike(tabId);
     setScreen("wrike");
   }
 
   async function showLocalScreen(next: Exclude<Screen, "wrike">) {
-    await hideWrike();
+    await hideWrike(wrikeTabs.map((tab) => tab.id));
     setScreen(next);
+  }
+
+  async function addWrikeTab() {
+    const nextTabNumber = wrikeTabs.length + 1;
+    const next: WrikeTab = {
+      id: `tab-${Date.now().toString(36)}`,
+      title: `Wrike ${nextTabNumber}`,
+    };
+    setWrikeTabs((current) => [...current, next]);
+    setNewWrikeTabId(next.id);
+    window.setTimeout(() => setNewWrikeTabId(null), 520);
+    await hideWrike(wrikeTabs.map((tab) => tab.id));
+    await launchWrike(next.id);
+    setActiveWrikeTabId(next.id);
+    setScreen("wrike");
   }
 
   async function updateSettings(next: Settings) {
@@ -119,21 +145,31 @@ export function App() {
           <img className="brand-wordmark" src="/abw-wordmark.svg" alt="ABW" />
         </div>
         <div className="workspace-tabs" role="tablist" aria-label="Wrike tabs">
-          <button
-            aria-selected={screen === "wrike"}
-            className={`workspace-tab ${screen === "wrike" ? "selected" : ""}`}
-            onClick={() => void showWrike()}
-            role="tab"
-          >
-            <MaterialIcon kind="home" />
-            Wrike
-            <span className="external-dot" />
-          </button>
+          {wrikeTabs.map((tab, index) => {
+            const selected = screen === "wrike" && activeWrikeTabId === tab.id;
+            return (
+              <button
+                aria-selected={selected}
+                className={[
+                  "workspace-tab",
+                  selected ? "selected" : "",
+                  newWrikeTabId === tab.id ? "entering" : "",
+                ].join(" ")}
+                key={tab.id}
+                onClick={() => void showWrike(tab.id)}
+                role="tab"
+              >
+                <MaterialIcon kind={index === 0 ? "home" : "tab"} />
+                <span>{tab.title}</span>
+                {index === 0 ? <span className="external-dot" /> : null}
+              </button>
+            );
+          })}
           <button
             aria-label="New Wrike tab"
             className="new-tab"
-            onClick={() => setNotice("Additional Wrike tabs are not available yet.")}
-            title="Additional Wrike tabs are not available yet"
+            onClick={() => void addWrikeTab()}
+            title="New Wrike tab"
           >
             <MaterialIcon kind="add" />
           </button>
@@ -207,7 +243,7 @@ export function App() {
   );
 }
 
-function MaterialIcon({ kind }: { kind: "add" | "description" | "home" | "settings" }) {
+function MaterialIcon({ kind }: { kind: "add" | "description" | "home" | "settings" | "tab" }) {
   const paths: Record<typeof kind, ReactElement> = {
     home: <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8Z" />,
     add: <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6Z" />,
@@ -217,6 +253,7 @@ function MaterialIcon({ kind }: { kind: "add" | "description" | "home" | "settin
     settings: (
       <path d="M19.43 12.98c.04-.32.07-.65.07-.98s-.02-.66-.07-.98l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.6-.22l-2.49 1a7.42 7.42 0 0 0-1.69-.98L14.5 2.42A.49.49 0 0 0 14 2h-4a.49.49 0 0 0-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1a.5.5 0 0 0-.6.22l-2 3.46a.5.5 0 0 0 .12.64l2.11 1.65c-.05.32-.08.65-.08.98s.03.66.08.98l-2.11 1.65a.5.5 0 0 0-.12.64l2 3.46a.5.5 0 0 0 .6.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65a.49.49 0 0 0 .49.42h4a.49.49 0 0 0 .49-.42l.38-2.65c.61-.25 1.17-.58 1.69-.98l2.49 1a.5.5 0 0 0 .6-.22l2-3.46a.5.5 0 0 0-.12-.64ZM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5" />
     ),
+    tab: <path d="M4 6a2 2 0 0 1 2-2h5.8a2 2 0 0 1 1.42.59L16.63 8H20v10a2 2 0 0 1-2 2H4Z" />,
   };
   return (
     <svg className="material-icon" viewBox="0 0 24 24" aria-hidden="true">

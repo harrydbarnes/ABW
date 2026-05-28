@@ -138,7 +138,7 @@ fn get_settings(app: AppHandle) -> Result<Settings, String> {
 #[tauri::command]
 fn update_settings(app: AppHandle, settings: Settings) -> Result<Settings, String> {
     write_json(settings_path(&app)?, &settings)?;
-    if let Some(webview) = app.get_webview("wrike") {
+    if let Some(webview) = app.get_webview(&wrike_tab_label("home")?) {
         webview
             .eval(&apply_spell_check_script(settings.spell_check))
             .map_err(|error| format!("Unable to apply spell-check preference: {error}"))?;
@@ -157,23 +157,19 @@ fn send_test_notification(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn launch_wrike(app: AppHandle) -> Result<(), String> {
-    if let Some(webview) = app.get_webview("wrike") {
-        webview
-            .show()
-            .map_err(|error| format!("Unable to display the Wrike workspace: {error}"))?;
-        webview.set_focus().map_err(|error| error.to_string())?;
-        return Ok(());
-    }
-    open_wrike_at(&app, WRIKE_HOME)
+async fn launch_wrike(app: AppHandle, tab_id: String) -> Result<(), String> {
+    open_wrike_at(&app, &tab_id, WRIKE_HOME, false)
 }
 
 #[tauri::command]
-fn hide_wrike(app: AppHandle) -> Result<(), String> {
-    if let Some(webview) = app.get_webview("wrike") {
-        webview
-            .hide()
-            .map_err(|error| format!("Unable to hide the Wrike workspace: {error}"))?;
+fn hide_wrike_tabs(app: AppHandle, tab_ids: Vec<String>) -> Result<(), String> {
+    for tab_id in tab_ids {
+        let label = wrike_tab_label(&tab_id)?;
+        if let Some(webview) = app.get_webview(&label) {
+            webview
+                .hide()
+                .map_err(|error| format!("Unable to hide the Wrike workspace: {error}"))?;
+        }
     }
     Ok(())
 }
@@ -187,16 +183,26 @@ async fn open_source_task(app: AppHandle, url: String) -> Result<(), String> {
     if parsed.scheme() != "https" || !allowed_host {
         return Err("Only HTTPS Wrike task links may be opened inside ABW.".into());
     }
-    open_wrike_at(&app, parsed.as_str())
+    open_wrike_at(&app, "home", parsed.as_str(), true)
 }
 
-fn open_wrike_at(app: &AppHandle, destination: &str) -> Result<(), String> {
+fn open_wrike_at(
+    app: &AppHandle,
+    tab_id: &str,
+    destination: &str,
+    navigate_existing: bool,
+) -> Result<(), String> {
+    let label = wrike_tab_label(tab_id)?;
     let parsed = Url::parse(destination).map_err(|error| format!("Invalid Wrike URL: {error}"))?;
-    if let Some(webview) = app.get_webview("wrike") {
+    if let Some(webview) = app.get_webview(&label) {
+        if navigate_existing {
+            webview
+                .navigate(parsed)
+                .map_err(|error| format!("Unable to open the task in Wrike: {error}"))?;
+        }
         webview
-            .navigate(parsed)
-            .map_err(|error| format!("Unable to open the task in Wrike: {error}"))?;
-        webview.show().map_err(|error| error.to_string())?;
+            .show()
+            .map_err(|error| format!("Unable to display the Wrike workspace: {error}"))?;
         webview.set_focus().map_err(|error| error.to_string())?;
         return Ok(());
     }
@@ -219,11 +225,12 @@ fn open_wrike_at(app: &AppHandle, destination: &str) -> Result<(), String> {
     let navigation_context = Arc::clone(&context);
     let popup_context = Arc::clone(&context);
     let popup_app = app.clone();
+    let popup_workspace_label = label.clone();
     if let Ok(mut latest) = context.page_url.lock() {
         *latest = Some(destination.to_owned());
     }
 
-    let builder = WebviewBuilder::new("wrike", WebviewUrl::External(parsed))
+    let builder = WebviewBuilder::new(label, WebviewUrl::External(parsed))
         .auto_resize()
         .zoom_hotkeys_enabled(true)
         .initialization_script(&apply_spell_check_script(spell_check))
@@ -244,12 +251,12 @@ fn open_wrike_at(app: &AppHandle, destination: &str) -> Result<(), String> {
             let child_title_context = Arc::clone(&popup_context);
             let child_download_context = Arc::clone(&popup_context);
             let label = format!("wrike-popup-{}", Uuid::new_v4());
-            let blank = Url::parse("about:blank").expect("about:blank is a valid URL");
             let completion_app = popup_app.clone();
+            let completion_workspace_label = popup_workspace_label.clone();
             let child_builder = WebviewWindowBuilder::new(
                 &popup_app,
                 label,
-                WebviewUrl::External(blank),
+                WebviewUrl::External(url),
             )
             .title("ABW - Wrike")
             .window_features(features)
@@ -261,7 +268,7 @@ fn open_wrike_at(app: &AppHandle, destination: &str) -> Result<(), String> {
                 if matches!(payload.event(), PageLoadEvent::Finished)
                     && is_wrike_workspace_destination(payload.url())
                 {
-                    if let Some(workspace) = completion_app.get_webview("wrike") {
+                    if let Some(workspace) = completion_app.get_webview(&completion_workspace_label) {
                         let _ = workspace.navigate(payload.url().clone());
                         let _ = workspace.show();
                         let _ = workspace.set_focus();
@@ -279,6 +286,7 @@ fn open_wrike_at(app: &AppHandle, destination: &str) -> Result<(), String> {
                 popup_app.clone(),
                 child_download_context,
                 Some(parent_provenance),
+                true,
             ));
             let child = child_builder.build();
             match child {
@@ -297,7 +305,7 @@ fn open_wrike_at(app: &AppHandle, destination: &str) -> Result<(), String> {
                 *latest = title.clone();
             }
         })
-        .on_download(download_handler(app.clone(), Arc::clone(&context), None));
+        .on_download(download_handler(app.clone(), Arc::clone(&context), None, false));
     host.add_child(
         builder,
         LogicalPosition::new(0.0, TASKBAR_HEIGHT),
@@ -311,6 +319,7 @@ fn download_handler(
     app: AppHandle,
     context: Arc<CaptureContext>,
     provenance_override: Option<PendingDownload>,
+    close_webview_on_finish: bool,
 ) -> impl Fn(tauri::Webview, DownloadEvent<'_>) -> bool + Send + Sync + 'static {
     move |webview, event| {
         match event {
@@ -341,22 +350,25 @@ fn download_handler(
                 success,
             } => {
                 if success {
-                    let Some(path) = path else {
+                    if let Some(path) = path {
+                        let provenance = context
+                            .pending
+                            .lock()
+                            .ok()
+                            .and_then(|mut entries| entries.remove(&path))
+                            .unwrap_or_else(|| captured_provenance(&context));
+                        if let Err(error) = record_completed_download(&app, &path, provenance) {
+                            emit_download_capture_error(&app, error);
+                        }
+                    } else {
                         emit_download_capture_error(
                             &app,
                             "Wrike completed a download without reporting its saved location.".into(),
                         );
-                        return true;
-                    };
-                    let provenance = context
-                        .pending
-                        .lock()
-                        .ok()
-                        .and_then(|mut entries| entries.remove(&path))
-                        .unwrap_or_else(|| captured_provenance(&context));
-                    if let Err(error) = record_completed_download(&app, &path, provenance) {
-                        emit_download_capture_error(&app, error);
                     }
+                }
+                if close_webview_on_finish {
+                    let _ = webview.close();
                 }
             }
             _ => {}
@@ -536,6 +548,17 @@ fn clean_wrike_title(title: &str) -> String {
         .to_owned()
 }
 
+fn wrike_tab_label(tab_id: &str) -> Result<String, String> {
+    if tab_id.is_empty()
+        || !tab_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+    {
+        return Err("Invalid Wrike tab identifier.".into());
+    }
+    Ok(format!("wrike-{tab_id}"))
+}
+
 fn is_safe_remote_destination(url: &Url) -> bool {
     url.scheme() == "https" || url.as_str() == "about:blank"
 }
@@ -571,7 +594,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             get_settings,
-            hide_wrike,
+            hide_wrike_tabs,
             launch_wrike,
             list_downloads,
             open_download,

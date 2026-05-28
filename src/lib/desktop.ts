@@ -69,15 +69,15 @@ export async function openSourceTask(record: DownloadRecord): Promise<void> {
   }
 }
 
-export async function launchWrike(): Promise<void> {
+export async function launchWrike(tabId: string): Promise<void> {
   if (desktopRuntime) {
-    await invokeDesktop("launch_wrike");
+    await invokeDesktop("launch_wrike", { tabId });
   }
 }
 
-export async function hideWrike(): Promise<void> {
+export async function hideWrike(tabIds: string[]): Promise<void> {
   if (desktopRuntime) {
-    await invokeDesktop("hide_wrike");
+    await invokeDesktop("hide_wrike_tabs", { tabIds });
   }
 }
 
