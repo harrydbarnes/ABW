@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Settings } from "../../types";
 
 interface Props {
@@ -45,6 +46,10 @@ export function SettingsPanel({ settings, onChange, onTestNotification }: Props)
           Send test notification
         </button>
       </div>
+      <DictionarySettings
+        words={settings.customDictionary}
+        onChange={(customDictionary) => onChange({ ...settings, customDictionary })}
+      />
       <div className="storage-note">
         <h2>Downloads</h2>
         <p>
@@ -53,6 +58,107 @@ export function SettingsPanel({ settings, onChange, onTestNotification }: Props)
         </p>
       </div>
     </section>
+  );
+}
+
+function DictionarySettings({
+  words,
+  onChange,
+}: {
+  words: string[];
+  onChange: (words: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+
+  function normalize(nextWords: string[]) {
+    return [...new Set(nextWords.map((word) => word.trim()).filter(Boolean))].sort((first, second) =>
+      first.localeCompare(second, undefined, { sensitivity: "base" }),
+    );
+  }
+
+  function addWord() {
+    const word = draft.trim();
+    if (!word) {
+      return;
+    }
+    onChange(normalize([...words, word]));
+    setDraft("");
+  }
+
+  function startEdit(word: string) {
+    setEditing(word);
+    setEditDraft(word);
+  }
+
+  function saveEdit(original: string) {
+    const next = editDraft.trim();
+    onChange(normalize(words.map((word) => (word === original ? next : word))));
+    setEditing(null);
+    setEditDraft("");
+  }
+
+  return (
+    <div className="dictionary-panel">
+      <div>
+        <h2>Custom dictionary</h2>
+        <p>Add campaign names, client names and abbreviations that ABW should accept.</p>
+      </div>
+      <div className="dictionary-add">
+        <input
+          aria-label="Dictionary word"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              addWord();
+            }
+          }}
+          placeholder="Add a word"
+          value={draft}
+        />
+        <button className="secondary-action" onClick={addWord}>
+          Add word
+        </button>
+      </div>
+      {words.length ? (
+        <div className="dictionary-list">
+          {words.map((word) => (
+            <div className="dictionary-row" key={word}>
+              {editing === word ? (
+                <input
+                  aria-label={`Edit ${word}`}
+                  autoFocus
+                  onChange={(event) => setEditDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      saveEdit(word);
+                    } else if (event.key === "Escape") {
+                      setEditing(null);
+                    }
+                  }}
+                  value={editDraft}
+                />
+              ) : (
+                <strong>{word}</strong>
+              )}
+              <span>
+                {editing === word ? (
+                  <button onClick={() => saveEdit(word)}>Save</button>
+                ) : (
+                  <button onClick={() => startEdit(word)}>Edit</button>
+                )}
+                <button onClick={() => onChange(words.filter((entry) => entry !== word))}>
+                  Remove
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="dictionary-empty">No custom words yet.</p>
+      )}
+    </div>
   );
 }
 

@@ -3,6 +3,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    env,
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -40,6 +41,7 @@ struct Settings {
     spell_check: bool,
     launch_wrike_on_start: bool,
     download_notifications: bool,
+    custom_dictionary: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -61,6 +63,7 @@ impl Default for Settings {
             spell_check: true,
             launch_wrike_on_start: true,
             download_notifications: true,
+            custom_dictionary: Vec::new(),
         }
     }
 }
@@ -203,9 +206,12 @@ fn get_settings(app: AppHandle) -> Result<Settings, String> {
 fn update_settings(
     app: AppHandle,
     state: State<'_, AppState>,
-    settings: Settings,
+    mut settings: Settings,
 ) -> Result<Settings, String> {
+    let previous = read_settings(&app).unwrap_or_default();
+    settings.custom_dictionary = normalize_dictionary(settings.custom_dictionary);
     write_json(settings_path(&app)?, &settings)?;
+    sync_windows_spelling_dictionary(&previous.custom_dictionary, &settings.custom_dictionary);
     let script = apply_spell_check_script(settings.spell_check);
     let tab_ids = state
         .wrike_tabs
@@ -219,6 +225,8 @@ fn update_settings(
                 .map_err(|error| format!("Unable to apply spell-check preference: {error}"))?;
         }
     }
+    app.emit("settings-updated", settings.clone())
+        .map_err(|error| format!("Unable to refresh settings: {error}"))?;
     Ok(settings)
 }
 
@@ -398,6 +406,10 @@ fn open_wrike_at(
         .zoom_hotkeys_enabled(true)
         .initialization_script(&apply_spell_check_script(spell_check))
         .on_navigation(move |url| {
+            if url.scheme() == "abw-dictionary" {
+                let _ = add_custom_dictionary_word(&navigation_app, url);
+                return false;
+            }
             let allowed = is_safe_remote_destination(url);
             if allowed {
                 record_wrike_navigation(&navigation_context, url.as_str());
@@ -715,6 +727,90 @@ fn clean_wrike_title(title: &str) -> String {
         .to_owned()
 }
 
+fn normalize_dictionary(words: Vec<String>) -> Vec<String> {
+    let mut normalized = words
+        .into_iter()
+        .filter_map(|word| normalize_dictionary_word(&word))
+        .collect::<Vec<_>>();
+    normalized.sort_by_key(|word| word.to_lowercase());
+    normalized.dedup_by(|first, second| first.eq_ignore_ascii_case(second));
+    normalized
+}
+
+fn normalize_dictionary_word(word: &str) -> Option<String> {
+    let trimmed = word
+        .trim()
+        .trim_matches(|character: char| !character.is_alphanumeric() && character != '-' && character != '\'');
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_owned())
+}
+
+fn add_custom_dictionary_word(app: &AppHandle, url: &Url) -> Result<(), String> {
+    let word = url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "word").then(|| value.into_owned()))
+        .and_then(|word| normalize_dictionary_word(&word))
+        .ok_or_else(|| "No dictionary word was provided.".to_owned())?;
+    let mut settings = read_settings(app)?;
+    let previous = settings.custom_dictionary.clone();
+    settings.custom_dictionary.push(word);
+    settings.custom_dictionary = normalize_dictionary(settings.custom_dictionary);
+    write_json(settings_path(app)?, &settings)?;
+    sync_windows_spelling_dictionary(&previous, &settings.custom_dictionary);
+    app.emit("settings-updated", settings)
+        .map_err(|error| format!("Unable to refresh settings: {error}"))
+}
+
+#[cfg(target_os = "windows")]
+fn sync_windows_spelling_dictionary(old_words: &[String], new_words: &[String]) {
+    let Some(app_data) = env::var_os("APPDATA") else {
+        return;
+    };
+    let spelling_root = PathBuf::from(app_data).join("Microsoft").join("Spelling");
+    if fs::create_dir_all(spelling_root.join("en-US")).is_err() {
+        return;
+    }
+    let mut dictionaries = fs::read_dir(&spelling_root)
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.filter_map(Result::ok))
+        .filter_map(|entry| {
+            entry
+                .file_type()
+                .ok()
+                .filter(|kind| kind.is_dir())
+                .map(|_| entry.path().join("default.dic"))
+        })
+        .collect::<Vec<_>>();
+    if dictionaries.is_empty() {
+        dictionaries.push(spelling_root.join("en-US").join("default.dic"));
+    }
+    for dictionary in dictionaries {
+        let mut entries = fs::read_to_string(&dictionary)
+            .unwrap_or_default()
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        entries.retain(|entry| {
+            new_words.iter().any(|word| word.eq_ignore_ascii_case(entry))
+                || !old_words.iter().any(|word| word.eq_ignore_ascii_case(entry))
+        });
+        entries.extend(new_words.iter().cloned());
+        entries = normalize_dictionary(entries);
+        if let Some(parent) = dictionary.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::write(dictionary, entries.join("\r\n"));
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn sync_windows_spelling_dictionary(_old_words: &[String], _new_words: &[String]) {}
+
 fn find_wrike_context(state: &AppState, tab_id: &str) -> Option<Arc<CaptureContext>> {
     state
         .wrike_tabs
@@ -822,9 +918,75 @@ fn apply_spell_check_script(enabled: bool) -> String {
             const selection = window.getSelection();
             return Boolean(selection && !selection.isCollapsed && selection.toString().trim());
           }};
+          const selectedWord = () => {{
+            const selection = window.getSelection();
+            const text = selection && !selection.isCollapsed ? selection.toString() : "";
+            return (text.match(/[\\p{{L}}\\p{{N}}][\\p{{L}}\\p{{N}}'-]*/u) || [])[0] || "";
+          }};
+          const wordFromPoint = (event) => {{
+            const selected = selectedWord();
+            if (selected) return selected;
+            if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {{
+              const value = event.target.value || "";
+              const index = event.target.selectionStart || 0;
+              const left = value.slice(0, index).match(/[\\p{{L}}\\p{{N}}][\\p{{L}}\\p{{N}}'-]*$/u);
+              const right = value.slice(index).match(/^[\\p{{L}}\\p{{N}}'-]*/u);
+              return `${{left ? left[0] : ""}}${{right ? right[0] : ""}}`;
+            }}
+            const range =
+              document.caretRangeFromPoint?.(event.clientX, event.clientY) ||
+              (() => {{
+                const position = document.caretPositionFromPoint?.(event.clientX, event.clientY);
+                if (!position) return null;
+                const next = document.createRange();
+                next.setStart(position.offsetNode, position.offset);
+                return next;
+              }})();
+            if (!range || !range.startContainer || range.startContainer.nodeType !== Node.TEXT_NODE) return "";
+            const text = range.startContainer.textContent || "";
+            let start = range.startOffset;
+            let end = range.startOffset;
+            while (start > 0 && /[\\p{{L}}\\p{{N}}'-]/u.test(text[start - 1])) start -= 1;
+            while (end < text.length && /[\\p{{L}}\\p{{N}}'-]/u.test(text[end])) end += 1;
+            return text.slice(start, end);
+          }};
+          const closeDictionaryMenu = () => document.getElementById("abw-dictionary-menu")?.remove();
+          const showDictionaryMenu = (word, event) => {{
+            closeDictionaryMenu();
+            const menu = document.createElement("button");
+            menu.id = "abw-dictionary-menu";
+            menu.type = "button";
+            menu.textContent = `Add "${{word}}" to dictionary`;
+            Object.assign(menu.style, {{
+              position: "fixed",
+              left: `${{Math.max(8, event.clientX)}}px`,
+              top: `${{Math.max(8, event.clientY - 44)}}px`,
+              zIndex: "2147483647",
+              padding: "9px 12px",
+              border: "1px solid #d6dce8",
+              borderRadius: "8px",
+              background: "#fff",
+              color: "#17233a",
+              boxShadow: "0 12px 32px rgba(17, 29, 59, .18)",
+              font: "13px Segoe UI, sans-serif",
+              cursor: "pointer"
+            }});
+            menu.addEventListener("click", () => {{
+              window.location.href = `abw-dictionary://add?word=${{encodeURIComponent(word)}}`;
+              closeDictionaryMenu();
+            }});
+            document.body.append(menu);
+            window.setTimeout(() => document.addEventListener("click", closeDictionaryMenu, {{ once: true, capture: true }}), 0);
+          }};
           const keepWrikeEditorToolsVisible = (event) => {{
-            if (isEditable(event.target) && selectionIsActive()) {{
+            if (!isEditable(event.target)) {{
+              closeDictionaryMenu();
+              return;
+            }}
+            const word = wordFromPoint(event);
+            if (word || selectionIsActive()) {{
               event.preventDefault();
+              if (word) showDictionaryMenu(word, event);
             }}
           }};
           const start = () => {{

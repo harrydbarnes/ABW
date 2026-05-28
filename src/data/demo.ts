@@ -51,4 +51,5 @@ export const DEFAULT_SETTINGS: Settings = {
   spellCheck: true,
   launchWrikeOnStart: true,
   downloadNotifications: true,
+  customDictionary: [],
 };

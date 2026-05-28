@@ -16,6 +16,7 @@ export interface Settings {
   spellCheck: boolean;
   launchWrikeOnStart: boolean;
   downloadNotifications: boolean;
+  customDictionary: string[];
 }
 
 export interface WorkbookSheet {

@@ -24,6 +24,7 @@ import {
   sendTestNotification,
   subscribeToDownloadErrors,
   subscribeToDownloads,
+  subscribeToSettingsUpdates,
   subscribeToWrikeTabUpdates,
   wrikeTabAction,
   type WrikeTabAction,
@@ -65,6 +66,7 @@ export function App() {
     spellCheck: true,
     launchWrikeOnStart: true,
     downloadNotifications: true,
+    customDictionary: [],
   });
   const [notice, setNotice] = useState<string | null>(null);
   const wrikeTabsRef = useRef(wrikeTabs);
@@ -92,6 +94,7 @@ export function App() {
     let dispose: () => void = () => undefined;
     let disposeErrors: () => void = () => undefined;
     let disposeTabUpdates: () => void = () => undefined;
+    let disposeSettingsUpdates: () => void = () => undefined;
     void subscribeToDownloads(refresh).then((unsubscribe) => {
       dispose = unsubscribe;
     });
@@ -117,10 +120,17 @@ export function App() {
     }).then((unsubscribe) => {
       disposeTabUpdates = unsubscribe;
     });
+    void subscribeToSettingsUpdates((next) => {
+      setSettings(next);
+      setNotice("Dictionary updated.");
+    }).then((unsubscribe) => {
+      disposeSettingsUpdates = unsubscribe;
+    });
     return () => {
       dispose();
       disposeErrors();
       disposeTabUpdates();
+      disposeSettingsUpdates();
     };
   }, []);
 

@@ -1005,7 +1005,8 @@ input:focus-visible {
 }
 
 .storage-note,
-.notification-note {
+.notification-note,
+.dictionary-panel {
   margin-top: 24px;
   padding: 24px;
   border-radius: 11px;
@@ -1014,13 +1015,15 @@ input:focus-visible {
 }
 
 .storage-note h2,
-.notification-note h2 {
+.notification-note h2,
+.dictionary-panel h2 {
   font-size: 16px;
   margin: 0 0 9px;
 }
 
 .storage-note p,
-.notification-note p {
+.notification-note p,
+.dictionary-panel p {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.55;
@@ -1036,6 +1039,80 @@ input:focus-visible {
 
 .notification-note p {
   max-width: 470px;
+}
+
+.dictionary-add {
+  margin-top: 18px;
+  display: flex;
+  gap: 10px;
+}
+
+.dictionary-add input,
+.dictionary-row input {
+  min-width: 0;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 0 12px;
+  color: #192943;
+}
+
+.dictionary-add input {
+  flex: 1;
+}
+
+.dictionary-list {
+  margin-top: 15px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.dictionary-row {
+  min-height: 47px;
+  padding: 7px 10px 7px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.dictionary-row + .dictionary-row {
+  border-top: 1px solid var(--border);
+}
+
+.dictionary-row strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.dictionary-row input {
+  flex: 1;
+}
+
+.dictionary-row span {
+  display: flex;
+  gap: 8px;
+}
+
+.dictionary-row button {
+  height: 31px;
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dictionary-row button:hover {
+  background: var(--accent-soft);
+}
+
+.dictionary-empty {
+  margin-top: 14px !important;
 }
 
 .secondary-action {

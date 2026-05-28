@@ -36,7 +36,10 @@ export async function loadSettings(): Promise<Settings> {
 
 export async function saveSettings(settings: Settings): Promise<Settings> {
   if (!desktopRuntime) {
-    return settings;
+    return {
+      ...settings,
+      customDictionary: normalizeDictionary(settings.customDictionary),
+    };
   }
   return invokeDesktop<Settings>("update_settings", { settings });
 }
@@ -120,6 +123,16 @@ export async function subscribeToWrikeTabUpdates(
   return listen<WrikeTabUpdate>("wrike-tab-updated", (event) => notify(event.payload));
 }
 
+export async function subscribeToSettingsUpdates(
+  notify: (settings: Settings) => void,
+): Promise<() => void> {
+  if (!desktopRuntime) {
+    return () => undefined;
+  }
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<Settings>("settings-updated", (event) => notify(event.payload));
+}
+
 export async function subscribeToDownloads(refresh: () => void): Promise<() => void> {
   if (!desktopRuntime) {
     return () => undefined;
@@ -134,4 +147,9 @@ export async function subscribeToDownloadErrors(notify: (message: string) => voi
   }
   const { listen } = await import("@tauri-apps/api/event");
   return listen<string>("download-capture-error", (event) => notify(event.payload));
+}
+
+function normalizeDictionary(words: string[]): string[] {
+  return [...new Set(words.map((word) => word.trim()).filter(Boolean))]
+    .sort((first, second) => first.localeCompare(second, undefined, { sensitivity: "base" }));
 }
