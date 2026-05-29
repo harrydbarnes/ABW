@@ -89,6 +89,7 @@ export function App() {
   const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
   const [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
+  const [isTopbarActionsMenuOpen, setIsTopbarActionsMenuOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
@@ -178,7 +179,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const closeMenu = () => setTabMenu(null);
+    const closeMenu = () => {
+      setTabMenu(null);
+      setIsTopbarActionsMenuOpen(false);
+    };
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
         closeMenu();
@@ -253,6 +257,7 @@ export function App() {
   }
 
   async function showLocalScreen(next: Exclude<Screen, "wrike">) {
+    setIsTopbarActionsMenuOpen(false);
     await hideWrike(wrikeTabs.map((tab) => tab.id));
     setScreen(next);
   }
@@ -298,6 +303,7 @@ export function App() {
 
   async function runWrikeTabAction(tabId: string, action: WrikeTabAction) {
     setTabMenu(null);
+    setIsTopbarActionsMenuOpen(false);
     if (action === "reload") {
       window.clearTimeout(reloadAnimationTimerRef.current);
       setReloadingTabId(tabId);
@@ -407,6 +413,21 @@ export function App() {
     }
   }
 
+  function handleTitlebarDoubleClick(event: MouseEvent<HTMLElement>) {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    if (
+      target.closest(
+        "button, .workspace-tab, .browser-controls, .brand, .topbar-actions, .topbar-actions-overflow, .window-controls, .tab-context-menu",
+      )
+    ) {
+      return;
+    }
+    void runWindowAction("toggleMaximize");
+  }
+
   function handleTabDragStart(event: DragEvent<HTMLDivElement>, tabId: string) {
     setDraggedTabId(tabId);
     event.dataTransfer.effectAllowed = "move";
@@ -480,6 +501,7 @@ export function App() {
   }
 
   async function toggleSpellCheck() {
+    setIsTopbarActionsMenuOpen(false);
     const spellCheck = !settings.spellCheck;
     const persisted = await saveSettings({ ...settings, spellCheck });
     setSettings(persisted);
@@ -498,7 +520,11 @@ export function App() {
   return (
     <>
     <div className="app-shell" spellCheck={settings.spellCheck}>
-      <header className="taskbar" data-tauri-drag-region>
+      <header
+        className={`taskbar ${wrikeTabs.length >= 4 ? "is-tab-crowded" : ""}`}
+        data-tauri-drag-region
+        onDoubleClick={handleTitlebarDoubleClick}
+      >
         <div className="brand" aria-label="ABW" data-tauri-drag-region>
           <img className="brand-wordmark" src="/abw-wordmark.svg" alt="ABW" data-tauri-drag-region />
         </div>
@@ -599,34 +625,78 @@ export function App() {
           </span>
           <span className="tab-space" aria-hidden="true" data-tauri-drag-region />
         </div>
-        <button
-          aria-label={`Turn spell check ${settings.spellCheck ? "off" : "on"}`}
-          aria-pressed={settings.spellCheck}
-          className={`spell-state ${settings.spellCheck ? "enabled" : ""}`}
-          onClick={() => void toggleSpellCheck()}
-          title={`Turn spell check ${settings.spellCheck ? "off" : "on"}`}
+        <div className="topbar-actions">
+          <button
+            aria-label={`Turn spell check ${settings.spellCheck ? "off" : "on"}`}
+            aria-pressed={settings.spellCheck}
+            className={`spell-state ${settings.spellCheck ? "enabled" : ""}`}
+            onClick={() => void toggleSpellCheck()}
+            title={`Turn spell check ${settings.spellCheck ? "off" : "on"}`}
+          >
+            <span className="icon-wrap">
+              <NavIcon kind="spell" />
+            </span>
+            Spell check {settings.spellCheck ? "on" : "off"}
+          </button>
+          <nav className="task-navigation" aria-label="ABW navigation">
+            <button
+              className={`nav-item ${screen === "files" ? "selected" : ""}`}
+              onClick={() => void showLocalScreen("files")}
+            >
+              <MaterialIcon kind="description" />
+              Files
+            </button>
+            <button
+              className={`nav-item ${screen === "settings" ? "selected" : ""}`}
+              onClick={() => void showLocalScreen("settings")}
+            >
+              <MaterialIcon kind="settings" />
+              Settings
+            </button>
+          </nav>
+        </div>
+        <div
+          className="topbar-actions-overflow"
+          onClick={(event) => event.stopPropagation()}
         >
-          <span className="icon-wrap">
-            <NavIcon kind="spell" />
-          </span>
-          Spell check {settings.spellCheck ? "on" : "off"}
-        </button>
-        <nav className="task-navigation" aria-label="ABW navigation">
           <button
-            className={`nav-item ${screen === "files" ? "selected" : ""}`}
-            onClick={() => void showLocalScreen("files")}
+            aria-controls="topbar-actions-menu"
+            aria-expanded={isTopbarActionsMenuOpen}
+            aria-label="Show ABW actions"
+            className={`topbar-actions-toggle ${isTopbarActionsMenuOpen ? "open" : ""}`}
+            onClick={() => setIsTopbarActionsMenuOpen((open) => !open)}
+            title="Show ABW actions"
           >
-            <MaterialIcon kind="description" />
-            Files
+            <MaterialIcon kind="keyboard_arrow_down" />
           </button>
-          <button
-            className={`nav-item ${screen === "settings" ? "selected" : ""}`}
-            onClick={() => void showLocalScreen("settings")}
+          <div
+            className={`topbar-actions-menu ${isTopbarActionsMenuOpen ? "open" : ""}`}
+            id="topbar-actions-menu"
           >
-            <MaterialIcon kind="settings" />
-            Settings
-          </button>
-        </nav>
+            <button
+              aria-pressed={settings.spellCheck}
+              className="topbar-menu-item"
+              onClick={() => void toggleSpellCheck()}
+            >
+              <NavIcon kind="spell" />
+              <span>Spell check {settings.spellCheck ? "on" : "off"}</span>
+            </button>
+            <button
+              className={`topbar-menu-item ${screen === "files" ? "selected" : ""}`}
+              onClick={() => void showLocalScreen("files")}
+            >
+              <MaterialIcon kind="description" />
+              <span>Files</span>
+            </button>
+            <button
+              className={`topbar-menu-item ${screen === "settings" ? "selected" : ""}`}
+              onClick={() => void showLocalScreen("settings")}
+            >
+              <MaterialIcon kind="settings" />
+              <span>Settings</span>
+            </button>
+          </div>
+        </div>
         <div className="topbar-notice-slot" aria-live="polite">
           {notice ? (
             <div className="topbar-toast" role="status">
@@ -748,6 +818,7 @@ function MaterialIcon({
     | "close"
     | "description"
     | "home"
+    | "keyboard_arrow_down"
     | "link"
     | "refresh"
     | "settings"
@@ -766,6 +837,7 @@ function MaterialIcon({
     description: (
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Zm1 7V3.5L20.5 9ZM16 18H8v-2h8Zm0-4H8v-2h8Z" />
     ),
+    keyboard_arrow_down: <path d="m7.41 8.59 4.59 4.58 4.59-4.58L18 10l-6 6-6-6Z" />,
     link: (
       <path d="M3.9 12a5 5 0 0 1 5-5h4v2h-4a3 3 0 0 0 0 6h4v2h-4a5 5 0 0 1-5-5Zm5.5 1v-2h5.2v2Zm1.7 4v-2h4a3 3 0 0 0 0-6h-4V7h4a5 5 0 0 1 0 10Z" />
     ),

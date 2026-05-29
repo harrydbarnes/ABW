@@ -153,6 +153,7 @@ input:focus-visible {
 .taskbar {
   position: relative;
   z-index: 5;
+  min-width: 0;
   color: var(--nav-soft);
   background: var(--nav);
   padding: 0 0 0 16px;
@@ -232,8 +233,107 @@ input:focus-visible {
   flex: none;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+}
+
+.topbar-actions-overflow {
+  position: relative;
+  display: none;
+  flex: none;
+}
+
+.topbar-actions-toggle {
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  color: #d5deef;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.topbar-actions-toggle:hover,
+.topbar-actions-toggle.open {
+  color: #fff;
+  background: var(--nav-active);
+}
+
+.topbar-actions-toggle .material-icon {
+  width: 20px;
+  height: 20px;
+  transition: transform 180ms ease;
+}
+
+.topbar-actions-toggle.open .material-icon {
+  transform: rotate(180deg);
+}
+
+.topbar-actions-menu {
+  position: absolute;
+  top: 42px;
+  right: 0;
+  z-index: 20;
+  width: 210px;
+  padding: 7px;
+  border: 1px solid #dce4f1;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 18px 42px rgb(16 29 62 / 18%);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-6px) scale(.98);
+  transform-origin: top right;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease,
+    visibility 0s linear 160ms;
+}
+
+.topbar-actions-menu.open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease,
+    visibility 0s;
+}
+
+.topbar-menu-item {
+  width: 100%;
+  height: 38px;
+  border-radius: 6px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #22324a;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.topbar-menu-item:hover,
+.topbar-menu-item.selected {
+  color: #102650;
+  background: #edf3ff;
+}
+
+.topbar-menu-item .material-icon,
+.topbar-menu-item .icon {
+  width: 17px;
+  height: 17px;
+  color: #50617b;
+}
+
 .workspace-tabs {
-  min-width: 250px;
+  min-width: 0;
   flex: 1;
   display: flex;
   align-items: center;
@@ -254,7 +354,8 @@ input:focus-visible {
 }
 
 .workspace-tab {
-  min-width: 132px;
+  flex: 1 1 132px;
+  min-width: 96px;
   max-width: 220px;
   padding: 0 12px;
   gap: 8px;
@@ -350,6 +451,7 @@ input:focus-visible {
   display: flex;
   align-items: center;
   gap: 5px;
+  flex: none;
 }
 
 .new-tab {
@@ -423,8 +525,16 @@ input:focus-visible {
 
 .tab-space {
   height: 1px;
-  flex: 1;
-  min-width: 48px;
+  flex: 1 1 24px;
+  min-width: 24px;
+}
+
+.taskbar.is-tab-crowded .topbar-actions {
+  display: none;
+}
+
+.taskbar.is-tab-crowded .topbar-actions-overflow {
+  display: block;
 }
 
 .nav-item {
@@ -1506,8 +1616,12 @@ input:focus-visible {
 }
 
 @media (max-width: 1120px) {
-  .spell-state {
+  .topbar-actions {
     display: none;
+  }
+
+  .topbar-actions-overflow {
+    display: block;
   }
 
   .taskbar {
