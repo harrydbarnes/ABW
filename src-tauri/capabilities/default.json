@@ -3,6 +3,13 @@
   "identifier": "main-capability",
   "description": "Capabilities for ABW's trusted local Files window.",
   "windows": ["main"],
-  "permissions": ["core:default", "core:event:allow-listen"]
+  "permissions": [
+    "core:default",
+    "core:event:allow-listen",
+    "core:window:default",
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-start-dragging",
+    "core:window:allow-toggle-maximize"
+  ]
 }
-

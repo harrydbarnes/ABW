@@ -12,6 +12,7 @@ import {
   type ReactElement,
 } from "react";
 import { Menu } from "@tauri-apps/api/menu";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { FilesLibrary } from "./features/files/FilesLibrary";
 import { SettingsPanel } from "./features/settings/SettingsPanel";
 import {
@@ -109,6 +110,14 @@ export function App() {
   useEffect(() => {
     wrikeTabsRef.current = wrikeTabs;
   }, [wrikeTabs]);
+
+  useEffect(() => {
+    if (!notice) {
+      return;
+    }
+    const noticeTimer = window.setTimeout(() => setNotice(null), 2800);
+    return () => window.clearTimeout(noticeTimer);
+  }, [notice]);
 
   useEffect(() => {
     const refresh = () => {
@@ -213,9 +222,9 @@ export function App() {
     const tabs = wrikeTabsRef.current;
     const tab = tabs.find((candidate) => candidate.id === tabId);
     setActiveWrikeTabId(tabId);
-    await hideWrike(tabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
     await resizeWrikeTabs().catch(() => undefined);
     await launchWrike(tabId, tab?.mode === "readOnly" ? READ_ONLY_URL : undefined);
+    await hideWrike(tabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
     const update = await getWrikeTabState(tabId);
     if (update) {
       setWrikeTabs((current) =>
@@ -244,8 +253,8 @@ export function App() {
     setWrikeTabs((current) => [...current, next]);
     setNewWrikeTabId(next.id);
     window.setTimeout(() => setNewWrikeTabId(null), 520);
-    await hideWrike(wrikeTabs.map((tab) => tab.id));
     await launchWrike(next.id);
+    await hideWrike(wrikeTabs.map((tab) => tab.id));
     setActiveWrikeTabId(next.id);
     setScreen("wrike");
   }
@@ -263,8 +272,8 @@ export function App() {
     setWrikeTabs((current) => [...current, next]);
     setNewWrikeTabId(next.id);
     window.setTimeout(() => setNewWrikeTabId(null), 520);
-    await hideWrike(wrikeTabs.map((tab) => tab.id));
     await launchWrike(next.id, READ_ONLY_URL);
+    await hideWrike(wrikeTabs.map((tab) => tab.id));
     setActiveWrikeTabId(next.id);
     setScreen("wrike");
   }
@@ -307,11 +316,28 @@ export function App() {
     });
   }
 
+  async function copyTextToClipboard(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      document.body.append(textarea);
+      textarea.select();
+      const copied = document.execCommand("copy");
+      textarea.remove();
+      return copied;
+    }
+  }
+
   async function copyTabLink(tab: WrikeTab) {
     setTabMenu(null);
     const url = tab.url ?? "https://www.wrike.com/workspace.htm";
-    await navigator.clipboard.writeText(url);
-    setNotice("Wrike link copied.");
+    setNotice((await copyTextToClipboard(url)) ? "Copied to Clipboard" : "Unable to copy link");
   }
 
   async function shareTab(tab: WrikeTab) {
@@ -331,8 +357,21 @@ export function App() {
         }
       }
     }
-    await navigator.clipboard.writeText(url);
-    setNotice("Wrike link copied.");
+    setNotice((await copyTextToClipboard(url)) ? "Copied to Clipboard" : "Unable to copy link");
+  }
+
+  async function runWindowAction(action: "minimize" | "toggleMaximize" | "close") {
+    if (!isDesktopRuntime()) {
+      return;
+    }
+    const appWindow = getCurrentWindow();
+    if (action === "minimize") {
+      await appWindow.minimize();
+    } else if (action === "toggleMaximize") {
+      await appWindow.toggleMaximize();
+    } else {
+      await appWindow.close();
+    }
   }
 
   function handleTabKeyDown(event: KeyboardEvent<HTMLDivElement>, tabId: string) {
@@ -433,9 +472,9 @@ export function App() {
   return (
     <>
     <div className="app-shell" spellCheck={settings.spellCheck}>
-      <header className="taskbar">
-        <div className="brand" aria-label="ABW">
-          <img className="brand-wordmark" src="/abw-wordmark.svg" alt="ABW" />
+      <header className="taskbar" data-tauri-drag-region>
+        <div className="brand" aria-label="ABW" data-tauri-drag-region>
+          <img className="brand-wordmark" src="/abw-wordmark.svg" alt="ABW" data-tauri-drag-region />
         </div>
         {activeWrikeTab ? (
           <div className="browser-controls" aria-label={`${activeWrikeTab.title} browser controls`}>
@@ -531,7 +570,7 @@ export function App() {
               <span>Read Only</span>
             </button>
           </span>
-          <span className="tab-space" aria-hidden="true" />
+          <span className="tab-space" aria-hidden="true" data-tauri-drag-region />
         </div>
         <button
           aria-label={`Turn spell check ${settings.spellCheck ? "off" : "on"}`}
@@ -561,6 +600,17 @@ export function App() {
             Settings
           </button>
         </nav>
+        <div className="topbar-notice-slot" aria-live="polite">
+          {notice ? (
+            <div className="topbar-toast" role="status">
+              {notice}
+              <button aria-label="Dismiss" onClick={() => setNotice(null)}>
+                <NavIcon kind="close" />
+              </button>
+            </div>
+          ) : null}
+        </div>
+        <WindowControls onAction={(action) => void runWindowAction(action)} />
       </header>
       {tabMenu && menuTab ? (
         <div
@@ -637,20 +687,14 @@ export function App() {
             </Suspense>
           </div>
         ) : (
-          <SettingsPanel
-            settings={settings}
-            onChange={(next) => void updateSettings(next)}
-            onTestNotification={() => void testNotification()}
-          />
-        )}
-        {notice ? (
-          <div className="toast" role="status">
-            {notice}
-            <button aria-label="Dismiss" onClick={() => setNotice(null)}>
-              <NavIcon kind="close" />
-            </button>
+          <div className="settings-screen">
+            <SettingsPanel
+              settings={settings}
+              onChange={(next) => void updateSettings(next)}
+              onTestNotification={() => void testNotification()}
+            />
           </div>
-        ) : null}
+        )}
       </main>
     </div>
     {isLaunchSplashVisible ? (
@@ -678,7 +722,9 @@ function MaterialIcon({
     | "refresh"
     | "settings"
     | "share"
-    | "tab";
+    | "tab"
+    | "window_maximize"
+    | "window_minimize";
 }) {
   const paths: Record<typeof kind, ReactElement> = {
     home: <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8Z" />,
@@ -702,11 +748,42 @@ function MaterialIcon({
       <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11A2.99 2.99 0 1 0 15 5c0 .24.04.47.09.7L8.04 9.81A3 3 0 1 0 8.04 14l7.12 4.18c-.05.21-.08.43-.08.65a2.92 2.92 0 1 0 2.92-2.75Z" />
     ),
     tab: <path d="M4 6a2 2 0 0 1 2-2h5.8a2 2 0 0 1 1.42.59L16.63 8H20v10a2 2 0 0 1-2 2H4Z" />,
+    window_maximize: <path d="M5 5h14v14H5Zm2 2v10h10V7Z" />,
+    window_minimize: <path d="M5 18h14v-2H5Z" />,
   };
   return (
     <svg className="material-icon" viewBox="0 0 24 24" aria-hidden="true">
       {paths[kind]}
     </svg>
+  );
+}
+
+function WindowControls({
+  onAction,
+}: {
+  onAction: (action: "minimize" | "toggleMaximize" | "close") => void;
+}) {
+  return (
+    <div className="window-controls" aria-label="Window controls">
+      <button aria-label="Minimize" onClick={() => onAction("minimize")} title="Minimize">
+        <MaterialIcon kind="window_minimize" />
+      </button>
+      <button
+        aria-label="Maximize or restore"
+        onClick={() => onAction("toggleMaximize")}
+        title="Maximize/restore"
+      >
+        <MaterialIcon kind="window_maximize" />
+      </button>
+      <button
+        aria-label="Close"
+        className="close-window"
+        onClick={() => onAction("close")}
+        title="Close"
+      >
+        <MaterialIcon kind="close" />
+      </button>
+    </div>
   );
 }
 
