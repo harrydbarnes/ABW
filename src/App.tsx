@@ -101,11 +101,17 @@ export function App() {
   });
   const [notice, setNotice] = useState<string | null>(null);
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
+  const [reloadingTabId, setReloadingTabId] = useState<string | null>(null);
   const wrikeTabsRef = useRef(wrikeTabs);
+  const reloadAnimationTimerRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     const splashTimer = window.setTimeout(() => setIsLaunchSplashVisible(false), 2800);
     return () => window.clearTimeout(splashTimer);
+  }, []);
+
+  useEffect(() => {
+    return () => window.clearTimeout(reloadAnimationTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -292,6 +298,13 @@ export function App() {
 
   async function runWrikeTabAction(tabId: string, action: WrikeTabAction) {
     setTabMenu(null);
+    if (action === "reload") {
+      window.clearTimeout(reloadAnimationTimerRef.current);
+      setReloadingTabId(tabId);
+      reloadAnimationTimerRef.current = window.setTimeout(() => {
+        setReloadingTabId((current) => (current === tabId ? null : current));
+      }, 900);
+    }
     await wrikeTabAction(tabId, action);
   }
 
@@ -509,6 +522,7 @@ export function App() {
             </button>
             <button
               aria-label={`Reload ${activeWrikeTab.title}`}
+              className={reloadingTabId === activeWrikeTab.id ? "is-reloading" : undefined}
               onClick={() => void runWrikeTabAction(activeWrikeTab.id, "reload")}
               title="Reload"
             >

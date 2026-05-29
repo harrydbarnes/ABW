@@ -207,6 +207,24 @@ input:focus-visible {
   height: 17px;
 }
 
+.browser-controls button.is-reloading .material-icon {
+  animation: reload-button-spin 900ms cubic-bezier(.42, 0, .22, 1) both;
+}
+
+@keyframes reload-button-spin {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+
+  45% {
+    transform: rotate(225deg) scale(1.08);
+  }
+
+  100% {
+    transform: rotate(360deg) scale(1);
+  }
+}
+
 .task-navigation {
   display: flex;
   align-items: center;
