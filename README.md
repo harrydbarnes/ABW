@@ -1,11 +1,10 @@
 # ABW
 
-ABW (A Better Wrike client) is a lightweight Windows desktop client built around the live Wrike
-workspace and a deliberately better document workflow.
+ABW (A Better Wrike client) is a lightweight Windows desktop client built designed to perform better and improve on key functionality for Wrike users.
 
 ## Why ABW
 
-- Up to 375x lower observed RAM usage than Wrike Desktop in this test: 4 MB vs 1.5 GB.
+- Up to 375x lower observed RAM usage than the official Wrike Desktop in testing: 4 MB vs 1.5 GB.
 - Up to 68x smaller installed size: 10 MB vs 684 MB.
 
 ## Product Direction
