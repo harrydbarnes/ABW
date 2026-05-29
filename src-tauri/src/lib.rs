@@ -452,7 +452,9 @@ fn open_wrike_at(
             let child_builder = WebviewWindowBuilder::new(
                 &popup_app,
                 label,
-                WebviewUrl::External(url),
+                WebviewUrl::External(
+                    Url::parse("about:blank").expect("about:blank is a valid URL"),
+                ),
             )
             .title("ABW - Wrike")
             .window_features(features)
@@ -964,7 +966,17 @@ fn wrike_tab_label(tab_id: &str) -> Result<String, String> {
 }
 
 fn is_safe_remote_destination(url: &Url) -> bool {
-    url.scheme() == "https" || url.as_str() == "about:blank"
+    url.scheme() == "https" || url.as_str() == "about:blank" || is_safe_blob_destination(url)
+}
+
+fn is_safe_blob_destination(url: &Url) -> bool {
+    if url.scheme() != "blob" {
+        return false;
+    }
+    url.as_str()
+        .strip_prefix("blob:")
+        .and_then(|inner| Url::parse(inner).ok())
+        .is_some_and(|inner| inner.scheme() == "https")
 }
 
 fn is_wrike_workspace_destination(url: &Url) -> bool {
