@@ -11,7 +11,6 @@ import {
   type MouseEvent,
   type ReactElement,
 } from "react";
-import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { Menu } from "@tauri-apps/api/menu";
 import { FilesLibrary } from "./features/files/FilesLibrary";
 import { SettingsPanel } from "./features/settings/SettingsPanel";
@@ -23,6 +22,7 @@ import {
   isDesktopRuntime,
   loadDownloads,
   loadSettings,
+  resizeWrikeTabs,
   saveSettings,
   sendTestNotification,
   subscribeToDownloadErrors,
@@ -178,6 +178,22 @@ export function App() {
     };
   }, []);
 
+  useEffect(() => {
+    let resizeTimer: number | undefined;
+    const syncWrikeBounds = () => {
+      if (!isDesktopRuntime()) {
+        return;
+      }
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => void resizeWrikeTabs().catch(() => undefined), 80);
+    };
+    window.addEventListener("resize", syncWrikeBounds);
+    return () => {
+      window.clearTimeout(resizeTimer);
+      window.removeEventListener("resize", syncWrikeBounds);
+    };
+  }, []);
+
   const visibleDownloads = useMemo(() => {
     const query = deferredSearch.trim().toLowerCase();
     return downloads.filter((record) => {
@@ -198,6 +214,7 @@ export function App() {
     const tab = tabs.find((candidate) => candidate.id === tabId);
     setActiveWrikeTabId(tabId);
     await hideWrike(tabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
+    await resizeWrikeTabs().catch(() => undefined);
     await launchWrike(tabId, tab?.mode === "readOnly" ? READ_ONLY_URL : undefined);
     const update = await getWrikeTabState(tabId);
     if (update) {
@@ -306,9 +323,12 @@ export function App() {
     if (share) {
       try {
         await share({ title: tab.title, url });
+        setNotice("Wrike link shared.");
         return;
-      } catch {
-        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
       }
     }
     await navigator.clipboard.writeText(url);
@@ -378,7 +398,7 @@ export function App() {
           },
         ],
       });
-      await menu.popup(new LogicalPosition(event.clientX, event.clientY));
+      await menu.popup();
     } catch {
       setTabMenu({ tabId: tab.id, x: event.clientX, y: event.clientY });
     }

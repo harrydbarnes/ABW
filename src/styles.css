@@ -363,23 +363,29 @@ input:focus-visible {
   pointer-events: none;
   transform: translateX(-8px) scale(.96);
   transition:
-    width 160ms ease 1s,
-    padding 160ms ease 1s,
-    border-color 140ms ease 1s,
-    background-color 140ms ease 1s,
-    opacity 140ms ease 1s,
-    transform 160ms ease 1s;
+    width 150ms ease 360ms,
+    padding 150ms ease 360ms,
+    border-color 140ms ease 360ms,
+    background-color 140ms ease 360ms,
+    opacity 130ms ease 360ms,
+    transform 150ms ease 360ms;
 }
 
 .new-tab-cluster:hover .read-only-launcher,
 .new-tab-cluster:focus-within .read-only-launcher {
-  width: 132px;
-  padding: 0 11px;
+  width: 112px;
+  padding: 0 9px;
   border-color: #3a4d72;
   background: #182b50;
   opacity: 1;
   pointer-events: auto;
   transform: translateX(0) scale(1);
+}
+
+.new-tab-cluster:hover .read-only-launcher:hover,
+.new-tab-cluster:focus-within .read-only-launcher:hover {
+  border-color: #58709f;
+  background: #29436f;
 }
 
 .read-only-launcher span {

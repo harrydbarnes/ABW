@@ -89,6 +89,12 @@ export async function launchWrike(tabId: string, url?: string): Promise<void> {
   }
 }
 
+export async function resizeWrikeTabs(): Promise<void> {
+  if (desktopRuntime) {
+    await invokeDesktop("resize_wrike_tabs");
+  }
+}
+
 export async function hideWrike(tabIds: string[]): Promise<void> {
   if (desktopRuntime) {
     await invokeDesktop("hide_wrike_tabs", { tabIds });
