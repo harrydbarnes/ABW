@@ -100,6 +100,7 @@ export function App() {
     customDictionary: [],
   });
   const [notice, setNotice] = useState<string | null>(null);
+  const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const wrikeTabsRef = useRef(wrikeTabs);
 
   useEffect(() => {
@@ -189,6 +190,7 @@ export function App() {
 
   useEffect(() => {
     let resizeTimer: number | undefined;
+    let unlistenResize: (() => void) | undefined;
     const syncWrikeBounds = () => {
       if (!isDesktopRuntime()) {
         return;
@@ -196,9 +198,19 @@ export function App() {
       window.clearTimeout(resizeTimer);
       resizeTimer = window.setTimeout(() => void resizeWrikeTabs().catch(() => undefined), 80);
     };
+    if (isDesktopRuntime()) {
+      const appWindow = getCurrentWindow();
+      void appWindow.isMaximized().then(setIsWindowMaximized).catch(() => undefined);
+      void appWindow.onResized(() => {
+        void appWindow.isMaximized().then(setIsWindowMaximized).catch(() => undefined);
+      }).then((dispose) => {
+        unlistenResize = dispose;
+      });
+    }
     window.addEventListener("resize", syncWrikeBounds);
     return () => {
       window.clearTimeout(resizeTimer);
+      unlistenResize?.();
       window.removeEventListener("resize", syncWrikeBounds);
     };
   }, []);
@@ -369,6 +381,7 @@ export function App() {
       await appWindow.minimize();
     } else if (action === "toggleMaximize") {
       await appWindow.toggleMaximize();
+      setIsWindowMaximized(await appWindow.isMaximized());
     } else {
       await appWindow.close();
     }
@@ -610,7 +623,10 @@ export function App() {
             </div>
           ) : null}
         </div>
-        <WindowControls onAction={(action) => void runWindowAction(action)} />
+        <WindowControls
+          isMaximized={isWindowMaximized}
+          onAction={(action) => void runWindowAction(action)}
+        />
       </header>
       {tabMenu && menuTab ? (
         <div
@@ -724,7 +740,8 @@ function MaterialIcon({
     | "share"
     | "tab"
     | "window_maximize"
-    | "window_minimize";
+    | "window_minimize"
+    | "window_restore";
 }) {
   const paths: Record<typeof kind, ReactElement> = {
     home: <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8Z" />,
@@ -748,8 +765,9 @@ function MaterialIcon({
       <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11A2.99 2.99 0 1 0 15 5c0 .24.04.47.09.7L8.04 9.81A3 3 0 1 0 8.04 14l7.12 4.18c-.05.21-.08.43-.08.65a2.92 2.92 0 1 0 2.92-2.75Z" />
     ),
     tab: <path d="M4 6a2 2 0 0 1 2-2h5.8a2 2 0 0 1 1.42.59L16.63 8H20v10a2 2 0 0 1-2 2H4Z" />,
-    window_maximize: <path d="M5 5h14v14H5Zm2 2v10h10V7Z" />,
-    window_minimize: <path d="M5 18h14v-2H5Z" />,
+    window_maximize: <path d="M6 6h12v12H6Zm2 2v8h8V8Z" />,
+    window_minimize: <path d="M6 12h12v2H6Z" />,
+    window_restore: <path d="M8 4h12v12h-4v4H4V8h4Zm2 4h6v6h2V6h-8Zm4 2H6v8h8Z" />,
   };
   return (
     <svg className="material-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -759,8 +777,10 @@ function MaterialIcon({
 }
 
 function WindowControls({
+  isMaximized,
   onAction,
 }: {
+  isMaximized: boolean;
   onAction: (action: "minimize" | "toggleMaximize" | "close") => void;
 }) {
   return (
@@ -769,11 +789,11 @@ function WindowControls({
         <MaterialIcon kind="window_minimize" />
       </button>
       <button
-        aria-label="Maximize or restore"
+        aria-label={isMaximized ? "Restore" : "Maximize"}
         onClick={() => onAction("toggleMaximize")}
-        title="Maximize/restore"
+        title={isMaximized ? "Restore" : "Maximize"}
       >
-        <MaterialIcon kind="window_maximize" />
+        <MaterialIcon kind={isMaximized ? "window_restore" : "window_maximize"} />
       </button>
       <button
         aria-label="Close"

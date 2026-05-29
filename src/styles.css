@@ -597,16 +597,24 @@ input:focus-visible {
 .window-controls {
   align-self: stretch;
   display: flex;
+  align-items: stretch;
   flex: none;
   margin-left: 2px;
 }
 
 .window-controls button {
   width: 46px;
+  height: 50px;
   display: grid;
   place-items: center;
   color: #c8d3e6;
   transition: background-color 120ms ease, color 120ms ease;
+}
+
+.window-controls button:focus-visible {
+  outline: 0;
+  color: #fff;
+  background: var(--nav-active);
 }
 
 .window-controls button:hover {
@@ -619,15 +627,19 @@ input:focus-visible {
 }
 
 .window-controls .material-icon {
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
 }
 
 .topbar-notice-slot {
+  position: absolute;
+  top: 58px;
+  right: 16px;
+  z-index: 10;
   width: 214px;
-  flex: none;
   display: flex;
   justify-content: flex-end;
+  pointer-events: none;
 }
 
 .topbar-toast {
@@ -646,6 +658,7 @@ input:focus-visible {
   font-weight: 550;
   white-space: nowrap;
   animation: topbar-toast-slide 2800ms cubic-bezier(.18, .88, .24, 1) both;
+  pointer-events: auto;
 }
 
 .topbar-toast button {
