@@ -42,6 +42,8 @@ struct Settings {
     spell_check: bool,
     launch_wrike_on_start: bool,
     download_notifications: bool,
+    #[serde(default = "default_theme")]
+    theme: String,
     custom_dictionary: Vec<String>,
 }
 
@@ -50,6 +52,10 @@ struct Settings {
 struct WorkbookSheet {
     name: String,
     rows: Vec<Vec<String>>,
+}
+
+fn default_theme() -> String {
+    "default".to_owned()
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -64,6 +70,7 @@ impl Default for Settings {
             spell_check: true,
             launch_wrike_on_start: true,
             download_notifications: true,
+            theme: "default".to_owned(),
             custom_dictionary: Vec::new(),
         }
     }
@@ -214,6 +221,9 @@ fn update_settings(
 ) -> Result<Settings, String> {
     let previous = read_settings(&app).unwrap_or_default();
     settings.custom_dictionary = normalize_dictionary(settings.custom_dictionary);
+    if settings.theme.trim().is_empty() {
+        settings.theme = default_theme();
+    }
     write_json(settings_path(&app)?, &settings)?;
     sync_windows_spelling_dictionary(&previous.custom_dictionary, &settings.custom_dictionary);
     let script = apply_spell_check_script(settings.spell_check);

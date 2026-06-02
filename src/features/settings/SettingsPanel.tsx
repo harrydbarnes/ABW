@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Settings } from "../../types";
+import { APP_THEMES, type AppThemeId, type Settings } from "../../types";
 
 interface Props {
   settings: Settings;
@@ -34,6 +34,10 @@ export function SettingsPanel({ settings, onChange, onTestNotification }: Props)
           onChange={(downloadNotifications) => onChange({ ...settings, downloadNotifications })}
         />
       </div>
+      <ThemeSettings
+        selected={settings.theme}
+        onChange={(theme) => onChange({ ...settings, theme })}
+      />
       <div className="notification-note">
         <div>
           <h2>Wrike notifications</h2>
@@ -58,6 +62,42 @@ export function SettingsPanel({ settings, onChange, onTestNotification }: Props)
         </p>
       </div>
     </section>
+  );
+}
+
+function ThemeSettings({
+  selected,
+  onChange,
+}: {
+  selected: AppThemeId;
+  onChange: (theme: AppThemeId) => void;
+}) {
+  return (
+    <div className="theme-panel">
+      <div>
+        <h2>Theme</h2>
+        <p>Match ABW's title bar to a Wrike-inspired workspace colour.</p>
+      </div>
+      <div className="theme-grid" role="radiogroup" aria-label="ABW theme">
+        {APP_THEMES.map((theme) => (
+          <button
+            aria-checked={selected === theme.id}
+            className={`theme-choice ${selected === theme.id ? "selected" : ""}`}
+            data-theme-preview={theme.id}
+            key={theme.id}
+            onClick={() => onChange(theme.id)}
+            role="radio"
+          >
+            <span className="theme-swatch" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+            <span>{theme.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

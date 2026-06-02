@@ -16,6 +16,7 @@ export interface Settings {
   spellCheck: boolean;
   launchWrikeOnStart: boolean;
   downloadNotifications: boolean;
+  theme: AppThemeId;
   customDictionary: string[];
 }
 
@@ -29,3 +30,27 @@ export interface WorkbookPreview {
 }
 
 export type FileFilter = "all" | FileKind;
+
+export const APP_THEMES = [
+  { id: "default", label: "Default" },
+  { id: "midnight", label: "Midnight" },
+  { id: "halloween", label: "Halloween" },
+  { id: "winter-holiday", label: "Winter holiday" },
+  { id: "winter-white", label: "Winter white" },
+  { id: "merlot", label: "Merlot" },
+  { id: "blue-skies", label: "Blue skies" },
+  { id: "blueberry-pie", label: "Blueberry pie" },
+  { id: "imperial-purple", label: "Imperial purple" },
+  { id: "cappuccino", label: "Cappuccino" },
+  { id: "blue-steel", label: "Blue steel" },
+  { id: "aquamarine", label: "Aquamarine" },
+  { id: "legendary-leopard", label: "Legendary leopard" },
+  { id: "velvet-cosmos", label: "Velvet cosmos" },
+  { id: "monochrome", label: "Monochrome" },
+  { id: "pumpkin-spice", label: "Pumpkin spice" },
+  { id: "flamingo", label: "Flamingo" },
+  { id: "cool-confetti", label: "Cool confetti" },
+  { id: "woodland-grass", label: "Woodland grass" },
+] as const;
+
+export type AppThemeId = (typeof APP_THEMES)[number]["id"];

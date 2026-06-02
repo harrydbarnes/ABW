@@ -37,6 +37,7 @@ import {
 import type { DownloadRecord, FileFilter, Settings } from "./types";
 
 const PreviewPanel = lazy(() => import("./features/preview/PreviewPanel"));
+const WRIKE_HOME = "https://www.wrike.com/workspace.htm";
 const READ_ONLY_URL = "https://login.wrike.com/login/?forceLogin=false&read";
 
 type Screen = "wrike" | "files" | "settings";
@@ -98,6 +99,7 @@ export function App() {
     spellCheck: true,
     launchWrikeOnStart: true,
     downloadNotifications: true,
+    theme: "default",
     customDictionary: [],
   });
   const [notice, setNotice] = useState<string | null>(null);
@@ -181,7 +183,7 @@ export function App() {
   useEffect(() => {
     const closeMenu = () => {
       setTabMenu(null);
-      setIsTopbarActionsMenuOpen(false);
+      void closeTopbarActionsMenu();
     };
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -196,7 +198,7 @@ export function App() {
       window.removeEventListener("resize", closeMenu);
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, []);
+  }, [activeWrikeTabId, isTopbarActionsMenuOpen, screen, wrikeTabs]);
 
   useEffect(() => {
     let resizeTimer: number | undefined;
@@ -256,6 +258,25 @@ export function App() {
     setScreen("wrike");
   }
 
+  async function showWrikeHome() {
+    const tabId = activeWrikeTabId;
+    setIsTopbarActionsMenuOpen(false);
+    setActiveWrikeTabId(tabId);
+    setWrikeTabs((current) =>
+      current.map((tab) => (tab.id === tabId ? { ...tab, mode: "standard" } : tab)),
+    );
+    await resizeWrikeTabs().catch(() => undefined);
+    await launchWrike(tabId, WRIKE_HOME);
+    await hideWrike(wrikeTabsRef.current.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
+    const update = await getWrikeTabState(tabId);
+    if (update) {
+      setWrikeTabs((current) =>
+        current.map((tab) => (tab.id === tabId ? applyWrikeTabUpdate(tab, update) : tab)),
+      );
+    }
+    setScreen("wrike");
+  }
+
   async function showLocalScreen(next: Exclude<Screen, "wrike">) {
     setIsTopbarActionsMenuOpen(false);
     await hideWrike(wrikeTabs.map((tab) => tab.id));
@@ -303,7 +324,7 @@ export function App() {
 
   async function runWrikeTabAction(tabId: string, action: WrikeTabAction) {
     setTabMenu(null);
-    setIsTopbarActionsMenuOpen(false);
+    await closeTopbarActionsMenu();
     if (action === "reload") {
       window.clearTimeout(reloadAnimationTimerRef.current);
       setReloadingTabId(tabId);
@@ -501,7 +522,7 @@ export function App() {
   }
 
   async function toggleSpellCheck() {
-    setIsTopbarActionsMenuOpen(false);
+    await closeTopbarActionsMenu();
     const spellCheck = !settings.spellCheck;
     const persisted = await saveSettings({ ...settings, spellCheck });
     setSettings(persisted);
@@ -517,17 +538,47 @@ export function App() {
     }
   }
 
+  async function openTopbarActionsMenu() {
+    setIsTopbarActionsMenuOpen(true);
+    if (screen === "wrike") {
+      await hideWrike(wrikeTabs.map((tab) => tab.id));
+    }
+  }
+
+  async function closeTopbarActionsMenu() {
+    if (!isTopbarActionsMenuOpen) {
+      return;
+    }
+    setIsTopbarActionsMenuOpen(false);
+    if (screen === "wrike") {
+      await showWrike(activeWrikeTabId);
+    }
+  }
+
+  async function toggleTopbarActionsMenu() {
+    if (isTopbarActionsMenuOpen) {
+      await closeTopbarActionsMenu();
+    } else {
+      await openTopbarActionsMenu();
+    }
+  }
+
   return (
     <>
-    <div className="app-shell" spellCheck={settings.spellCheck}>
+    <div className="app-shell" data-theme={settings.theme} spellCheck={settings.spellCheck}>
       <header
         className={`taskbar ${wrikeTabs.length >= 4 ? "is-tab-crowded" : ""}`}
         data-tauri-drag-region
         onDoubleClick={handleTitlebarDoubleClick}
       >
-        <div className="brand" aria-label="ABW" data-tauri-drag-region>
-          <img className="brand-wordmark" src="/abw-wordmark.svg" alt="ABW" data-tauri-drag-region />
-        </div>
+        <button
+          aria-label="Open Wrike home in current tab"
+          className="brand"
+          onClick={() => void showWrikeHome()}
+          title="Open Wrike home"
+        >
+          <img className="brand-wordmark" src="/abw-wordmark.svg" alt="ABW" />
+        </button>
         {activeWrikeTab ? (
           <div className="browser-controls" aria-label={`${activeWrikeTab.title} browser controls`}>
             <button
@@ -585,7 +636,6 @@ export function App() {
                 tabIndex={0}
                 title={tab.title}
               >
-                <MaterialIcon kind={tab.mode === "readOnly" ? "description" : index === 0 ? "home" : "tab"} />
                 <span className={`tab-title ${tab.isTitleLoading ? "loading" : ""}`}>{tab.title}</span>
                 {index === 0 ? <span className="external-dot" /> : null}
                 <span className="tab-actions" aria-label={`${tab.title} controls`}>
@@ -664,7 +714,7 @@ export function App() {
             aria-expanded={isTopbarActionsMenuOpen}
             aria-label="Show ABW actions"
             className={`topbar-actions-toggle ${isTopbarActionsMenuOpen ? "open" : ""}`}
-            onClick={() => setIsTopbarActionsMenuOpen((open) => !open)}
+            onClick={() => void toggleTopbarActionsMenu()}
             title="Show ABW actions"
           >
             <MaterialIcon kind="keyboard_arrow_down" />
