@@ -427,6 +427,15 @@ export function App() {
     }
   }
 
+  function isTitlebarInteractionTarget(target: EventTarget | null) {
+    return (
+      target instanceof HTMLElement &&
+      target.closest(
+        "button, .workspace-tab, .browser-controls, .brand, .topbar-actions, .topbar-actions-overflow, .window-controls, .tab-context-menu",
+      )
+    );
+  }
+
   function handleTabKeyDown(event: KeyboardEvent<HTMLDivElement>, tabId: string) {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
@@ -435,18 +444,20 @@ export function App() {
   }
 
   function handleTitlebarDoubleClick(event: MouseEvent<HTMLElement>) {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) {
-      return;
-    }
-    if (
-      target.closest(
-        "button, .workspace-tab, .browser-controls, .brand, .topbar-actions, .topbar-actions-overflow, .window-controls, .tab-context-menu",
-      )
-    ) {
+    if (isTitlebarInteractionTarget(event.target)) {
       return;
     }
     void runWindowAction("toggleMaximize");
+  }
+
+  function handleTitlebarMouseDown(event: MouseEvent<HTMLElement>) {
+    if (event.button !== 0 || event.detail !== 1 || !isDesktopRuntime()) {
+      return;
+    }
+    if (isTitlebarInteractionTarget(event.target)) {
+      return;
+    }
+    void getCurrentWindow().startDragging();
   }
 
   function handleTabDragStart(event: DragEvent<HTMLDivElement>, tabId: string) {
@@ -570,6 +581,7 @@ export function App() {
         className={`taskbar ${wrikeTabs.length >= 4 ? "is-tab-crowded" : ""}`}
         data-tauri-drag-region
         onDoubleClick={handleTitlebarDoubleClick}
+        onMouseDown={handleTitlebarMouseDown}
       >
         <button
           aria-label="Open Wrike home in current tab"

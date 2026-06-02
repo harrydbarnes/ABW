@@ -20,7 +20,7 @@
 }
 
 .app-shell[data-theme="midnight"] {
-  --nav: #17233b;
+  --nav: #162136;
   --nav-soft: #9fb0cc;
   --nav-active: #2d3f64;
   --accent: #355bdc;
@@ -28,16 +28,24 @@
 }
 
 .app-shell[data-theme="halloween"] {
-  --nav: #65002b;
+  --nav: #440224;
   --nav-soft: #f3a1c3;
   --nav-active: #9a0b4d;
   --accent: #ff9e2e;
   --nav-border: #8a1649;
 }
 
-.app-shell[data-theme="winter-holiday"],
+.app-shell[data-theme="winter-holiday"] {
+  --nav: #fffeff;
+  --nav-soft: #31547a;
+  --nav-active: #edf6ff;
+  --nav-selected-text: #183351;
+  --accent: #279be8;
+  --nav-border: #8bbdf2;
+}
+
 .app-shell[data-theme="blue-skies"] {
-  --nav: #cfe4fb;
+  --nav: #d7eaff;
   --nav-soft: #31547a;
   --nav-active: #f7fbff;
   --nav-selected-text: #183351;
@@ -47,7 +55,7 @@
 
 .app-shell[data-theme="winter-white"],
 .app-shell[data-theme="monochrome"] {
-  --nav: #e3e3e3;
+  --nav: #e8e8e8;
   --nav-soft: #4e5763;
   --nav-active: #ffffff;
   --nav-selected-text: #202733;
@@ -56,7 +64,7 @@
 }
 
 .app-shell[data-theme="merlot"] {
-  --nav: #69002f;
+  --nav: #440224;
   --nav-soft: #efa6c6;
   --nav-active: #a30a52;
   --accent: #e81b38;
@@ -64,7 +72,7 @@
 }
 
 .app-shell[data-theme="blueberry-pie"] {
-  --nav: #203d78;
+  --nav: #193064;
   --nav-soft: #9fb9f5;
   --nav-active: #2f62e9;
   --accent: #2fd0c3;
@@ -72,7 +80,7 @@
 }
 
 .app-shell[data-theme="imperial-purple"] {
-  --nav: #3c2b78;
+  --nav: #342571;
   --nav-soft: #b3a4ff;
   --nav-active: #684de8;
   --accent: #ef7c18;
@@ -80,7 +88,7 @@
 }
 
 .app-shell[data-theme="cappuccino"] {
-  --nav: #e7ded9;
+  --nav: #ede7e5;
   --nav-soft: #6a5d58;
   --nav-active: #ffffff;
   --nav-selected-text: #312b28;
@@ -90,7 +98,7 @@
 
 .app-shell[data-theme="blue-steel"],
 .app-shell[data-theme="legendary-leopard"] {
-  --nav: #2f405d;
+  --nav: #283652;
   --nav-soft: #9eafcb;
   --nav-active: #485d82;
   --accent: #ffa43b;
@@ -98,16 +106,16 @@
 }
 
 .app-shell[data-theme="aquamarine"] {
-  --nav: #004f56;
-  --nav-soft: #7fd3dc;
-  --nav-active: #007d89;
-  --accent: #ff9f38;
-  --nav-border: #006d76;
+  --nav: #003940;
+  --nav-soft: #a6e7e8;
+  --nav-active: #00828a;
+  --accent: #7f82ff;
+  --nav-border: #007176;
 }
 
 .app-shell[data-theme="velvet-cosmos"],
 .app-shell[data-theme="cool-confetti"] {
-  --nav: #4d0b63;
+  --nav: #3f0d4f;
   --nav-soft: #c783e5;
   --nav-active: #8f22c9;
   --accent: #e957a4;
@@ -115,7 +123,7 @@
 }
 
 .app-shell[data-theme="pumpkin-spice"] {
-  --nav: #990000;
+  --nav: #790000;
   --nav-soft: #ffafa2;
   --nav-active: #ed1d00;
   --accent: #ff5a1f;
@@ -123,7 +131,7 @@
 }
 
 .app-shell[data-theme="flamingo"] {
-  --nav: #ffd6ee;
+  --nav: #ffdff7;
   --nav-soft: #8c3e70;
   --nav-active: #fff7fc;
   --nav-selected-text: #4c1739;
@@ -132,7 +140,7 @@
 }
 
 .app-shell[data-theme="woodland-grass"] {
-  --nav: #003e09;
+  --nav: #032600;
   --nav-soft: #75c76e;
   --nav-active: #0b6c18;
   --accent: #ff9f38;
@@ -1676,24 +1684,24 @@ input:focus-visible {
 }
 
 .theme-choice[data-theme-preview="default"] .theme-swatch span:first-child { background: #101d3e; }
-.theme-choice[data-theme-preview="midnight"] .theme-swatch span:first-child { background: #17233b; }
-.theme-choice[data-theme-preview="halloween"] .theme-swatch span:first-child { background: #65002b; }
-.theme-choice[data-theme-preview="winter-holiday"] .theme-swatch span:first-child { background: #cfe4fb; }
-.theme-choice[data-theme-preview="winter-white"] .theme-swatch span:first-child { background: #e3e3e3; }
-.theme-choice[data-theme-preview="merlot"] .theme-swatch span:first-child { background: #69002f; }
-.theme-choice[data-theme-preview="blue-skies"] .theme-swatch span:first-child { background: #cfe4fb; }
-.theme-choice[data-theme-preview="blueberry-pie"] .theme-swatch span:first-child { background: #203d78; }
-.theme-choice[data-theme-preview="imperial-purple"] .theme-swatch span:first-child { background: #3c2b78; }
-.theme-choice[data-theme-preview="cappuccino"] .theme-swatch span:first-child { background: #e7ded9; }
-.theme-choice[data-theme-preview="blue-steel"] .theme-swatch span:first-child { background: #2f405d; }
-.theme-choice[data-theme-preview="aquamarine"] .theme-swatch span:first-child { background: #004f56; }
-.theme-choice[data-theme-preview="legendary-leopard"] .theme-swatch span:first-child { background: #2f405d; }
-.theme-choice[data-theme-preview="velvet-cosmos"] .theme-swatch span:first-child { background: #4d0b63; }
-.theme-choice[data-theme-preview="monochrome"] .theme-swatch span:first-child { background: #e3e3e3; }
-.theme-choice[data-theme-preview="pumpkin-spice"] .theme-swatch span:first-child { background: #990000; }
-.theme-choice[data-theme-preview="flamingo"] .theme-swatch span:first-child { background: #ffd6ee; }
-.theme-choice[data-theme-preview="cool-confetti"] .theme-swatch span:first-child { background: #4d0b63; }
-.theme-choice[data-theme-preview="woodland-grass"] .theme-swatch span:first-child { background: #003e09; }
+.theme-choice[data-theme-preview="midnight"] .theme-swatch span:first-child { background: #162136; }
+.theme-choice[data-theme-preview="halloween"] .theme-swatch span:first-child { background: #440224; }
+.theme-choice[data-theme-preview="winter-holiday"] .theme-swatch span:first-child { background: #fffeff; }
+.theme-choice[data-theme-preview="winter-white"] .theme-swatch span:first-child { background: #e8e8e8; }
+.theme-choice[data-theme-preview="merlot"] .theme-swatch span:first-child { background: #440224; }
+.theme-choice[data-theme-preview="blue-skies"] .theme-swatch span:first-child { background: #d7eaff; }
+.theme-choice[data-theme-preview="blueberry-pie"] .theme-swatch span:first-child { background: #193064; }
+.theme-choice[data-theme-preview="imperial-purple"] .theme-swatch span:first-child { background: #342571; }
+.theme-choice[data-theme-preview="cappuccino"] .theme-swatch span:first-child { background: #ede7e5; }
+.theme-choice[data-theme-preview="blue-steel"] .theme-swatch span:first-child { background: #283652; }
+.theme-choice[data-theme-preview="aquamarine"] .theme-swatch span:first-child { background: #003940; }
+.theme-choice[data-theme-preview="legendary-leopard"] .theme-swatch span:first-child { background: #283652; }
+.theme-choice[data-theme-preview="velvet-cosmos"] .theme-swatch span:first-child { background: #3f0d4f; }
+.theme-choice[data-theme-preview="monochrome"] .theme-swatch span:first-child { background: #e8e8e8; }
+.theme-choice[data-theme-preview="pumpkin-spice"] .theme-swatch span:first-child { background: #790000; }
+.theme-choice[data-theme-preview="flamingo"] .theme-swatch span:first-child { background: #ffdff7; }
+.theme-choice[data-theme-preview="cool-confetti"] .theme-swatch span:first-child { background: #3f0d4f; }
+.theme-choice[data-theme-preview="woodland-grass"] .theme-swatch span:first-child { background: #032600; }
 
 .notification-note {
   display: flex;
