@@ -93,6 +93,21 @@ struct WrikeTabUpdate {
     is_title_loading: bool,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WrikeTabLayout {
+    tab_id: String,
+    pane: WrikePane,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum WrikePane {
+    Full,
+    Left,
+    Right,
+}
+
 #[derive(Default)]
 struct AppState {
     wrike_tabs: Mutex<HashMap<String, Arc<CaptureContext>>>,
@@ -271,7 +286,20 @@ async fn launch_wrike(
 }
 
 #[tauri::command]
-fn resize_wrike_tabs(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+fn resize_wrike_tabs(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    layouts: Option<Vec<WrikeTabLayout>>,
+) -> Result<(), String> {
+    if let Some(layouts) = layouts.filter(|layouts| !layouts.is_empty()) {
+        for layout in layouts {
+            if let Some(webview) = app.get_webview(&wrike_tab_label(&layout.tab_id)?) {
+                sync_wrike_bounds(&app, &webview, layout.pane)?;
+            }
+        }
+        return Ok(());
+    }
+
     let tab_ids = state
         .wrike_tabs
         .lock()
@@ -279,7 +307,7 @@ fn resize_wrike_tabs(app: AppHandle, state: State<'_, AppState>) -> Result<(), S
         .unwrap_or_default();
     for tab_id in tab_ids {
         if let Some(webview) = app.get_webview(&wrike_tab_label(&tab_id)?) {
-            sync_wrike_bounds(&app, &webview)?;
+            sync_wrike_bounds(&app, &webview, WrikePane::Full)?;
         }
     }
     Ok(())
@@ -294,6 +322,26 @@ fn hide_wrike_tabs(app: AppHandle, tab_ids: Vec<String>) -> Result<(), String> {
                 .hide()
                 .map_err(|error| format!("Unable to hide the Wrike workspace: {error}"))?;
         }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn focus_wrike_tab(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    tab_id: String,
+) -> Result<(), String> {
+    let label = wrike_tab_label(&tab_id)?;
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| "This Wrike tab is not open yet.".to_owned())?;
+    webview
+        .show()
+        .map_err(|error| format!("Unable to display the Wrike workspace: {error}"))?;
+    webview.set_focus().map_err(|error| error.to_string())?;
+    if let Some(context) = find_wrike_context(state.inner(), &tab_id) {
+        emit_wrike_tab_update(&app, &context);
     }
     Ok(())
 }
@@ -390,7 +438,7 @@ fn open_wrike_at(
     let label = wrike_tab_label(tab_id)?;
     let parsed = Url::parse(destination).map_err(|error| format!("Invalid Wrike URL: {error}"))?;
     if let Some(webview) = app.get_webview(&label) {
-        sync_wrike_bounds(app, &webview)?;
+        sync_wrike_bounds(app, &webview, WrikePane::Full)?;
         if navigate_existing {
             webview
                 .navigate(parsed)
@@ -413,7 +461,7 @@ fn open_wrike_at(
     let host = app
         .get_window("main")
         .ok_or_else(|| "Unable to locate the ABW application window.".to_owned())?;
-    let (content_position, content_size) = wrike_content_geometry(app)?;
+    let (content_position, content_size) = wrike_content_geometry(app, WrikePane::Full)?;
     let spell_check = read_settings(app)?.spell_check;
     let context = Arc::new(CaptureContext::new(tab_id, destination));
     let title_context = Arc::clone(&context);
@@ -551,6 +599,7 @@ fn open_wrike_at(
 
 fn wrike_content_geometry(
     app: &AppHandle,
+    pane: WrikePane,
 ) -> Result<(LogicalPosition<f64>, LogicalSize<f64>), String> {
     let host = app
         .get_window("main")
@@ -560,14 +609,21 @@ fn wrike_content_geometry(
         .inner_size()
         .map_err(|error| error.to_string())?
         .to_logical::<f64>(scale);
+    let content_height = (host_size.height - TASKBAR_HEIGHT).max(1.0);
+    let half_width = (host_size.width / 2.0).max(1.0);
+    let (x, width) = match pane {
+        WrikePane::Full => (0.0, host_size.width),
+        WrikePane::Left => (0.0, half_width),
+        WrikePane::Right => (half_width, (host_size.width - half_width).max(1.0)),
+    };
     Ok((
-        LogicalPosition::new(0.0, TASKBAR_HEIGHT),
-        LogicalSize::new(host_size.width, (host_size.height - TASKBAR_HEIGHT).max(1.0)),
+        LogicalPosition::new(x, TASKBAR_HEIGHT),
+        LogicalSize::new(width, content_height),
     ))
 }
 
-fn sync_wrike_bounds(app: &AppHandle, webview: &Webview) -> Result<(), String> {
-    let (position, size) = wrike_content_geometry(app)?;
+fn sync_wrike_bounds(app: &AppHandle, webview: &Webview, pane: WrikePane) -> Result<(), String> {
+    let (position, size) = wrike_content_geometry(app, pane)?;
     webview
         .set_position(position)
         .map_err(|error| format!("Unable to move the Wrike workspace: {error}"))?;
@@ -1150,6 +1206,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             close_wrike_tab,
+            focus_wrike_tab,
             get_wrike_tab_state,
             get_settings,
             hide_wrike_tabs,

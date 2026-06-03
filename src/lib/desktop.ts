@@ -4,6 +4,11 @@ import { DEFAULT_SETTINGS, DEMO_DOWNLOADS } from "../data/demo";
 const desktopRuntime = "__TAURI_INTERNALS__" in window;
 
 export type WrikeTabAction = "back" | "forward" | "reload";
+export type WrikePane = "full" | "left" | "right";
+export type WrikeTabLayout = {
+  tabId: string;
+  pane: WrikePane;
+};
 
 export type WrikeTabUpdate = {
   tabId: string;
@@ -89,9 +94,9 @@ export async function launchWrike(tabId: string, url?: string): Promise<void> {
   }
 }
 
-export async function resizeWrikeTabs(): Promise<void> {
+export async function resizeWrikeTabs(layouts?: WrikeTabLayout[]): Promise<void> {
   if (desktopRuntime) {
-    await invokeDesktop("resize_wrike_tabs");
+    await invokeDesktop("resize_wrike_tabs", { layouts: layouts ?? null });
   }
 }
 
@@ -104,6 +109,12 @@ export async function hideWrike(tabIds: string[]): Promise<void> {
 export async function closeWrikeTab(tabId: string): Promise<void> {
   if (desktopRuntime) {
     await invokeDesktop("close_wrike_tab", { tabId });
+  }
+}
+
+export async function focusWrikeTab(tabId: string): Promise<void> {
+  if (desktopRuntime) {
+    await invokeDesktop("focus_wrike_tab", { tabId });
   }
 }
 

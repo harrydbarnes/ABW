@@ -17,6 +17,7 @@ import { FilesLibrary } from "./features/files/FilesLibrary";
 import { SettingsPanel } from "./features/settings/SettingsPanel";
 import {
   closeWrikeTab,
+  focusWrikeTab,
   getWrikeTabState,
   launchWrike,
   hideWrike,
@@ -32,6 +33,7 @@ import {
   subscribeToWrikeTabUpdates,
   wrikeTabAction,
   type WrikeTabAction,
+  type WrikeTabLayout,
   type WrikeTabUpdate,
 } from "./lib/desktop";
 import type { DownloadRecord, FileFilter, Settings } from "./types";
@@ -42,6 +44,11 @@ const READ_ONLY_URL = "https://login.wrike.com/login/?forceLogin=false&read";
 
 type Screen = "wrike" | "files" | "settings";
 type WrikeTabMode = "standard" | "readOnly";
+type WrikePaneSide = "left" | "right";
+type WrikeSplit = {
+  leftTabId: string;
+  rightTabId: string;
+};
 type WrikeTab = {
   id: string;
   title: string;
@@ -86,9 +93,11 @@ export function App() {
   const [screen, setScreen] = useState<Screen>("wrike");
   const [wrikeTabs, setWrikeTabs] = useState<WrikeTab[]>([INITIAL_WRIKE_TAB]);
   const [activeWrikeTabId, setActiveWrikeTabId] = useState(INITIAL_WRIKE_TAB.id);
+  const [wrikeSplit, setWrikeSplit] = useState<WrikeSplit | null>(null);
   const [newWrikeTabId, setNewWrikeTabId] = useState<string | null>(null);
   const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
+  const [splitDropSide, setSplitDropSide] = useState<WrikePaneSide | null>(null);
   const [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
   const [isTopbarActionsMenuOpen, setIsTopbarActionsMenuOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -106,6 +115,8 @@ export function App() {
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [reloadingTabId, setReloadingTabId] = useState<string | null>(null);
   const wrikeTabsRef = useRef(wrikeTabs);
+  const activeWrikeTabIdRef = useRef(activeWrikeTabId);
+  const wrikeSplitRef = useRef(wrikeSplit);
   const reloadAnimationTimerRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
@@ -120,6 +131,14 @@ export function App() {
   useEffect(() => {
     wrikeTabsRef.current = wrikeTabs;
   }, [wrikeTabs]);
+
+  useEffect(() => {
+    activeWrikeTabIdRef.current = activeWrikeTabId;
+  }, [activeWrikeTabId]);
+
+  useEffect(() => {
+    wrikeSplitRef.current = wrikeSplit;
+  }, [wrikeSplit]);
 
   useEffect(() => {
     if (!notice) {
@@ -208,7 +227,7 @@ export function App() {
         return;
       }
       window.clearTimeout(resizeTimer);
-      resizeTimer = window.setTimeout(() => void resizeWrikeTabs().catch(() => undefined), 80);
+      resizeTimer = window.setTimeout(() => void resizeCurrentWrikeTabs().catch(() => undefined), 80);
     };
     if (isDesktopRuntime()) {
       const appWindow = getCurrentWindow();
@@ -242,11 +261,122 @@ export function App() {
   const selectedRecord =
     visibleDownloads.find((record) => record.id === selectedId) ?? visibleDownloads[0] ?? null;
 
+  function syncWrikeSplitRef(next: WrikeSplit | null) {
+    wrikeSplitRef.current = next;
+    setWrikeSplit(next);
+  }
+
+  function syncActiveWrikeTabId(next: string) {
+    activeWrikeTabIdRef.current = next;
+    setActiveWrikeTabId(next);
+  }
+
+  function wrikeTabExists(tabId: string) {
+    return wrikeTabsRef.current.some((tab) => tab.id === tabId);
+  }
+
+  function visibleWrikeTabIds(split = wrikeSplitRef.current, activeTabId = activeWrikeTabIdRef.current) {
+    if (split && wrikeTabExists(split.leftTabId) && wrikeTabExists(split.rightTabId)) {
+      return [split.leftTabId, split.rightTabId];
+    }
+    return wrikeTabExists(activeTabId) ? [activeTabId] : [wrikeTabsRef.current[0]?.id].filter(Boolean);
+  }
+
+  function currentWrikeLayouts(
+    split = wrikeSplitRef.current,
+    activeTabId = activeWrikeTabIdRef.current,
+  ): WrikeTabLayout[] {
+    if (split && wrikeTabExists(split.leftTabId) && wrikeTabExists(split.rightTabId)) {
+      return [
+        { tabId: split.leftTabId, pane: "left" },
+        { tabId: split.rightTabId, pane: "right" },
+      ];
+    }
+    return visibleWrikeTabIds(null, activeTabId).map((tabId) => ({ tabId, pane: "full" }));
+  }
+
+  async function resizeCurrentWrikeTabs() {
+    await resizeWrikeTabs(currentWrikeLayouts());
+  }
+
+  function companionTabId(tabId: string, preferred?: string | null) {
+    if (preferred && preferred !== tabId && wrikeTabExists(preferred)) {
+      return preferred;
+    }
+    const split = wrikeSplitRef.current;
+    const splitCompanion =
+      split?.leftTabId === tabId
+        ? split.rightTabId
+        : split?.rightTabId === tabId
+          ? split.leftTabId
+          : null;
+    if (splitCompanion && wrikeTabExists(splitCompanion)) {
+      return splitCompanion;
+    }
+    return wrikeTabsRef.current.find((tab) => tab.id !== tabId)?.id ?? null;
+  }
+
+  async function showWrikeSplit(nextSplit: WrikeSplit, focusTabId: string) {
+    syncWrikeSplitRef(nextSplit);
+    syncActiveWrikeTabId(focusTabId);
+    setScreen("wrike");
+    const visibleIds = [nextSplit.leftTabId, nextSplit.rightTabId];
+    const launchOrder =
+      focusTabId === nextSplit.leftTabId
+        ? [nextSplit.rightTabId, nextSplit.leftTabId]
+        : [nextSplit.leftTabId, nextSplit.rightTabId];
+    for (const tabId of launchOrder) {
+      const tab = wrikeTabsRef.current.find((candidate) => candidate.id === tabId);
+      await launchWrike(tabId, tab?.mode === "readOnly" ? READ_ONLY_URL : undefined);
+    }
+    await resizeWrikeTabs(currentWrikeLayouts(nextSplit, focusTabId)).catch(() => undefined);
+    await hideWrike(wrikeTabsRef.current.filter((tab) => !visibleIds.includes(tab.id)).map((tab) => tab.id));
+  }
+
+  async function restoreWrikeView() {
+    const split = wrikeSplitRef.current;
+    if (split && wrikeTabExists(split.leftTabId) && wrikeTabExists(split.rightTabId)) {
+      await showWrikeSplit(split, activeWrikeTabIdRef.current);
+      return;
+    }
+    await showWrike(activeWrikeTabIdRef.current);
+  }
+
+  async function splitWrikeTab(tabId: string, side: WrikePaneSide) {
+    const otherTabId = companionTabId(tabId, activeWrikeTabIdRef.current);
+    if (!otherTabId) {
+      setNotice("Open another tab to use split view.");
+      return;
+    }
+    const nextSplit =
+      side === "left"
+        ? { leftTabId: tabId, rightTabId: otherTabId }
+        : { leftTabId: otherTabId, rightTabId: tabId };
+    setTabMenu(null);
+    await closeTopbarActionsMenu();
+    await showWrikeSplit(nextSplit, tabId);
+  }
+
+  async function exitSplitView(focusTabId = activeWrikeTabIdRef.current) {
+    syncWrikeSplitRef(null);
+    await showWrike(focusTabId);
+  }
+
   async function showWrike(tabId = activeWrikeTabId) {
     const tabs = wrikeTabsRef.current;
     const tab = tabs.find((candidate) => candidate.id === tabId);
-    setActiveWrikeTabId(tabId);
-    await resizeWrikeTabs().catch(() => undefined);
+    const split = wrikeSplitRef.current;
+    if (split && (split.leftTabId === tabId || split.rightTabId === tabId)) {
+      syncActiveWrikeTabId(tabId);
+      await resizeWrikeTabs(currentWrikeLayouts(split, tabId)).catch(() => undefined);
+      await focusWrikeTab(tabId);
+      await hideWrike(tabs.filter((tab) => tab.id !== split.leftTabId && tab.id !== split.rightTabId).map((tab) => tab.id));
+      setScreen("wrike");
+      return;
+    }
+    syncWrikeSplitRef(null);
+    syncActiveWrikeTabId(tabId);
+    await resizeWrikeTabs(currentWrikeLayouts(null, tabId)).catch(() => undefined);
     await launchWrike(tabId, tab?.mode === "readOnly" ? READ_ONLY_URL : undefined);
     await hideWrike(tabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
     const update = await getWrikeTabState(tabId);
@@ -261,11 +391,12 @@ export function App() {
   async function showWrikeHome() {
     const tabId = activeWrikeTabId;
     setIsTopbarActionsMenuOpen(false);
-    setActiveWrikeTabId(tabId);
+    syncWrikeSplitRef(null);
+    syncActiveWrikeTabId(tabId);
     setWrikeTabs((current) =>
       current.map((tab) => (tab.id === tabId ? { ...tab, mode: "standard" } : tab)),
     );
-    await resizeWrikeTabs().catch(() => undefined);
+    await resizeWrikeTabs(currentWrikeLayouts(null, tabId)).catch(() => undefined);
     await launchWrike(tabId, WRIKE_HOME);
     await hideWrike(wrikeTabsRef.current.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
     const update = await getWrikeTabState(tabId);
@@ -294,12 +425,13 @@ export function App() {
       isTitleLoading: true,
       mode: "standard",
     };
+    syncWrikeSplitRef(null);
     setWrikeTabs((current) => [...current, next]);
     setNewWrikeTabId(next.id);
     window.setTimeout(() => setNewWrikeTabId(null), 520);
     await launchWrike(next.id);
     await hideWrike(wrikeTabs.map((tab) => tab.id));
-    setActiveWrikeTabId(next.id);
+    syncActiveWrikeTabId(next.id);
     setScreen("wrike");
   }
 
@@ -313,12 +445,13 @@ export function App() {
       isTitleLoading: false,
       mode: "readOnly",
     };
+    syncWrikeSplitRef(null);
     setWrikeTabs((current) => [...current, next]);
     setNewWrikeTabId(next.id);
     window.setTimeout(() => setNewWrikeTabId(null), 520);
     await launchWrike(next.id, READ_ONLY_URL);
     await hideWrike(wrikeTabs.map((tab) => tab.id));
-    setActiveWrikeTabId(next.id);
+    syncActiveWrikeTabId(next.id);
     setScreen("wrike");
   }
 
@@ -343,9 +476,22 @@ export function App() {
     const closingIndex = tabs.findIndex((tab) => tab.id === tabId);
     const remaining = tabs.filter((tab) => tab.id !== tabId);
     const fallbackTab = remaining[Math.min(Math.max(closingIndex, 0), remaining.length - 1)];
+    const split = wrikeSplitRef.current;
+    const survivingSplitTabId =
+      split?.leftTabId === tabId
+        ? split.rightTabId
+        : split?.rightTabId === tabId
+          ? split.leftTabId
+          : null;
     setTabMenu(null);
+    wrikeTabsRef.current = remaining;
     setWrikeTabs(remaining);
     await closeWrikeTab(tabId);
+    if (survivingSplitTabId) {
+      syncWrikeSplitRef(null);
+      await showWrike(survivingSplitTabId);
+      return;
+    }
     if (activeWrikeTabId === tabId && fallbackTab) {
       await showWrike(fallbackTab.id);
     }
@@ -462,8 +608,12 @@ export function App() {
 
   function handleTabDragStart(event: DragEvent<HTMLDivElement>, tabId: string) {
     setDraggedTabId(tabId);
+    setSplitDropSide(null);
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", tabId);
+    if (screen === "wrike") {
+      void hideWrike(visibleWrikeTabIds());
+    }
   }
 
   function handleTabDrop(event: DragEvent<HTMLDivElement>, targetId: string) {
@@ -473,6 +623,47 @@ export function App() {
       reorderTabs(sourceId, targetId);
     }
     setDraggedTabId(null);
+    setSplitDropSide(null);
+  }
+
+  function handleTabDragEnd() {
+    setDraggedTabId(null);
+    setSplitDropSide(null);
+    if (screen === "wrike") {
+      void restoreWrikeView();
+    }
+  }
+
+  function sideFromPointer(clientX: number): WrikePaneSide {
+    return clientX < window.innerWidth / 2 ? "left" : "right";
+  }
+
+  function handleSplitDragOver(event: DragEvent<HTMLElement>) {
+    if (!draggedTabId || wrikeTabsRef.current.length <= 1) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setSplitDropSide(sideFromPointer(event.clientX));
+  }
+
+  function handleSplitDragLeave(event: DragEvent<HTMLElement>) {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      return;
+    }
+    setSplitDropSide(null);
+  }
+
+  function handleSplitDrop(event: DragEvent<HTMLElement>) {
+    if (!draggedTabId) {
+      return;
+    }
+    event.preventDefault();
+    const tabId = draggedTabId;
+    const side = sideFromPointer(event.clientX);
+    setDraggedTabId(null);
+    setSplitDropSide(null);
+    void splitWrikeTab(tabId, side);
   }
 
   async function showTabContextMenu(event: MouseEvent<HTMLDivElement>, tab: WrikeTab) {
@@ -498,6 +689,22 @@ export function App() {
           {
             text: "Refresh",
             action: () => void runWrikeTabAction(tab.id, "reload"),
+          },
+          { item: "Separator" },
+          {
+            text: "Show tab on left",
+            enabled: wrikeTabsRef.current.length > 1,
+            action: () => void splitWrikeTab(tab.id, "left"),
+          },
+          {
+            text: "Show tab on right",
+            enabled: wrikeTabsRef.current.length > 1,
+            action: () => void splitWrikeTab(tab.id, "right"),
+          },
+          {
+            text: "Exit split view",
+            enabled: Boolean(wrikeSplitRef.current),
+            action: () => void exitSplitView(tab.id),
           },
           { item: "Separator" },
           {
@@ -562,7 +769,7 @@ export function App() {
     }
     setIsTopbarActionsMenuOpen(false);
     if (screen === "wrike") {
-      await showWrike(activeWrikeTabId);
+      await restoreWrikeView();
     }
   }
 
@@ -629,6 +836,8 @@ export function App() {
                   "workspace-tab",
                   selected ? "selected" : "",
                   tab.mode === "readOnly" ? "read-only" : "",
+                  wrikeSplit?.leftTabId === tab.id ? "split-left" : "",
+                  wrikeSplit?.rightTabId === tab.id ? "split-right" : "",
                   newWrikeTabId === tab.id ? "entering" : "",
                   draggedTabId === tab.id ? "dragging" : "",
                 ].join(" ")}
@@ -636,7 +845,7 @@ export function App() {
                 key={tab.id}
                 onClick={() => void showWrike(tab.id)}
                 onContextMenu={(event) => void showTabContextMenu(event, tab)}
-                onDragEnd={() => setDraggedTabId(null)}
+                onDragEnd={handleTabDragEnd}
                 onDragOver={(event) => {
                   event.preventDefault();
                   event.dataTransfer.dropEffect = "move";
@@ -802,6 +1011,31 @@ export function App() {
             Refresh
           </button>
           <span className="menu-separator" />
+          <button
+            disabled={wrikeTabs.length <= 1}
+            onClick={() => void splitWrikeTab(menuTab.id, "left")}
+            role="menuitem"
+          >
+            <MaterialIcon kind="view_column" />
+            Show tab on left
+          </button>
+          <button
+            disabled={wrikeTabs.length <= 1}
+            onClick={() => void splitWrikeTab(menuTab.id, "right")}
+            role="menuitem"
+          >
+            <MaterialIcon kind="view_column" />
+            Show tab on right
+          </button>
+          <button
+            disabled={!wrikeSplit}
+            onClick={() => void exitSplitView(menuTab.id)}
+            role="menuitem"
+          >
+            <MaterialIcon kind="tab" />
+            Exit split view
+          </button>
+          <span className="menu-separator" />
           <button onClick={() => void copyTabLink(menuTab)} role="menuitem">
             <MaterialIcon kind="link" />
             Copy link
@@ -821,9 +1055,27 @@ export function App() {
           </button>
         </div>
       ) : null}
-      <main className="content">
+      <main
+        className={`content ${draggedTabId ? "tab-side-dragging" : ""}`}
+        onDragLeave={handleSplitDragLeave}
+        onDragOver={handleSplitDragOver}
+        onDrop={handleSplitDrop}
+      >
         {screen === "wrike" ? (
-          <section className="wrike-surface" aria-label="Wrike workspace">
+          <section
+            className={`wrike-surface ${draggedTabId ? "split-drop-active" : ""}`}
+            aria-label="Wrike workspace"
+          >
+            {draggedTabId && wrikeTabs.length > 1 ? (
+              <div className="split-drop-zones" aria-hidden="true">
+                <span className={`split-drop-zone left ${splitDropSide === "left" ? "active" : ""}`}>
+                  <MaterialIcon kind="view_column" />
+                </span>
+                <span className={`split-drop-zone right ${splitDropSide === "right" ? "active" : ""}`}>
+                  <MaterialIcon kind="view_column" />
+                </span>
+              </div>
+            ) : null}
             <NavIcon kind="home" />
             <h1>Wrike</h1>
             <p>
@@ -886,6 +1138,7 @@ function MaterialIcon({
     | "settings"
     | "share"
     | "tab"
+    | "view_column"
     | "window_maximize"
     | "window_minimize"
     | "window_restore";
@@ -913,6 +1166,7 @@ function MaterialIcon({
       <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11A2.99 2.99 0 1 0 15 5c0 .24.04.47.09.7L8.04 9.81A3 3 0 1 0 8.04 14l7.12 4.18c-.05.21-.08.43-.08.65a2.92 2.92 0 1 0 2.92-2.75Z" />
     ),
     tab: <path d="M4 6a2 2 0 0 1 2-2h5.8a2 2 0 0 1 1.42.59L16.63 8H20v10a2 2 0 0 1-2 2H4Z" />,
+    view_column: <path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Zm2 0v14h5V5Zm7 0v14h5V5Z" />,
     window_maximize: <path d="M6 6h12v12H6Zm2 2v8h8V8Z" />,
     window_minimize: <path d="M6 12h12v2H6Z" />,
     window_restore: <path d="M8 4h12v12h-4v4H4V8h4Zm2 4h6v6h2V6h-8Zm4 2H6v8h8Z" />,
