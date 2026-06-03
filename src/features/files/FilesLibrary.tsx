@@ -8,6 +8,8 @@ interface Props {
   onOpenSourceTask: () => void;
   onSearchChange: (search: string) => void;
   onSelect: (id: string) => void;
+  onTogglePin: (id: string) => void;
+  pinnedIds: string[];
   search: string;
   selectedId: string | null;
 }
@@ -26,9 +28,12 @@ export function FilesLibrary({
   onOpenSourceTask,
   onSearchChange,
   onSelect,
+  onTogglePin,
+  pinnedIds,
   search,
   selectedId,
 }: Props) {
+  const pinned = new Set(pinnedIds);
   return (
     <section className="files-library" aria-label="Downloaded files">
       <header className="library-header">
@@ -65,6 +70,7 @@ export function FilesLibrary({
         <span>File</span>
         <span>Source task</span>
         <span>Downloaded</span>
+        <span />
       </div>
       <div className="file-list" role="list">
         {downloads.length === 0 ? (
@@ -72,7 +78,11 @@ export function FilesLibrary({
         ) : (
           downloads.map((file) => (
             <div
-              className={`file-row ${selectedId === file.id ? "selected" : ""}`}
+              className={[
+                "file-row",
+                selectedId === file.id ? "selected" : "",
+                pinned.has(file.id) ? "pinned" : "",
+              ].join(" ")}
               key={file.id}
               role="listitem"
             >
@@ -90,11 +100,28 @@ export function FilesLibrary({
                 {file.sourceLabel}
               </button>
               <time>{formatDate(file.downloadedAt)}</time>
+              <button
+                aria-label={`${pinned.has(file.id) ? "Unpin" : "Pin"} ${file.fileName}`}
+                aria-pressed={pinned.has(file.id)}
+                className={`pin-file ${pinned.has(file.id) ? "active" : ""}`}
+                onClick={() => onTogglePin(file.id)}
+                title={pinned.has(file.id) ? "Unpin" : "Pin to top"}
+              >
+                <PinIcon filled={pinned.has(file.id)} />
+              </button>
             </div>
           ))
         )}
       </div>
     </section>
+  );
+}
+
+function PinIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" className="icon" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.7">
+      <path d="m14.5 3.5 6 6-3 1.5-3.1 4.4.1 3.1-1.3 1.3-3.7-3.7-4.2 4.2-1.6-1.6 4.2-4.2-3.7-3.7 1.3-1.3 3.1.1L13 6.5Z" />
+    </svg>
   );
 }
 

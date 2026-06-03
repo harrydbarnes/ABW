@@ -919,7 +919,7 @@ input:focus-visible {
   top: 58px;
   right: 16px;
   z-index: 10;
-  width: 214px;
+  width: 360px;
   display: flex;
   justify-content: flex-end;
   pointer-events: none;
@@ -942,6 +942,41 @@ input:focus-visible {
   white-space: nowrap;
   animation: topbar-toast-slide 2800ms cubic-bezier(.18, .88, .24, 1) both;
   pointer-events: auto;
+}
+
+.session-toast {
+  height: auto;
+  min-height: 44px;
+  max-width: 360px;
+  width: 360px;
+  padding: 9px 9px 9px 14px;
+  white-space: normal;
+  animation: none;
+}
+
+.session-toast > span:first-child {
+  min-width: 0;
+  flex: 1;
+}
+
+.toast-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.toast-actions button {
+  width: auto;
+  height: 27px;
+  padding: 0 9px;
+  background: #29436f;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.toast-actions button:first-child {
+  color: #122143;
+  background: #dce7ff;
 }
 
 .topbar-toast button {
@@ -1145,7 +1180,7 @@ input:focus-visible {
 .list-labels {
   padding: 0 30px 12px;
   display: grid;
-  grid-template-columns: minmax(154px, 1fr) minmax(110px, 148px) auto;
+  grid-template-columns: minmax(154px, 1fr) minmax(110px, 148px) auto 30px;
   gap: 12px;
   color: #8794a9;
   font-size: 11px;
@@ -1163,7 +1198,7 @@ input:focus-visible {
 .file-row {
   display: grid;
   align-items: center;
-  grid-template-columns: minmax(154px, 1fr) minmax(110px, 148px) auto;
+  grid-template-columns: minmax(154px, 1fr) minmax(110px, 148px) auto 30px;
   gap: 12px;
   width: 100%;
   min-height: 72px;
@@ -1177,6 +1212,15 @@ input:focus-visible {
 }
 
 .file-row.selected {
+  background: var(--accent-soft);
+}
+
+.file-row.pinned {
+  background: #fbfcff;
+  box-shadow: inset 3px 0 0 #73d6bb;
+}
+
+.file-row.pinned.selected {
   background: var(--accent-soft);
 }
 
@@ -1248,6 +1292,26 @@ input:focus-visible {
   padding-top: 5px;
   font-size: 12px;
   white-space: nowrap;
+}
+
+.pin-file {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  color: #8a98ad;
+}
+
+.pin-file:hover,
+.pin-file.active {
+  color: #126b58;
+  background: #e6f8f3;
+}
+
+.pin-file .icon {
+  width: 16px;
+  height: 16px;
 }
 
 .empty-list {
@@ -1663,6 +1727,7 @@ input:focus-visible {
 .storage-note,
 .notification-note,
 .theme-panel,
+.startup-tabs-panel,
 .dictionary-panel {
   margin-top: 24px;
   padding: 24px;
@@ -1674,6 +1739,7 @@ input:focus-visible {
 .storage-note h2,
 .notification-note h2,
 .theme-panel h2,
+.startup-tabs-panel h2,
 .dictionary-panel h2 {
   font-size: 16px;
   margin: 0 0 9px;
@@ -1682,11 +1748,82 @@ input:focus-visible {
 .storage-note p,
 .notification-note p,
 .theme-panel p,
+.startup-tabs-panel p,
 .dictionary-panel p {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.55;
   margin: 0;
+}
+
+.startup-url-list {
+  margin-top: 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.startup-url-row {
+  min-height: 48px;
+  padding: 7px 10px;
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.startup-url-row + .startup-url-row {
+  border-top: 1px solid var(--border);
+}
+
+.startup-url-badge {
+  height: 25px;
+  border-radius: 99px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #eef4ff;
+  color: #315078;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.startup-url-row input,
+.startup-url-add input {
+  min-width: 0;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 0 11px;
+  color: #192943;
+}
+
+.startup-url-row button {
+  height: 31px;
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.startup-url-row button:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.startup-url-row button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.startup-url-add {
+  margin-top: 14px;
+  display: flex;
+  gap: 10px;
+}
+
+.startup-url-add input {
+  flex: 1;
 }
 
 .theme-grid {
@@ -1882,6 +2019,14 @@ input:focus-visible {
 .toast .icon {
   width: 17px;
   height: 17px;
+}
+
+.settings-footer {
+  padding: 22px 0 0;
+  color: #8a96a9;
+  font-family: "Segoe Print", "Comic Sans MS", "Segoe UI", system-ui, sans-serif;
+  font-size: 11px;
+  text-align: center;
 }
 
 @media (max-width: 1120px) {

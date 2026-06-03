@@ -53,4 +53,7 @@ export const DEFAULT_SETTINGS: Settings = {
   downloadNotifications: true,
   theme: "default",
   customDictionary: [],
+  startupTabUrls: ["https://www.wrike.com/workspace.htm"],
+  pinnedDownloadIds: [],
+  lastWrikeSession: null,
 };

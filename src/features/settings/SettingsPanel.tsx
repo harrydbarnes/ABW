@@ -2,12 +2,13 @@ import { useState } from "react";
 import { APP_THEMES, type AppThemeId, type Settings } from "../../types";
 
 interface Props {
+  appVersion: string;
   settings: Settings;
   onChange: (next: Settings) => void;
   onTestNotification: () => void;
 }
 
-export function SettingsPanel({ settings, onChange, onTestNotification }: Props) {
+export function SettingsPanel({ appVersion, settings, onChange, onTestNotification }: Props) {
   return (
     <section className="settings-panel">
       <header>
@@ -23,7 +24,7 @@ export function SettingsPanel({ settings, onChange, onTestNotification }: Props)
         />
         <SettingToggle
           checked={settings.launchWrikeOnStart}
-          description="Show the live Wrike sign-in or workspace tab whenever ABW starts."
+          description="Open your startup tabs whenever ABW starts. You can still reopen the previous session from the launch toast."
           label="Show Wrike workspace on launch"
           onChange={(launchWrikeOnStart) => onChange({ ...settings, launchWrikeOnStart })}
         />
@@ -34,6 +35,10 @@ export function SettingsPanel({ settings, onChange, onTestNotification }: Props)
           onChange={(downloadNotifications) => onChange({ ...settings, downloadNotifications })}
         />
       </div>
+      <StartupTabsSettings
+        urls={settings.startupTabUrls}
+        onChange={(startupTabUrls) => onChange({ ...settings, startupTabUrls })}
+      />
       <ThemeSettings
         selected={settings.theme}
         onChange={(theme) => onChange({ ...settings, theme })}
@@ -61,8 +66,114 @@ export function SettingsPanel({ settings, onChange, onTestNotification }: Props)
           always be opened in Windows from the preview pane.
         </p>
       </div>
+      <footer className="settings-footer">
+        ABW v{appVersion} · Questions or support: Harry Barnes
+      </footer>
     </section>
   );
+}
+
+function StartupTabsSettings({
+  urls,
+  onChange,
+}: {
+  urls: string[];
+  onChange: (urls: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const normalizedUrls = normalizeUrls(urls);
+
+  function addUrl() {
+    const next = normalizeUrl(draft);
+    if (!next) {
+      return;
+    }
+    onChange(normalizeUrls([...normalizedUrls, next]));
+    setDraft("");
+  }
+
+  function commitUrl(index: number, value: string) {
+    const next = normalizeUrl(value);
+    if (!next) {
+      onChange(normalizeUrls(normalizedUrls.filter((_, candidateIndex) => candidateIndex !== index)));
+      return;
+    }
+    const updated = [...normalizedUrls];
+    updated[index] = next;
+    onChange(normalizeUrls(updated));
+  }
+
+  return (
+    <div className="startup-tabs-panel">
+      <div>
+        <h2>Startup and new tabs</h2>
+        <p>The first URL is the new tab default. All URLs open together on launch.</p>
+      </div>
+      <div className="startup-url-list">
+        {normalizedUrls.map((url, index) => (
+          <div className="startup-url-row" key={`${url}-${index}`}>
+            <span className="startup-url-badge">{index === 0 ? "New tab" : `Tab ${index + 1}`}</span>
+            <input
+              aria-label={index === 0 ? "New tab default URL" : `Startup tab ${index + 1} URL`}
+              defaultValue={url}
+              onBlur={(event) => commitUrl(index, event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  commitUrl(index, event.currentTarget.value);
+                }
+              }}
+            />
+            <button
+              disabled={normalizedUrls.length <= 1}
+              onClick={() => onChange(normalizeUrls(normalizedUrls.filter((_, candidateIndex) => candidateIndex !== index)))}
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="startup-url-add">
+        <input
+          aria-label="Add startup tab URL"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              addUrl();
+            }
+          }}
+          placeholder="Paste a URL"
+          value={draft}
+        />
+        <button className="secondary-action" onClick={addUrl}>
+          Add tab
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function normalizeUrls(urls: string[]) {
+  const normalized = urls
+    .map(normalizeUrl)
+    .filter((url): url is string => Boolean(url));
+  return normalized.length ? [...new Set(normalized)] : ["https://www.wrike.com/workspace.htm"];
+}
+
+function normalizeUrl(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const candidate =
+    trimmed.includes("://") || trimmed === "about:blank" ? trimmed : `https://${trimmed}`;
+  try {
+    const url = new URL(candidate);
+    return url.protocol === "http:" || url.protocol === "https:" || url.href === "about:blank"
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function ThemeSettings({

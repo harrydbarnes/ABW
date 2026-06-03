@@ -26,6 +26,7 @@ import {
   loadSettings,
   resizeWrikeTabs,
   saveSettings,
+  saveWrikeSession,
   sendTestNotification,
   subscribeToDownloadErrors,
   subscribeToDownloads,
@@ -36,11 +37,12 @@ import {
   type WrikeTabLayout,
   type WrikeTabUpdate,
 } from "./lib/desktop";
-import type { DownloadRecord, FileFilter, Settings } from "./types";
+import type { DownloadRecord, FileFilter, Settings, WrikeSession } from "./types";
 
 const PreviewPanel = lazy(() => import("./features/preview/PreviewPanel"));
 const WRIKE_HOME = "https://www.wrike.com/workspace.htm";
 const READ_ONLY_URL = "https://login.wrike.com/login/?forceLogin=false&read";
+const APP_VERSION = "0.1.1";
 
 type Screen = "wrike" | "files" | "settings";
 type WrikeTabMode = "standard" | "readOnly";
@@ -110,14 +112,20 @@ export function App() {
     downloadNotifications: true,
     theme: "default",
     customDictionary: [],
+    startupTabUrls: [WRIKE_HOME],
+    pinnedDownloadIds: [],
+    lastWrikeSession: null,
   });
   const [notice, setNotice] = useState<string | null>(null);
+  const [sessionPrompt, setSessionPrompt] = useState<WrikeSession | null>(null);
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [reloadingTabId, setReloadingTabId] = useState<string | null>(null);
   const wrikeTabsRef = useRef(wrikeTabs);
   const activeWrikeTabIdRef = useRef(activeWrikeTabId);
   const wrikeSplitRef = useRef(wrikeSplit);
+  const canPersistSessionRef = useRef(false);
   const reloadAnimationTimerRef = useRef<number | undefined>(undefined);
+  const sessionSaveTimerRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     const splashTimer = window.setTimeout(() => setIsLaunchSplashVisible(false), 2800);
@@ -125,7 +133,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    return () => window.clearTimeout(reloadAnimationTimerRef.current);
+    return () => {
+      window.clearTimeout(reloadAnimationTimerRef.current);
+      window.clearTimeout(sessionSaveTimerRef.current);
+    };
   }, []);
 
   useEffect(() => {
@@ -139,6 +150,17 @@ export function App() {
   useEffect(() => {
     wrikeSplitRef.current = wrikeSplit;
   }, [wrikeSplit]);
+
+  useEffect(() => {
+    if (!canPersistSessionRef.current) {
+      return;
+    }
+    window.clearTimeout(sessionSaveTimerRef.current);
+    sessionSaveTimerRef.current = window.setTimeout(() => {
+      void saveWrikeSession(currentWrikeSession()).catch(() => undefined);
+    }, 450);
+    return () => window.clearTimeout(sessionSaveTimerRef.current);
+  }, [activeWrikeTabId, wrikeSplit, wrikeTabs]);
 
   useEffect(() => {
     if (!notice) {
@@ -158,10 +180,20 @@ export function App() {
     refresh();
     void loadSettings().then((next) => {
       setSettings(next);
+      if (hasRestorableSession(next.lastWrikeSession)) {
+        setSessionPrompt(next.lastWrikeSession);
+      }
       if (next.launchWrikeOnStart) {
-        void showWrike(activeWrikeTabId);
+        void openStartupTabs(next.startupTabUrls).then(() => {
+          if (!hasRestorableSession(next.lastWrikeSession)) {
+            canPersistSessionRef.current = true;
+          }
+        });
       } else {
         setScreen("files");
+        if (!hasRestorableSession(next.lastWrikeSession)) {
+          canPersistSessionRef.current = true;
+        }
       }
     });
     let dispose: () => void = () => undefined;
@@ -187,7 +219,6 @@ export function App() {
     });
     void subscribeToSettingsUpdates((next) => {
       setSettings(next);
-      setNotice("Dictionary updated.");
     }).then((unsubscribe) => {
       disposeSettingsUpdates = unsubscribe;
     });
@@ -248,6 +279,7 @@ export function App() {
 
   const visibleDownloads = useMemo(() => {
     const query = deferredSearch.trim().toLowerCase();
+    const pinnedIds = new Set(settings.pinnedDownloadIds);
     return downloads.filter((record) => {
       const kindMatches = filter === "all" || record.kind === filter;
       const queryMatches =
@@ -255,11 +287,151 @@ export function App() {
         record.fileName.toLowerCase().includes(query) ||
         record.sourceLabel.toLowerCase().includes(query);
       return kindMatches && queryMatches;
+    }).sort((first, second) => {
+      const firstPinned = pinnedIds.has(first.id);
+      const secondPinned = pinnedIds.has(second.id);
+      if (firstPinned !== secondPinned) {
+        return firstPinned ? -1 : 1;
+      }
+      return new Date(second.downloadedAt).getTime() - new Date(first.downloadedAt).getTime();
     });
-  }, [deferredSearch, downloads, filter]);
+  }, [deferredSearch, downloads, filter, settings.pinnedDownloadIds]);
 
   const selectedRecord =
     visibleDownloads.find((record) => record.id === selectedId) ?? visibleDownloads[0] ?? null;
+
+  function normalizeUrlInput(value: string): string | null {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const candidate =
+      trimmed.includes("://") || trimmed === "about:blank" ? trimmed : `https://${trimmed}`;
+    try {
+      const url = new URL(candidate);
+      return url.protocol === "http:" || url.protocol === "https:" || url.href === "about:blank"
+        ? url.href
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function normalizedStartupUrls(urls = settings.startupTabUrls) {
+    const normalized = urls
+      .map(normalizeUrlInput)
+      .filter((url): url is string => Boolean(url));
+    return normalized.length ? [...new Set(normalized)] : [WRIKE_HOME];
+  }
+
+  function hasRestorableSession(session: WrikeSession | null): session is WrikeSession {
+    return Boolean(session?.tabs.some((tab) => normalizeUrlInput(tab.url ?? "")));
+  }
+
+  function wrikeModeForUrl(url: string): WrikeTabMode {
+    return url === READ_ONLY_URL ? "readOnly" : "standard";
+  }
+
+  function createWrikeTab(tabId: string, title: string, url: string, mode = wrikeModeForUrl(url)): WrikeTab {
+    return {
+      id: tabId,
+      title,
+      url,
+      canGoBack: false,
+      canGoForward: false,
+      isTitleLoading: mode === "standard",
+      mode,
+    };
+  }
+
+  function currentWrikeSession(): WrikeSession {
+    return {
+      tabs: wrikeTabsRef.current.map((tab) => ({
+        id: tab.id,
+        title: tab.title,
+        url: tab.url ?? normalizedStartupUrls()[0],
+        mode: tab.mode,
+      })),
+      activeTabId: activeWrikeTabIdRef.current,
+      split: wrikeSplitRef.current,
+      savedAt: new Date().toISOString(),
+    };
+  }
+
+  async function openWrikeTabSet(nextTabs: WrikeTab[], nextActiveTabId: string, nextSplit: WrikeSplit | null) {
+    const nextIds = new Set(nextTabs.map((tab) => tab.id));
+    const oldTabs = wrikeTabsRef.current.filter((tab) => !nextIds.has(tab.id));
+    for (const tab of oldTabs) {
+      await closeWrikeTab(tab.id).catch(() => undefined);
+    }
+    wrikeTabsRef.current = nextTabs;
+    syncWrikeSplitRef(nextSplit);
+    syncActiveWrikeTabId(nextActiveTabId);
+    setWrikeTabs(nextTabs);
+    setScreen("wrike");
+    const visibleIds =
+      nextSplit && nextIds.has(nextSplit.leftTabId) && nextIds.has(nextSplit.rightTabId)
+        ? [nextSplit.leftTabId, nextSplit.rightTabId]
+        : [nextActiveTabId];
+    const launchOrder = [
+      ...nextTabs.filter((tab) => tab.id !== nextActiveTabId),
+      ...nextTabs.filter((tab) => tab.id === nextActiveTabId),
+    ];
+    for (const tab of launchOrder) {
+      await launchWrike(tab.id, tab.mode === "readOnly" ? READ_ONLY_URL : tab.url ?? WRIKE_HOME);
+    }
+    await resizeWrikeTabs(currentWrikeLayouts(nextSplit, nextActiveTabId)).catch(() => undefined);
+    await hideWrike(nextTabs.filter((tab) => !visibleIds.includes(tab.id)).map((tab) => tab.id));
+    if (visibleIds.includes(nextActiveTabId)) {
+      await focusWrikeTab(nextActiveTabId).catch(() => undefined);
+    }
+  }
+
+  async function openStartupTabs(urls = settings.startupTabUrls) {
+    const nextTabs = normalizedStartupUrls(urls).map((url, index) =>
+      createWrikeTab(index === 0 ? "home" : `startup-${Date.now().toString(36)}-${index}`, index === 0 ? "Wrike" : `Startup tab ${index + 1}`, url),
+    );
+    await openWrikeTabSet(nextTabs, nextTabs[0].id, null);
+  }
+
+  async function restorePreviousSession(session: WrikeSession) {
+    const seen = new Set<string>();
+    const nextTabs = session.tabs
+      .map((tab, index) => {
+        const url = normalizeUrlInput(tab.url ?? "") ?? WRIKE_HOME;
+        const fallbackId = index === 0 ? "home" : `restored-${Date.now().toString(36)}-${index}`;
+        const candidateId = /^[a-zA-Z0-9-]+$/.test(tab.id) ? tab.id : fallbackId;
+        const id = seen.has(candidateId) ? fallbackId : candidateId;
+        seen.add(id);
+        return createWrikeTab(id, tab.title || (index === 0 ? "Wrike" : `Restored tab ${index + 1}`), url, tab.mode);
+      })
+      .filter((tab) => tab.url);
+    if (!nextTabs.length) {
+      setSessionPrompt(null);
+      canPersistSessionRef.current = true;
+      return;
+    }
+    const tabIds = new Set(nextTabs.map((tab) => tab.id));
+    const nextActiveTabId = tabIds.has(session.activeTabId) ? session.activeTabId : nextTabs[0].id;
+    const nextSplit =
+      session.split &&
+      tabIds.has(session.split.leftTabId) &&
+      tabIds.has(session.split.rightTabId) &&
+      session.split.leftTabId !== session.split.rightTabId
+        ? session.split
+        : null;
+    setSessionPrompt(null);
+    canPersistSessionRef.current = false;
+    await openWrikeTabSet(nextTabs, nextActiveTabId, nextSplit);
+    canPersistSessionRef.current = true;
+    await saveWrikeSession(currentWrikeSession()).catch(() => undefined);
+  }
+
+  function dismissSessionPrompt() {
+    setSessionPrompt(null);
+    canPersistSessionRef.current = true;
+    void saveWrikeSession(currentWrikeSession()).catch(() => undefined);
+  }
 
   function syncWrikeSplitRef(next: WrikeSplit | null) {
     wrikeSplitRef.current = next;
@@ -416,20 +588,21 @@ export function App() {
 
   async function addWrikeTab() {
     const nextTabNumber = wrikeTabs.length + 1;
+    const url = normalizedStartupUrls()[0];
     const next: WrikeTab = {
       id: `tab-${Date.now().toString(36)}`,
       title: nextTabNumber === 1 ? "Wrike" : `New tab ${nextTabNumber}`,
-      url: null,
+      url,
       canGoBack: false,
       canGoForward: false,
       isTitleLoading: true,
-      mode: "standard",
+      mode: wrikeModeForUrl(url),
     };
     syncWrikeSplitRef(null);
     setWrikeTabs((current) => [...current, next]);
     setNewWrikeTabId(next.id);
     window.setTimeout(() => setNewWrikeTabId(null), 520);
-    await launchWrike(next.id);
+    await launchWrike(next.id, next.mode === "readOnly" ? READ_ONLY_URL : url);
     await hideWrike(wrikeTabs.map((tab) => tab.id));
     syncActiveWrikeTabId(next.id);
     setScreen("wrike");
@@ -739,6 +912,16 @@ export function App() {
     setNotice("Preferences saved.");
   }
 
+  function togglePinnedDownload(id: string) {
+    const pinned = new Set(settings.pinnedDownloadIds);
+    if (pinned.has(id)) {
+      pinned.delete(id);
+    } else {
+      pinned.add(id);
+    }
+    void updateSettings({ ...settings, pinnedDownloadIds: [...pinned] });
+  }
+
   async function toggleSpellCheck() {
     await closeTopbarActionsMenu();
     const spellCheck = !settings.spellCheck;
@@ -969,7 +1152,18 @@ export function App() {
           </div>
         </div>
         <div className="topbar-notice-slot" aria-live="polite">
-          {notice ? (
+          {sessionPrompt ? (
+            <div className="topbar-toast session-toast" role="status">
+              <span>
+                Reopen your previous session with {sessionPrompt.tabs.length}{" "}
+                {sessionPrompt.tabs.length === 1 ? "tab" : "tabs"}?
+              </span>
+              <span className="toast-actions">
+                <button onClick={() => void restorePreviousSession(sessionPrompt)}>Reopen</button>
+                <button onClick={dismissSessionPrompt}>Skip</button>
+              </span>
+            </div>
+          ) : notice ? (
             <div className="topbar-toast" role="status">
               {notice}
               <button aria-label="Dismiss" onClick={() => setNotice(null)}>
@@ -1093,6 +1287,8 @@ export function App() {
               onOpenSourceTask={() => setScreen("wrike")}
               onSearchChange={setSearch}
               onSelect={setSelectedId}
+              onTogglePin={togglePinnedDownload}
+              pinnedIds={settings.pinnedDownloadIds}
               search={search}
               selectedId={selectedRecord?.id ?? null}
             />
@@ -1103,6 +1299,7 @@ export function App() {
         ) : (
           <div className="settings-screen">
             <SettingsPanel
+              appVersion={APP_VERSION}
               settings={settings}
               onChange={(next) => void updateSettings(next)}
               onTestNotification={() => void testNotification()}

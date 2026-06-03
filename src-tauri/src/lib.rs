@@ -45,6 +45,37 @@ struct Settings {
     #[serde(default = "default_theme")]
     theme: String,
     custom_dictionary: Vec<String>,
+    #[serde(default = "default_startup_tab_urls")]
+    startup_tab_urls: Vec<String>,
+    #[serde(default)]
+    pinned_download_ids: Vec<String>,
+    #[serde(default)]
+    last_wrike_session: Option<WrikeSession>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WrikeSessionTab {
+    id: String,
+    title: String,
+    url: Option<String>,
+    mode: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WrikeSessionSplit {
+    left_tab_id: String,
+    right_tab_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WrikeSession {
+    tabs: Vec<WrikeSessionTab>,
+    active_tab_id: String,
+    split: Option<WrikeSessionSplit>,
+    saved_at: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -56,6 +87,10 @@ struct WorkbookSheet {
 
 fn default_theme() -> String {
     "default".to_owned()
+}
+
+fn default_startup_tab_urls() -> Vec<String> {
+    vec![WRIKE_HOME.to_owned()]
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -72,6 +107,9 @@ impl Default for Settings {
             download_notifications: true,
             theme: "default".to_owned(),
             custom_dictionary: Vec::new(),
+            startup_tab_urls: default_startup_tab_urls(),
+            pinned_download_ids: Vec::new(),
+            last_wrike_session: None,
         }
     }
 }
@@ -236,6 +274,8 @@ fn update_settings(
 ) -> Result<Settings, String> {
     let previous = read_settings(&app).unwrap_or_default();
     settings.custom_dictionary = normalize_dictionary(settings.custom_dictionary);
+    settings.startup_tab_urls = normalize_startup_tab_urls(settings.startup_tab_urls);
+    settings.pinned_download_ids = normalize_string_ids(settings.pinned_download_ids);
     if settings.theme.trim().is_empty() {
         settings.theme = default_theme();
     }
@@ -257,6 +297,13 @@ fn update_settings(
     app.emit("settings-updated", settings.clone())
         .map_err(|error| format!("Unable to refresh settings: {error}"))?;
     Ok(settings)
+}
+
+#[tauri::command]
+fn update_last_wrike_session(app: AppHandle, session: WrikeSession) -> Result<(), String> {
+    let mut settings = read_settings(&app).unwrap_or_default();
+    settings.last_wrike_session = Some(normalize_wrike_session(session));
+    write_json(settings_path(&app)?, &settings)
 }
 
 #[tauri::command]
@@ -875,6 +922,85 @@ fn normalize_dictionary(words: Vec<String>) -> Vec<String> {
     normalized
 }
 
+fn normalize_startup_tab_urls(urls: Vec<String>) -> Vec<String> {
+    let mut normalized = urls
+        .into_iter()
+        .filter_map(|url| normalize_startup_tab_url(&url))
+        .collect::<Vec<_>>();
+    normalized.dedup_by(|first, second| first.eq_ignore_ascii_case(second));
+    if normalized.is_empty() {
+        normalized.push(WRIKE_HOME.to_owned());
+    }
+    normalized
+}
+
+fn normalize_startup_tab_url(url: &str) -> Option<String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let candidate = if trimmed.contains("://") || trimmed == "about:blank" {
+        trimmed.to_owned()
+    } else {
+        format!("https://{trimmed}")
+    };
+    Url::parse(&candidate)
+        .ok()
+        .filter(|parsed| {
+            matches!(parsed.scheme(), "http" | "https") || parsed.as_str() == "about:blank"
+        })
+        .map(|parsed| parsed.to_string())
+}
+
+fn normalize_string_ids(ids: Vec<String>) -> Vec<String> {
+    let mut normalized = ids
+        .into_iter()
+        .map(|id| id.trim().to_owned())
+        .filter(|id| !id.is_empty())
+        .collect::<Vec<_>>();
+    normalized.dedup();
+    normalized
+}
+
+fn normalize_wrike_session(session: WrikeSession) -> WrikeSession {
+    let tabs = session
+        .tabs
+        .into_iter()
+        .filter(|tab| !tab.id.trim().is_empty())
+        .map(|tab| WrikeSessionTab {
+            id: tab.id.trim().to_owned(),
+            title: tab.title.trim().to_owned(),
+            url: tab
+                .url
+                .as_deref()
+                .and_then(normalize_startup_tab_url)
+                .or_else(|| Some(WRIKE_HOME.to_owned())),
+            mode: if tab.mode == "readOnly" {
+                "readOnly".to_owned()
+            } else {
+                "standard".to_owned()
+            },
+        })
+        .collect::<Vec<_>>();
+    let tab_ids = tabs.iter().map(|tab| tab.id.clone()).collect::<Vec<_>>();
+    let active_tab_id = if tab_ids.iter().any(|id| id == &session.active_tab_id) {
+        session.active_tab_id
+    } else {
+        tab_ids.first().cloned().unwrap_or_else(|| "home".to_owned())
+    };
+    let split = session.split.filter(|split| {
+        tab_ids.iter().any(|id| id == &split.left_tab_id)
+            && tab_ids.iter().any(|id| id == &split.right_tab_id)
+            && split.left_tab_id != split.right_tab_id
+    });
+    WrikeSession {
+        tabs,
+        active_tab_id,
+        split,
+        saved_at: session.saved_at,
+    }
+}
+
 fn normalize_dictionary_word(word: &str) -> Option<String> {
     let trimmed = word
         .trim()
@@ -1218,6 +1344,7 @@ pub fn run() {
             read_download,
             resize_wrike_tabs,
             send_test_notification,
+            update_last_wrike_session,
             update_settings,
             wrike_tab_action
         ])

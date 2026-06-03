@@ -1,4 +1,4 @@
-import type { DownloadRecord, Settings, WorkbookPreview } from "../types";
+import type { DownloadRecord, Settings, WorkbookPreview, WrikeSession } from "../types";
 import { DEFAULT_SETTINGS, DEMO_DOWNLOADS } from "../data/demo";
 
 const desktopRuntime = "__TAURI_INTERNALS__" in window;
@@ -48,6 +48,12 @@ export async function saveSettings(settings: Settings): Promise<Settings> {
     };
   }
   return invokeDesktop<Settings>("update_settings", { settings });
+}
+
+export async function saveWrikeSession(session: WrikeSession): Promise<void> {
+  if (desktopRuntime) {
+    await invokeDesktop("update_last_wrike_session", { session });
+  }
 }
 
 export async function readDownload(id: string): Promise<Uint8Array | null> {

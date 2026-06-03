@@ -18,6 +18,26 @@ export interface Settings {
   downloadNotifications: boolean;
   theme: AppThemeId;
   customDictionary: string[];
+  startupTabUrls: string[];
+  pinnedDownloadIds: string[];
+  lastWrikeSession: WrikeSession | null;
+}
+
+export interface WrikeSessionTab {
+  id: string;
+  title: string;
+  url: string | null;
+  mode: "standard" | "readOnly";
+}
+
+export interface WrikeSession {
+  tabs: WrikeSessionTab[];
+  activeTabId: string;
+  split: {
+    leftTabId: string;
+    rightTabId: string;
+  } | null;
+  savedAt: string;
 }
 
 export interface WorkbookSheet {
