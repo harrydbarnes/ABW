@@ -1,5 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 
+type PdfJs = typeof import("pdfjs-dist");
+
+let pdfJsPromise: Promise<PdfJs> | null = null;
+
+function loadPdfJs() {
+  pdfJsPromise ??= Promise.all([
+    import("pdfjs-dist"),
+    import("pdfjs-dist/build/pdf.worker.min.mjs?url"),
+  ]).then(([pdfjs, worker]) => {
+    pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+    return pdfjs;
+  });
+  return pdfJsPromise;
+}
+
 export default function PdfPreview({
   bytes,
   demo,
@@ -12,8 +27,15 @@ export default function PdfPreview({
   const canvas = useRef<HTMLCanvasElement>(null);
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
-  const [zoom, setZoom] = useState(100);
+  const [zoom, setZoom] = useState(135);
+  const [rendering, setRendering] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPage(1);
+    setPages(1);
+    setProblem(null);
+  }, [bytes, fileName]);
 
   useEffect(() => {
     if (demo || !bytes || !canvas.current) {
@@ -21,28 +43,46 @@ export default function PdfPreview({
     }
     let live = true;
     let renderTask: { cancel: () => void; promise: Promise<unknown> } | null = null;
-    void Promise.all([import("pdfjs-dist"), import("pdfjs-dist/build/pdf.worker.min.mjs?url")])
-      .then(async ([pdfjs, worker]) => {
-        pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+    setRendering(true);
+    setProblem(null);
+    void loadPdfJs()
+      .then(async (pdfjs) => {
         const document = await pdfjs.getDocument({ data: bytes.slice() }).promise;
         if (!live) {
           return;
         }
         setPages(document.numPages);
-        const pdfPage = await document.getPage(Math.min(page, document.numPages));
-        const viewport = pdfPage.getViewport({ scale: (zoom / 100) * 1.25 });
+        const targetPage = Math.min(page, document.numPages);
+        if (targetPage !== page) {
+          setPage(targetPage);
+        }
+        const pdfPage = await document.getPage(targetPage);
+        const viewport = pdfPage.getViewport({ scale: zoom / 100 });
         const context = canvas.current?.getContext("2d");
         if (!context || !canvas.current) {
           return;
         }
-        canvas.current.width = viewport.width;
-        canvas.current.height = viewport.height;
-        renderTask = pdfPage.render({ canvas: canvas.current, canvasContext: context, viewport });
+        const outputScale = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.current.width = Math.floor(viewport.width * outputScale);
+        canvas.current.height = Math.floor(viewport.height * outputScale);
+        canvas.current.style.width = `${Math.floor(viewport.width)}px`;
+        canvas.current.style.height = `${Math.floor(viewport.height)}px`;
+        const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined;
+        renderTask = pdfPage.render({
+          canvas: canvas.current,
+          canvasContext: context,
+          transform,
+          viewport,
+        });
         await renderTask.promise;
+        if (live) {
+          setRendering(false);
+        }
       })
       .catch(() => {
         if (live) {
           setProblem("PDF preview could not be rendered.");
+          setRendering(false);
         }
       });
     return () => {
@@ -66,14 +106,24 @@ export default function PdfPreview({
           </button>
         </div>
         <div className="zoom-control">
-          <button onClick={() => setZoom((current) => Math.max(current - 10, 60))}>-</button>
+          <button onClick={() => setZoom((current) => Math.max(current - 10, 80))}>-</button>
           <span>{zoom}%</span>
-          <button onClick={() => setZoom((current) => Math.min(current + 10, 180))}>+</button>
+          <button onClick={() => setZoom((current) => Math.min(current + 10, 260))}>+</button>
         </div>
       </div>
-      {problem ? <div className="preview-error">{problem}</div> : null}
+      {problem ? (
+        <div className="preview-error preview-status">
+          <strong>Preview unavailable</strong>
+          <p>{problem}</p>
+        </div>
+      ) : null}
       <div className="pdf-canvas">
         {demo ? <DemoPdf fileName={fileName} /> : <canvas ref={canvas} aria-label="PDF page preview" />}
+        {rendering && !problem ? (
+          <div className="rendering-badge" role="status">
+            Rendering page...
+          </div>
+        ) : null}
       </div>
     </div>
   );

@@ -1,38 +1,59 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import { openDownload, openSourceTask, readDownload } from "../../lib/desktop";
+import { openDownload, openSourceTask } from "../../lib/desktop";
 import type { DownloadRecord } from "../../types";
+import { formatBytes, loadCachedPdfBytes, PDF_PREVIEW_BYTE_LIMIT } from "./previewCache";
 
 const SpreadsheetPreview = lazy(() => import("./SpreadsheetPreview"));
 const PdfPreview = lazy(() => import("./PdfPreview"));
 
 export default function PreviewPanel({ record }: { record: DownloadRecord | null }) {
-  const [bytes, setBytes] = useState<Uint8Array | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [pdfState, setPdfState] = useState<
+    | { status: "idle"; bytes: null; error: null }
+    | { status: "loading"; bytes: null; error: null }
+    | { status: "ready"; bytes: Uint8Array | null; error: null }
+    | { status: "error"; bytes: null; error: string }
+  >({ status: "idle", bytes: null, error: null });
 
   useEffect(() => {
     let live = true;
-    setBytes(null);
-    setError(null);
     if (!record || record.demo || record.kind !== "pdf") {
+      setPdfState({ status: "idle", bytes: null, error: null });
       return () => {
         live = false;
       };
     }
-    void readDownload(record.id)
+    if (record.sizeBytes > PDF_PREVIEW_BYTE_LIMIT) {
+      setPdfState({
+        status: "error",
+        bytes: null,
+        error: `This PDF is ${formatBytes(record.sizeBytes)}. Open it in Windows; in-app preview supports PDFs up to 512 MB.`,
+      });
+      return () => {
+        live = false;
+      };
+    }
+    setPdfState({ status: "loading", bytes: null, error: null });
+    void loadCachedPdfBytes(record)
       .then((result) => {
         if (live) {
-          setBytes(result);
+          setPdfState({ status: "ready", bytes: result, error: null });
         }
       })
       .catch((problem: unknown) => {
         if (live) {
-          setError(typeof problem === "string" ? problem : "This PDF could not be read for preview.");
+          const message =
+            problem instanceof Error
+              ? problem.message
+              : typeof problem === "string"
+                ? problem
+                : "This PDF could not be read for preview.";
+          setPdfState({ status: "error", bytes: null, error: message });
         }
       });
     return () => {
       live = false;
     };
-  }, [record]);
+  }, [record?.id, record?.kind, record?.sizeBytes, record?.demo]);
 
   if (!record) {
     return (
@@ -61,12 +82,24 @@ export default function PreviewPanel({ record }: { record: DownloadRecord | null
           </button>
         </div>
       </header>
-      {error ? <div className="preview-error">{error}</div> : null}
       <Suspense fallback={<div className="document-loading">Preparing preview...</div>}>
         {record.kind === "spreadsheet" ? (
           <SpreadsheetPreview id={record.id} demo={!!record.demo} />
         ) : record.kind === "pdf" ? (
-          <PdfPreview bytes={bytes} demo={!!record.demo} fileName={record.fileName} />
+          pdfState.status === "loading" || (pdfState.status === "idle" && !record.demo) ? (
+            <PreviewLoading
+              title="Loading PDF preview"
+              detail={
+                record.sizeBytes > 100 * 1024 * 1024
+                  ? `${formatBytes(record.sizeBytes)} can take a moment the first time. It will be cached after loading.`
+                  : "This file will be cached after the first load."
+              }
+            />
+          ) : pdfState.status === "error" ? (
+            <PreviewError message={pdfState.error} />
+          ) : (
+            <PdfPreview bytes={pdfState.bytes} demo={!!record.demo} fileName={record.fileName} />
+          )
         ) : (
           <div className="unsupported-preview">
             <h3>No in-app preview available</h3>
@@ -75,5 +108,26 @@ export default function PreviewPanel({ record }: { record: DownloadRecord | null
         )}
       </Suspense>
     </section>
+  );
+}
+
+function PreviewLoading({ detail, title }: { detail: string; title: string }) {
+  return (
+    <div className="document-loading preview-status">
+      <span className="preview-spinner" aria-hidden="true" />
+      <div>
+        <strong>{title}</strong>
+        <p>{detail}</p>
+      </div>
+    </div>
+  );
+}
+
+function PreviewError({ message }: { message: string }) {
+  return (
+    <div className="preview-error preview-status">
+      <strong>Preview unavailable</strong>
+      <p>{message}</p>
+    </div>
   );
 }

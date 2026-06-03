@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { previewSpreadsheet } from "../../lib/desktop";
 import type { WorkbookSheet } from "../../types";
+import { loadCachedSpreadsheetPreview } from "./previewCache";
 
 const DEMO_SHEETS: WorkbookSheet[] = [
   {
@@ -41,18 +41,35 @@ export default function SpreadsheetPreview({ id, demo }: { id: string; demo: boo
   const [sheets, setSheets] = useState<WorkbookSheet[]>(demo ? DEMO_SHEETS : []);
   const [active, setActive] = useState(0);
   const [zoom, setZoom] = useState(100);
+  const [loading, setLoading] = useState(!demo);
   const [problem, setProblem] = useState<string | null>(null);
 
   useEffect(() => {
+    let live = true;
     setActive(0);
     setProblem(null);
     if (demo) {
       setSheets(DEMO_SHEETS);
+      setLoading(false);
       return;
     }
-    void previewSpreadsheet(id)
-      .then((preview) => setSheets(preview?.sheets ?? []))
-      .catch(() => setProblem("Spreadsheet preview could not be rendered."));
+    setLoading(true);
+    void loadCachedSpreadsheetPreview(id)
+      .then((preview) => {
+        if (live) {
+          setSheets(preview?.sheets ?? []);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (live) {
+          setProblem("Spreadsheet preview could not be rendered.");
+          setLoading(false);
+        }
+      });
+    return () => {
+      live = false;
+    };
   }, [demo, id]);
 
   const sheet = sheets[Math.min(active, Math.max(sheets.length - 1, 0))];
@@ -60,7 +77,24 @@ export default function SpreadsheetPreview({ id, demo }: { id: string; demo: boo
   const columnLetters = Array.from({ length: width }, (_, index) => toColumnLabel(index));
 
   if (problem) {
-    return <div className="preview-error">{problem}</div>;
+    return (
+      <div className="preview-error preview-status">
+        <strong>Preview unavailable</strong>
+        <p>{problem}</p>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="document-loading preview-status">
+        <span className="preview-spinner" aria-hidden="true" />
+        <div>
+          <strong>Loading spreadsheet preview</strong>
+          <p>Reading the workbook once. The preview is cached when you come back to this file.</p>
+        </div>
+      </div>
+    );
   }
 
   if (!sheet) {
