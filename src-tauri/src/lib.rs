@@ -281,7 +281,7 @@ fn update_settings(
     }
     write_json(settings_path(&app)?, &settings)?;
     sync_windows_spelling_dictionary(&previous.custom_dictionary, &settings.custom_dictionary);
-    let script = apply_spell_check_script(settings.spell_check);
+    let script = apply_spell_check_script(settings.spell_check, false);
     let tab_ids = state
         .wrike_tabs
         .lock()
@@ -530,7 +530,7 @@ fn open_wrike_at(
     let builder = WebviewBuilder::new(label, WebviewUrl::External(parsed))
         .auto_resize()
         .zoom_hotkeys_enabled(true)
-        .initialization_script(&apply_spell_check_script(spell_check))
+        .initialization_script(&apply_spell_check_script(spell_check, false))
         .on_navigation(move |url| {
             if url.scheme() == "abw-dictionary" {
                 let _ = add_custom_dictionary_word(&navigation_app, url);
@@ -565,7 +565,7 @@ fn open_wrike_at(
             .window_features(features)
             .skip_taskbar(true)
             .zoom_hotkeys_enabled(true)
-            .initialization_script(&apply_spell_check_script(spell_check))
+            .initialization_script(&apply_spell_check_script(spell_check, true))
             .on_navigation(is_safe_remote_destination)
             .on_page_load(move |window, payload| {
                 if matches!(payload.event(), PageLoadEvent::Finished)
@@ -688,6 +688,9 @@ fn download_handler(
     move |webview, event| {
         match event {
             DownloadEvent::Requested { url: _, destination } => {
+                if close_webview_on_finish {
+                    let _ = webview.hide();
+                }
                 let suggested_name = destination
                     .file_name()
                     .and_then(|name| name.to_str())
@@ -786,7 +789,7 @@ fn record_completed_download(
         source_label: provenance.source_label,
     };
     let mut records = read_records(app)?;
-    records.insert(0, record);
+    records.insert(0, record.clone());
     write_json(records_path(app)?, &records)?;
     if read_settings(app)?.download_notifications {
         let _ = app
@@ -797,7 +800,9 @@ fn record_completed_download(
             .show();
     }
     app.emit("downloads-updated", ())
-        .map_err(|error| format!("Unable to refresh Files view: {error}"))
+        .map_err(|error| format!("Unable to refresh Files view: {error}"))?;
+    app.emit("download-completed", record)
+        .map_err(|error| format!("Unable to open the completed download in Files: {error}"))
 }
 
 fn read_records(app: &AppHandle) -> Result<Vec<DownloadRecord>, String> {
@@ -1178,11 +1183,13 @@ fn is_wrike_workspace_destination(url: &Url) -> bool {
     url.scheme() == "https" && is_wrike && url.path().ends_with("/workspace.htm")
 }
 
-fn apply_spell_check_script(enabled: bool) -> String {
+fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
     let enabled_literal = if enabled { "true" } else { "false" };
+    let auto_download_literal = if auto_download { "true" } else { "false" };
     r##"
         (() => {
           const enabled = __ABW_SPELL_CHECK_ENABLED__;
+          const abwAutoDownload = __ABW_AUTO_DOWNLOAD__;
           const apply = () => {
             document.querySelectorAll('textarea, input[type="text"], [contenteditable="true"], [role="textbox"]')
               .forEach((element) => element.spellcheck = enabled);
@@ -1312,6 +1319,94 @@ fn apply_spell_check_script(enabled: bool) -> String {
               if (word) showDictionaryMenu(word, event);
             }
           };
+          const abwSupportedFileName = /[^\\r\\n]{1,180}[.](pdf|doc|docx|xls|xlsx|xlsm|xlsb|ods|rtf|txt)/i;
+          const abwDownloadWord = /download/i;
+          const abwIsVisible = (element) => {
+            if (!(element instanceof Element)) return false;
+            const rect = element.getBoundingClientRect();
+            const style = window.getComputedStyle(element);
+            return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+          };
+          const abwControlLabel = (element) =>
+            [
+              element?.getAttribute?.("aria-label"),
+              element?.getAttribute?.("title"),
+              element?.textContent
+            ].filter(Boolean).join(" ").trim();
+          const abwLooksLikeDownloadUrl = (value) => {
+            let text = String(value || "");
+            try { text = decodeURIComponent(text); } catch {}
+            return /download|attachment|filename|disposition/i.test(text) || abwSupportedFileName.test(text);
+          };
+          const abwFindSupportedFileName = (element) => {
+            for (let current = element; current && current !== document.body; current = current.parentElement) {
+              const text = (current.textContent || "").trim();
+              if (text.length > 240) continue;
+              const match = text.match(abwSupportedFileName);
+              if (match) return match[0].trim();
+            }
+            return "";
+          };
+          let abwPreviewDownloadTimer = 0;
+          let abwExpectingDownloadUntil = 0;
+          const abwQueuePreviewDownload = () => {
+            window.clearInterval(abwPreviewDownloadTimer);
+            let attempts = 0;
+            abwPreviewDownloadTimer = window.setInterval(() => {
+              attempts += 1;
+              const roots = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]'))
+                .filter(abwIsVisible)
+                .reverse();
+              if (abwAutoDownload) roots.push(document);
+              for (const root of roots) {
+                const download = Array.from(root.querySelectorAll('button, a, [role="button"]'))
+                  .find((control) => abwIsVisible(control) && abwDownloadWord.test(abwControlLabel(control)));
+                if (download) {
+                  window.clearInterval(abwPreviewDownloadTimer);
+                  abwExpectingDownloadUntil = Date.now() + 5000;
+                  download.click();
+                  return;
+                }
+              }
+              if (attempts >= 60) window.clearInterval(abwPreviewDownloadTimer);
+            }, 250);
+          };
+          const abwKeepDownloadsInWebview = (event) => {
+            const target = event.target instanceof Element ? event.target : null;
+            const control = target?.closest?.('a, button, [role="button"]');
+            if (!control) return;
+            const label = abwControlLabel(control);
+            const link = control.closest?.('a') || control.querySelector?.('a');
+            if (abwDownloadWord.test(label) || abwLooksLikeDownloadUrl(link?.href)) {
+              abwExpectingDownloadUntil = Date.now() + 5000;
+              if (link) {
+                link.removeAttribute("target");
+                link.setAttribute("download", "");
+              }
+              return;
+            }
+            if (abwFindSupportedFileName(control)) {
+              abwQueuePreviewDownload();
+            }
+          };
+          const abwPatchWindowOpen = () => {
+            if (window.__abwNativeOpen) return;
+            window.__abwNativeOpen = window.open.bind(window);
+            window.open = (url, target, features) => {
+              if (Date.now() < abwExpectingDownloadUntil || abwLooksLikeDownloadUrl(url)) {
+                abwExpectingDownloadUntil = 0;
+                const link = document.createElement("a");
+                link.href = String(url);
+                link.download = "";
+                link.style.display = "none";
+                document.body.append(link);
+                link.click();
+                link.remove();
+                return null;
+              }
+              return window.__abwNativeOpen(url, target, features);
+            };
+          };
           const start = () => {
             apply();
             new MutationObserver(apply).observe(document.body, { childList: true, subtree: true });
@@ -1319,11 +1414,25 @@ fn apply_spell_check_script(enabled: bool) -> String {
               document.addEventListener('contextmenu', keepWrikeEditorToolsVisible, true);
               window.__abwContextMenuGuard = true;
             }
+            if (!window.__abwDownloadBridge) {
+              document.addEventListener("click", abwKeepDownloadsInWebview, true);
+              abwPatchWindowOpen();
+              window.__abwDownloadBridge = true;
+            }
+            if (abwAutoDownload) {
+              window.setTimeout(() => {
+                const pageIdentity = `${document.title} ${window.location.href}`;
+                if (abwLooksLikeDownloadUrl(pageIdentity) || abwSupportedFileName.test(pageIdentity)) {
+                  abwQueuePreviewDownload();
+                }
+              }, 400);
+            }
           };
           if (document.body) start(); else document.addEventListener('DOMContentLoaded', start, { once: true });
         })();
         "##
     .replace("__ABW_SPELL_CHECK_ENABLED__", enabled_literal)
+    .replace("__ABW_AUTO_DOWNLOAD__", auto_download_literal)
 }
 
 pub fn run() {

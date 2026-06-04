@@ -165,6 +165,16 @@ export async function subscribeToDownloads(refresh: () => void): Promise<() => v
   return listen("downloads-updated", refresh);
 }
 
+export async function subscribeToDownloadCompleted(
+  notify: (record: DownloadRecord) => void,
+): Promise<() => void> {
+  if (!desktopRuntime) {
+    return () => undefined;
+  }
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<DownloadRecord>("download-completed", (event) => notify(event.payload));
+}
+
 export async function subscribeToDownloadErrors(notify: (message: string) => void): Promise<() => void> {
   if (!desktopRuntime) {
     return () => undefined;

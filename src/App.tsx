@@ -28,6 +28,7 @@ import {
   saveSettings,
   saveWrikeSession,
   sendTestNotification,
+  subscribeToDownloadCompleted,
   subscribeToDownloadErrors,
   subscribeToDownloads,
   subscribeToSettingsUpdates,
@@ -197,11 +198,20 @@ export function App() {
       }
     });
     let dispose: () => void = () => undefined;
+    let disposeCompleted: () => void = () => undefined;
     let disposeErrors: () => void = () => undefined;
     let disposeTabUpdates: () => void = () => undefined;
     let disposeSettingsUpdates: () => void = () => undefined;
     void subscribeToDownloads(refresh).then((unsubscribe) => {
       dispose = unsubscribe;
+    });
+    void subscribeToDownloadCompleted((record) => {
+      setSelectedId(record.id);
+      setScreen("files");
+      setNotice(`${record.fileName} is ready in Files.`);
+      void hideWrike(wrikeTabsRef.current.map((tab) => tab.id));
+    }).then((unsubscribe) => {
+      disposeCompleted = unsubscribe;
     });
     void subscribeToDownloadErrors((message) => {
       setNotice(`Download was not added to Files: ${message}`);
@@ -224,6 +234,7 @@ export function App() {
     });
     return () => {
       dispose();
+      disposeCompleted();
       disposeErrors();
       disposeTabUpdates();
       disposeSettingsUpdates();
