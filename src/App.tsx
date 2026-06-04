@@ -795,7 +795,7 @@ export function App() {
 
   function isTitlebarInteractionTarget(target: EventTarget | null) {
     return (
-      target instanceof HTMLElement &&
+      target instanceof Element &&
       target.closest(
         "button, .workspace-tab, .browser-controls, .brand, .topbar-actions, .topbar-actions-overflow, .window-controls, .tab-context-menu",
       )
@@ -987,31 +987,6 @@ export function App() {
   }
 
   async function openTopbarActionsMenu() {
-    if (isDesktopRuntime()) {
-      try {
-        const menu = await Menu.new({
-          items: [
-            {
-              text: `Spell check ${settings.spellCheck ? "on" : "off"}`,
-              action: () => void toggleSpellCheck(),
-            },
-            { item: "Separator" },
-            {
-              text: "Files",
-              action: () => void showLocalScreen("files"),
-            },
-            {
-              text: "Settings",
-              action: () => void showLocalScreen("settings"),
-            },
-          ],
-        });
-        await menu.popup();
-        return;
-      } catch {
-        // Keep the web fallback available if the native menu cannot be created.
-      }
-    }
     setIsTopbarActionsMenuOpen(true);
   }
 
@@ -1032,7 +1007,6 @@ export function App() {
     <div className="app-shell" data-theme={settings.theme} spellCheck={settings.spellCheck}>
       <header
         className={`taskbar ${wrikeTabs.length >= 4 ? "is-tab-crowded" : ""}`}
-        data-tauri-drag-region
         onDoubleClick={handleTitlebarDoubleClick}
         onMouseDown={handleTitlebarMouseDown}
       >
@@ -1144,7 +1118,7 @@ export function App() {
               <span>Read Only</span>
             </button>
           </span>
-          <span className="tab-space" aria-hidden="true" data-tauri-drag-region />
+          <span className="tab-space" aria-hidden="true" />
         </div>
         <div className="topbar-actions">
           <button
