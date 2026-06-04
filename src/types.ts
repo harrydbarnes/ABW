@@ -18,6 +18,8 @@ export interface Settings {
   spellCheck: boolean;
   launchWrikeOnStart: boolean;
   downloadNotifications: boolean;
+  openAbwAtSystemStartup: boolean;
+  closeToNotificationArea: boolean;
   theme: AppThemeId;
   customDictionary: string[];
   startupTabUrls: string[];

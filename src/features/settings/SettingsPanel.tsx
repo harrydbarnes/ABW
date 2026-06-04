@@ -29,6 +29,18 @@ export function SettingsPanel({ appVersion, settings, onChange, onTestNotificati
           onChange={(launchWrikeOnStart) => onChange({ ...settings, launchWrikeOnStart })}
         />
         <SettingToggle
+          checked={settings.openAbwAtSystemStartup}
+          description="Launch ABW automatically when you sign in to Windows."
+          label="Open ABW app at system startup"
+          onChange={(openAbwAtSystemStartup) => onChange({ ...settings, openAbwAtSystemStartup })}
+        />
+        <SettingToggle
+          checked={settings.closeToNotificationArea}
+          description="Keep ABW running in the notification area when its window is closed so it can reopen quickly. This uses more memory."
+          label="Close app to notification area (higher memory usage)"
+          onChange={(closeToNotificationArea) => onChange({ ...settings, closeToNotificationArea })}
+        />
+        <SettingToggle
           checked={settings.downloadNotifications}
           description="Show a Windows notification when a file from Wrike has been saved into ABW Files."
           label="Download complete notifications"

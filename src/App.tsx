@@ -112,6 +112,8 @@ export function App() {
     spellCheck: true,
     launchWrikeOnStart: true,
     downloadNotifications: true,
+    openAbwAtSystemStartup: true,
+    closeToNotificationArea: true,
     theme: "default",
     customDictionary: [],
     startupTabUrls: [WRIKE_HOME],

@@ -9,12 +9,15 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     webview::{
         DownloadEvent, NewWindowResponse, PageLoadEvent, Webview, WebviewBuilder,
         WebviewWindowBuilder,
     },
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, WebviewUrl,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, WebviewUrl, WindowEvent,
 };
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_notification::NotificationExt;
 use url::Url;
 use uuid::Uuid;
@@ -42,6 +45,8 @@ struct Settings {
     spell_check: bool,
     launch_wrike_on_start: bool,
     download_notifications: bool,
+    open_abw_at_system_startup: bool,
+    close_to_notification_area: bool,
     #[serde(default = "default_theme")]
     theme: String,
     custom_dictionary: Vec<String>,
@@ -105,6 +110,8 @@ impl Default for Settings {
             spell_check: true,
             launch_wrike_on_start: true,
             download_notifications: true,
+            open_abw_at_system_startup: true,
+            close_to_notification_area: true,
             theme: "default".to_owned(),
             custom_dictionary: Vec::new(),
             startup_tab_urls: default_startup_tab_urls(),
@@ -278,6 +285,9 @@ fn update_settings(
     settings.pinned_download_ids = normalize_string_ids(settings.pinned_download_ids);
     if settings.theme.trim().is_empty() {
         settings.theme = default_theme();
+    }
+    if previous.open_abw_at_system_startup != settings.open_abw_at_system_startup {
+        sync_autostart(&app, settings.open_abw_at_system_startup)?;
     }
     write_json(settings_path(&app)?, &settings)?;
     sync_windows_spelling_dictionary(&previous.custom_dictionary, &settings.custom_dictionary);
@@ -811,6 +821,24 @@ fn read_records(app: &AppHandle) -> Result<Vec<DownloadRecord>, String> {
 
 fn read_settings(app: &AppHandle) -> Result<Settings, String> {
     read_json_or_default(settings_path(app)?)
+}
+
+fn sync_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
+    let manager = app.autolaunch();
+    let result = if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
+    result.map_err(|error| format!("Unable to update system startup preference: {error}"))
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
 }
 
 fn read_json_or_default<T>(path: PathBuf) -> Result<T, String>
@@ -1477,7 +1505,59 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_notification::init())
+        .setup(|app| {
+            let settings = read_settings(app.handle()).unwrap_or_default();
+            if let Err(error) = sync_autostart(app.handle(), settings.open_abw_at_system_startup) {
+                eprintln!("{error}");
+            }
+
+            let show_item = MenuItem::with_id(app, "show", "Show ABW", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit ABW", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+            let mut tray = TrayIconBuilder::new()
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .tooltip("ABW")
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => show_main_window(app),
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                });
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
+            tray.build(app)?;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let close_to_notification_area = read_settings(&window.app_handle())
+                    .map(|settings| settings.close_to_notification_area)
+                    .unwrap_or(true);
+                if close_to_notification_area {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             close_wrike_tab,
             focus_wrike_tab,

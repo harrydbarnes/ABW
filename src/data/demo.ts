@@ -51,6 +51,8 @@ export const DEFAULT_SETTINGS: Settings = {
   spellCheck: true,
   launchWrikeOnStart: true,
   downloadNotifications: true,
+  openAbwAtSystemStartup: true,
+  closeToNotificationArea: true,
   theme: "default",
   customDictionary: [],
   startupTabUrls: ["https://www.wrike.com/workspace.htm"],
