@@ -44,6 +44,7 @@ const PreviewPanel = lazy(() => import("./features/preview/PreviewPanel"));
 const WRIKE_HOME = "https://www.wrike.com/workspace.htm";
 const READ_ONLY_URL = "https://login.wrike.com/login/?forceLogin=false&read";
 const APP_VERSION = "0.1.1";
+const LAUNCH_SPLASH_DURATION_MS = 2800;
 
 type Screen = "wrike" | "files" | "settings";
 type WrikeTabMode = "standard" | "readOnly";
@@ -129,9 +130,13 @@ export function App() {
   const sessionSaveTimerRef = useRef<number | undefined>(undefined);
   const closingTabIdsRef = useRef(new Set<string>());
   const tabIdCounterRef = useRef(0);
+  const launchStartedAtRef = useRef(Date.now());
 
   useEffect(() => {
-    const splashTimer = window.setTimeout(() => setIsLaunchSplashVisible(false), 2800);
+    const splashTimer = window.setTimeout(
+      () => setIsLaunchSplashVisible(false),
+      LAUNCH_SPLASH_DURATION_MS,
+    );
     return () => window.clearTimeout(splashTimer);
   }, []);
 
@@ -181,17 +186,17 @@ export function App() {
       });
     };
     refresh();
-    void loadSettings().then((next) => {
+    void loadSettings().then(async (next) => {
       setSettings(next);
       if (hasRestorableSession(next.lastWrikeSession)) {
         setSessionPrompt(next.lastWrikeSession);
       }
       if (next.launchWrikeOnStart) {
-        void openStartupTabs(next.startupTabUrls).then(() => {
-          if (!hasRestorableSession(next.lastWrikeSession)) {
-            canPersistSessionRef.current = true;
-          }
-        });
+        await waitForLaunchSplash();
+        await openStartupTabs(next.startupTabUrls);
+        if (!hasRestorableSession(next.lastWrikeSession)) {
+          canPersistSessionRef.current = true;
+        }
       } else {
         setScreen("files");
         if (!hasRestorableSession(next.lastWrikeSession)) {
@@ -360,6 +365,14 @@ export function App() {
   function createTabId(prefix: string) {
     tabIdCounterRef.current += 1;
     return `${prefix}-${Date.now().toString(36)}-${tabIdCounterRef.current.toString(36)}`;
+  }
+
+  async function waitForLaunchSplash() {
+    const elapsed = Date.now() - launchStartedAtRef.current;
+    const remaining = LAUNCH_SPLASH_DURATION_MS - elapsed;
+    if (remaining > 0) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, remaining));
+    }
   }
 
   function currentWrikeSession(): WrikeSession {
@@ -1163,7 +1176,7 @@ export function App() {
             onPointerDown={(event) => event.stopPropagation()}
             title="Show ABW actions"
           >
-            <MaterialIcon kind="keyboard_arrow_down" />
+            <MaterialIcon kind={isTopbarActionsMenuOpen ? "keyboard_arrow_right" : "keyboard_arrow_left"} />
           </button>
           <div
             className={`topbar-actions-menu ${isTopbarActionsMenuOpen ? "open" : ""}`}
@@ -1371,7 +1384,8 @@ function MaterialIcon({
     | "close"
     | "description"
     | "home"
-    | "keyboard_arrow_down"
+    | "keyboard_arrow_left"
+    | "keyboard_arrow_right"
     | "link"
     | "refresh"
     | "settings"
@@ -1391,7 +1405,8 @@ function MaterialIcon({
     description: (
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Zm1 7V3.5L20.5 9ZM16 18H8v-2h8Zm0-4H8v-2h8Z" />
     ),
-    keyboard_arrow_down: <path d="m7.41 8.59 4.59 4.58 4.59-4.58L18 10l-6 6-6-6Z" />,
+    keyboard_arrow_left: <path d="m15.41 16.59-4.58-4.59 4.58-4.59L14 6l-6 6 6 6Z" />,
+    keyboard_arrow_right: <path d="m8.59 16.59 4.58-4.59-4.58-4.59L10 6l6 6-6 6Z" />,
     link: (
       <path d="M3.9 12a5 5 0 0 1 5-5h4v2h-4a3 3 0 0 0 0 6h4v2h-4a5 5 0 0 1-5-5Zm5.5 1v-2h5.2v2Zm1.7 4v-2h4a3 3 0 0 0 0-6h-4V7h4a5 5 0 0 1 0 10Z" />
     ),

@@ -405,11 +405,6 @@ input:focus-visible {
 .topbar-actions-toggle .material-icon {
   width: 20px;
   height: 20px;
-  transition: transform 180ms ease;
-}
-
-.topbar-actions-toggle.open .material-icon {
-  transform: rotate(180deg);
 }
 
 .topbar-actions-menu {
@@ -504,6 +499,7 @@ input:focus-visible {
   max-width: 220px;
   padding: 0 38px 0 12px;
   gap: 8px;
+  background: color-mix(in srgb, var(--nav-active) 33%, var(--nav));
   font-size: 13px;
   font-weight: 550;
   outline: 0;
@@ -612,10 +608,13 @@ input:focus-visible {
 }
 
 .new-tab-cluster {
+  position: relative;
+  width: 34px;
+  height: 34px;
   display: flex;
   align-items: center;
-  gap: 5px;
   flex: none;
+  z-index: 4;
 }
 
 .new-tab {
@@ -636,17 +635,41 @@ input:focus-visible {
 }
 
 .read-only-launcher {
-  width: 34px;
-  padding: 0;
-  justify-content: center;
+  position: absolute;
+  left: 39px;
+  top: 0;
+  width: 104px;
+  padding: 0 9px;
+  gap: 8px;
   border: 1px solid var(--nav-border);
-  background: transparent;
+  background: var(--nav);
   color: #f0f4fb;
-  opacity: 1;
+  font-size: 13px;
+  font-weight: 550;
+  opacity: 0;
+  visibility: hidden;
   overflow: hidden;
-  pointer-events: auto;
-  transform: none;
+  pointer-events: none;
+  transform: translateX(-7px) scale(.98);
+  transform-origin: left center;
   transition:
+    opacity 140ms ease,
+    transform 140ms ease,
+    visibility 0s linear 140ms,
+    border-color 140ms ease,
+    background-color 140ms ease;
+}
+
+.new-tab-cluster:hover .read-only-launcher,
+.new-tab-cluster:focus-within .read-only-launcher {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateX(0) scale(1);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease,
+    visibility 0s,
     border-color 140ms ease,
     background-color 140ms ease;
 }
@@ -657,7 +680,10 @@ input:focus-visible {
 }
 
 .read-only-launcher span {
-  display: none;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .read-only-launcher .material-icon {
