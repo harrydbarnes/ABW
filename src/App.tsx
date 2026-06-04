@@ -127,6 +127,8 @@ export function App() {
   const canPersistSessionRef = useRef(false);
   const reloadAnimationTimerRef = useRef<number | undefined>(undefined);
   const sessionSaveTimerRef = useRef<number | undefined>(undefined);
+  const closingTabIdsRef = useRef(new Set<string>());
+  const tabIdCounterRef = useRef(0);
 
   useEffect(() => {
     const splashTimer = window.setTimeout(() => setIsLaunchSplashVisible(false), 2800);
@@ -353,6 +355,11 @@ export function App() {
       isTitleLoading: mode === "standard",
       mode,
     };
+  }
+
+  function createTabId(prefix: string) {
+    tabIdCounterRef.current += 1;
+    return `${prefix}-${Date.now().toString(36)}-${tabIdCounterRef.current.toString(36)}`;
   }
 
   function currentWrikeSession(): WrikeSession {
@@ -598,10 +605,11 @@ export function App() {
   }
 
   async function addWrikeTab() {
-    const nextTabNumber = wrikeTabs.length + 1;
+    const tabs = wrikeTabsRef.current;
+    const nextTabNumber = tabs.length + 1;
     const url = normalizedStartupUrls()[0];
     const next: WrikeTab = {
-      id: `tab-${Date.now().toString(36)}`,
+      id: createTabId("tab"),
       title: nextTabNumber === 1 ? "Wrike" : `New tab ${nextTabNumber}`,
       url,
       canGoBack: false,
@@ -609,19 +617,22 @@ export function App() {
       isTitleLoading: true,
       mode: wrikeModeForUrl(url),
     };
+    const nextTabs = [...tabs, next];
     syncWrikeSplitRef(null);
-    setWrikeTabs((current) => [...current, next]);
+    wrikeTabsRef.current = nextTabs;
+    setWrikeTabs(nextTabs);
+    syncActiveWrikeTabId(next.id);
+    setScreen("wrike");
     setNewWrikeTabId(next.id);
     window.setTimeout(() => setNewWrikeTabId(null), 520);
     await launchWrike(next.id, next.mode === "readOnly" ? READ_ONLY_URL : url);
-    await hideWrike(wrikeTabs.map((tab) => tab.id));
-    syncActiveWrikeTabId(next.id);
-    setScreen("wrike");
+    await hideWrike(tabs.map((tab) => tab.id));
   }
 
   async function addReadOnlyTab() {
+    const tabs = wrikeTabsRef.current;
     const next: WrikeTab = {
-      id: `read-only-${Date.now().toString(36)}`,
+      id: createTabId("read-only"),
       title: "Read Only Mode",
       url: READ_ONLY_URL,
       canGoBack: false,
@@ -629,14 +640,16 @@ export function App() {
       isTitleLoading: false,
       mode: "readOnly",
     };
+    const nextTabs = [...tabs, next];
     syncWrikeSplitRef(null);
-    setWrikeTabs((current) => [...current, next]);
+    wrikeTabsRef.current = nextTabs;
+    setWrikeTabs(nextTabs);
+    syncActiveWrikeTabId(next.id);
+    setScreen("wrike");
     setNewWrikeTabId(next.id);
     window.setTimeout(() => setNewWrikeTabId(null), 520);
     await launchWrike(next.id, READ_ONLY_URL);
-    await hideWrike(wrikeTabs.map((tab) => tab.id));
-    syncActiveWrikeTabId(next.id);
-    setScreen("wrike");
+    await hideWrike(tabs.map((tab) => tab.id));
   }
 
   async function runWrikeTabAction(tabId: string, action: WrikeTabAction) {
@@ -654,9 +667,11 @@ export function App() {
 
   async function closeTab(tabId: string) {
     const tabs = wrikeTabsRef.current;
-    if (tabs.length <= 1) {
+    if (tabs.length <= 1 || closingTabIdsRef.current.has(tabId)) {
       return;
     }
+    closingTabIdsRef.current.add(tabId);
+    const wasActive = activeWrikeTabIdRef.current === tabId;
     const closingIndex = tabs.findIndex((tab) => tab.id === tabId);
     const remaining = tabs.filter((tab) => tab.id !== tabId);
     const fallbackTab = remaining[Math.min(Math.max(closingIndex, 0), remaining.length - 1)];
@@ -670,14 +685,35 @@ export function App() {
     setTabMenu(null);
     wrikeTabsRef.current = remaining;
     setWrikeTabs(remaining);
-    await closeWrikeTab(tabId);
+    const nextActiveTabId =
+      survivingSplitTabId ??
+      (wasActive ? fallbackTab?.id ?? remaining[0]?.id : activeWrikeTabIdRef.current);
+    if (nextActiveTabId) {
+      syncActiveWrikeTabId(nextActiveTabId);
+    }
     if (survivingSplitTabId) {
       syncWrikeSplitRef(null);
-      await showWrike(survivingSplitTabId);
-      return;
     }
-    if (activeWrikeTabId === tabId && fallbackTab) {
-      await showWrike(fallbackTab.id);
+    try {
+      await closeWrikeTab(tabId).catch(() => undefined);
+      if (
+        survivingSplitTabId &&
+        activeWrikeTabIdRef.current === survivingSplitTabId &&
+        wrikeTabExists(survivingSplitTabId)
+      ) {
+        await showWrike(survivingSplitTabId);
+        return;
+      }
+      if (
+        wasActive &&
+        fallbackTab &&
+        activeWrikeTabIdRef.current === fallbackTab.id &&
+        wrikeTabExists(fallbackTab.id)
+      ) {
+        await showWrike(fallbackTab.id);
+      }
+    } finally {
+      closingTabIdsRef.current.delete(tabId);
     }
   }
 
@@ -951,20 +987,36 @@ export function App() {
   }
 
   async function openTopbarActionsMenu() {
-    setIsTopbarActionsMenuOpen(true);
-    if (screen === "wrike") {
-      await hideWrike(wrikeTabs.map((tab) => tab.id));
+    if (isDesktopRuntime()) {
+      try {
+        const menu = await Menu.new({
+          items: [
+            {
+              text: `Spell check ${settings.spellCheck ? "on" : "off"}`,
+              action: () => void toggleSpellCheck(),
+            },
+            { item: "Separator" },
+            {
+              text: "Files",
+              action: () => void showLocalScreen("files"),
+            },
+            {
+              text: "Settings",
+              action: () => void showLocalScreen("settings"),
+            },
+          ],
+        });
+        await menu.popup();
+        return;
+      } catch {
+        // Keep the web fallback available if the native menu cannot be created.
+      }
     }
+    setIsTopbarActionsMenuOpen(true);
   }
 
   async function closeTopbarActionsMenu() {
-    if (!isTopbarActionsMenuOpen) {
-      return;
-    }
     setIsTopbarActionsMenuOpen(false);
-    if (screen === "wrike") {
-      await restoreWrikeView();
-    }
   }
 
   async function toggleTopbarActionsMenu() {
@@ -1057,10 +1109,12 @@ export function App() {
                   <button
                     aria-label={`Close ${tab.title}`}
                     disabled={wrikeTabs.length <= 1}
+                    draggable={false}
                     onClick={(event) => {
                       event.stopPropagation();
                       void closeTab(tab.id);
                     }}
+                    onPointerDown={(event) => event.stopPropagation()}
                     title="Close"
                   >
                     <MaterialIcon kind="close" />
@@ -1074,6 +1128,7 @@ export function App() {
               aria-label="New Wrike tab"
               className="new-tab"
               onClick={() => void addWrikeTab()}
+              onPointerDown={(event) => event.stopPropagation()}
               title="New Wrike tab"
             >
               <MaterialIcon kind="add" />
@@ -1082,6 +1137,7 @@ export function App() {
               aria-label="New read only Wrike tab"
               className="read-only-launcher"
               onClick={() => void addReadOnlyTab()}
+              onPointerDown={(event) => event.stopPropagation()}
               title="Read Only Mode"
             >
               <MaterialIcon kind="description" />
@@ -1130,6 +1186,7 @@ export function App() {
             aria-label="Show ABW actions"
             className={`topbar-actions-toggle ${isTopbarActionsMenuOpen ? "open" : ""}`}
             onClick={() => void toggleTopbarActionsMenu()}
+            onPointerDown={(event) => event.stopPropagation()}
             title="Show ABW actions"
           >
             <MaterialIcon kind="keyboard_arrow_down" />

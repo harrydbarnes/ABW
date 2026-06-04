@@ -750,7 +750,9 @@ input:focus-visible {
 }
 
 .workspace-tab:hover .tab-actions,
-.workspace-tab:focus-within .tab-actions {
+.workspace-tab:focus-within .tab-actions,
+.workspace-tab.selected .tab-actions,
+.taskbar.is-tab-crowded .workspace-tab .tab-actions {
   opacity: 1;
   pointer-events: auto;
 }
@@ -2081,7 +2083,6 @@ input:focus-visible {
 .settings-footer {
   padding: 22px 0 0;
   color: #8a96a9;
-  font-family: "Segoe Print", "Comic Sans MS", "Segoe UI", system-ui, sans-serif;
   font-size: 11px;
   text-align: center;
 }
