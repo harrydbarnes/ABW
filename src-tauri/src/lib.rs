@@ -1347,20 +1347,57 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
             }
             return "";
           };
+          const abwNormalizeFileName = (value) =>
+            String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
           let abwPreviewDownloadTimer = 0;
+          let abwPreviewDownloadRequest = 0;
           let abwExpectingDownloadUntil = 0;
-          const abwQueuePreviewDownload = () => {
+          const abwQueuePreviewDownload = (fileName = "") => {
             window.clearInterval(abwPreviewDownloadTimer);
+            const request = ++abwPreviewDownloadRequest;
+            const expectedFileName = abwNormalizeFileName(fileName);
+            const previousDialogs = new Map(
+              Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]'))
+                .filter(abwIsVisible)
+                .map((root) => [root, abwNormalizeFileName(root.textContent)])
+            );
             let attempts = 0;
             abwPreviewDownloadTimer = window.setInterval(() => {
+              if (request !== abwPreviewDownloadRequest) {
+                window.clearInterval(abwPreviewDownloadTimer);
+                return;
+              }
               attempts += 1;
               const roots = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]'))
                 .filter(abwIsVisible)
                 .reverse();
               if (abwAutoDownload) roots.push(document);
               for (const root of roots) {
-                const download = Array.from(root.querySelectorAll('button, a, [role="button"]'))
-                  .find((control) => abwIsVisible(control) && abwDownloadWord.test(abwControlLabel(control)));
+                const rootText = abwNormalizeFileName(root.textContent);
+                const matchesExpectedFile = expectedFileName && rootText.includes(expectedFileName);
+                const isNewOrChangedDialog =
+                  !previousDialogs.has(root) || previousDialogs.get(root) !== rootText;
+                if (expectedFileName && !matchesExpectedFile && !isNewOrChangedDialog) {
+                  continue;
+                }
+                const download = Array.from(root.querySelectorAll('button, a, [role="button"], [role="link"]'))
+                  .find((control) => {
+                    if (!abwIsVisible(control) || !abwDownloadWord.test(abwControlLabel(control))) {
+                      return false;
+                    }
+                    if (!expectedFileName || isNewOrChangedDialog) return true;
+                    for (
+                      let current = control;
+                      current && current !== root.parentElement;
+                      current = current.parentElement
+                    ) {
+                      if (abwNormalizeFileName(current.textContent).includes(expectedFileName)) {
+                        return true;
+                      }
+                      if (current === root) break;
+                    }
+                    return false;
+                  });
                 if (download) {
                   window.clearInterval(abwPreviewDownloadTimer);
                   abwExpectingDownloadUntil = Date.now() + 5000;
@@ -1373,7 +1410,7 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
           };
           const abwKeepDownloadsInWebview = (event) => {
             const target = event.target instanceof Element ? event.target : null;
-            const control = target?.closest?.('a, button, [role="button"]');
+            const control = target?.closest?.('a, button, [role="button"], [role="link"]');
             if (!control) return;
             const label = abwControlLabel(control);
             const link = control.closest?.('a') || control.querySelector?.('a');
@@ -1385,8 +1422,9 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
               }
               return;
             }
-            if (abwFindSupportedFileName(control)) {
-              abwQueuePreviewDownload();
+            const fileName = abwFindSupportedFileName(target) || abwFindSupportedFileName(control);
+            if (fileName) {
+              abwQueuePreviewDownload(fileName);
             }
           };
           const abwPatchWindowOpen = () => {
@@ -1423,7 +1461,8 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
               window.setTimeout(() => {
                 const pageIdentity = `${document.title} ${window.location.href}`;
                 if (abwLooksLikeDownloadUrl(pageIdentity) || abwSupportedFileName.test(pageIdentity)) {
-                  abwQueuePreviewDownload();
+                  const match = pageIdentity.match(abwSupportedFileName);
+                  abwQueuePreviewDownload(match?.[0] || "");
                 }
               }, 400);
             }

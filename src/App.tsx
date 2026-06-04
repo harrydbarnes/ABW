@@ -214,9 +214,7 @@ export function App() {
     });
     void subscribeToDownloadCompleted((record) => {
       setSelectedId(record.id);
-      setScreen("files");
       setNotice(`${record.fileName} is ready in Files.`);
-      void hideWrike(wrikeTabsRef.current.map((tab) => tab.id));
     }).then((unsubscribe) => {
       disposeCompleted = unsubscribe;
     });

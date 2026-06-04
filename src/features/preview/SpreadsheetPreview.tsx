@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import type { WorkbookSheet } from "../../types";
+import type { DownloadRecord, WorkbookPreview, WorkbookSheet } from "../../types";
 import { loadCachedSpreadsheetPreview } from "./previewCache";
 
-const DEMO_SHEETS: WorkbookSheet[] = [
-  {
-    name: "Overview",
-    rows: [
+const DEMO_PREVIEW: WorkbookPreview = {
+  activeSheet: 0,
+  sheets: [
+    createDemoSheet("Overview", [
       ["Channel", "Owner", "Apr", "May", "Jun", "Q2 total", "Status"],
       ["Paid social", "Alex Morris", "42,000", "45,500", "48,000", "135,500", "Booked"],
       ["Connected TV", "Priya Shah", "72,000", "70,000", "76,000", "218,000", "Pending"],
@@ -17,47 +17,48 @@ const DEMO_SHEETS: WorkbookSheet[] = [
       ["Notes", "", "", "", "", "", ""],
       ["Forecast includes pacing adjustments approved on 18 May.", "", "", "", "", "", ""],
       ["Budgets include platform and production fees.", "", "", "", "", "", ""],
-    ],
-  },
-  {
-    name: "Placements",
-    rows: [
+    ]),
+    createDemoSheet("Placements", [
       ["Placement", "Market", "Start", "End", "Budget"],
       ["CTV prime", "UK", "01 Apr", "30 Jun", "218,000"],
       ["Paid social video", "UK", "07 Apr", "30 Jun", "135,500"],
-    ],
-  },
-  {
-    name: "Approvals",
-    rows: [
+    ]),
+    createDemoSheet("Approvals", [
       ["Item", "Approver", "Decision"],
       ["CTV allocation", "Finance", "Pending"],
       ["Display allocation", "Client", "Approved"],
-    ],
-  },
-];
+    ]),
+  ],
+};
 
-export default function SpreadsheetPreview({ id, demo }: { id: string; demo: boolean }) {
-  const [sheets, setSheets] = useState<WorkbookSheet[]>(demo ? DEMO_SHEETS : []);
-  const [active, setActive] = useState(0);
+export default function SpreadsheetPreview({
+  record,
+  demo,
+}: {
+  record: DownloadRecord;
+  demo: boolean;
+}) {
+  const [preview, setPreview] = useState<WorkbookPreview | null>(demo ? DEMO_PREVIEW : null);
+  const [active, setActive] = useState(demo ? DEMO_PREVIEW.activeSheet : 0);
   const [zoom, setZoom] = useState(100);
   const [loading, setLoading] = useState(!demo);
   const [problem, setProblem] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
-    setActive(0);
     setProblem(null);
     if (demo) {
-      setSheets(DEMO_SHEETS);
+      setPreview(DEMO_PREVIEW);
+      setActive(DEMO_PREVIEW.activeSheet);
       setLoading(false);
       return;
     }
     setLoading(true);
-    void loadCachedSpreadsheetPreview(id)
-      .then((preview) => {
+    void loadCachedSpreadsheetPreview(record)
+      .then((result) => {
         if (live) {
-          setSheets(preview?.sheets ?? []);
+          setPreview(result);
+          setActive(result?.activeSheet ?? 0);
           setLoading(false);
         }
       })
@@ -70,11 +71,10 @@ export default function SpreadsheetPreview({ id, demo }: { id: string; demo: boo
     return () => {
       live = false;
     };
-  }, [demo, id]);
+  }, [demo, record.id]);
 
+  const sheets = preview?.sheets ?? [];
   const sheet = sheets[Math.min(active, Math.max(sheets.length - 1, 0))];
-  const width = sheet?.rows.reduce((columns, row) => Math.max(columns, row.length), 0) ?? 0;
-  const columnLetters = Array.from({ length: width }, (_, index) => toColumnLabel(index));
 
   if (problem) {
     return (
@@ -104,7 +104,9 @@ export default function SpreadsheetPreview({ id, demo }: { id: string; demo: boo
   return (
     <div className="spreadsheet-view">
       <div className="document-toolbar">
-        <span>{sheet.rows.length} rows visible</span>
+        <span>
+          {sheet.rows.length} visible rows · {sheet.columns.length} visible columns
+        </span>
         <div className="zoom-control">
           <button onClick={() => setZoom((current) => Math.max(current - 10, 60))}>-</button>
           <span>{zoom}%</span>
@@ -113,28 +115,36 @@ export default function SpreadsheetPreview({ id, demo }: { id: string; demo: boo
       </div>
       <div className="sheet-scroller">
         <table className="sheet" style={{ zoom: `${zoom}%` }}>
+          <colgroup>
+            <col className="row-number-column" />
+            {sheet.columns.map((column) => (
+              <col key={column.index} style={{ width: column.widthPx }} />
+            ))}
+          </colgroup>
           <thead>
             <tr>
               <th className="row-number" />
-              {columnLetters.map((label) => (
-                <th key={label}>{label}</th>
+              {sheet.columns.map((column) => (
+                <th key={column.index}>{column.label}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {sheet.rows.map((row, rowIndex) => (
-              <tr
-                className={[
-                  rowIndex === 0 ? "heading-row" : "",
-                  row[0] === "TOTAL" ? "total-row" : "",
-                  row[0] === "Notes" ? "notes-row" : "",
-                ].join(" ")}
-                key={rowIndex}
-              >
-                <th className="row-number">{rowIndex + 1}</th>
-                {columnLetters.map((_, cellIndex) => (
-                  <td key={cellIndex}>{row[cellIndex] ?? ""}</td>
-                ))}
+            {sheet.rows.map((row) => (
+              <tr key={row.index} style={{ height: row.heightPx }}>
+                <th className="row-number">{row.index}</th>
+                {row.cells.map((cell, cellIndex) =>
+                  cell.coveredByMerge ? null : (
+                    <td
+                      colSpan={cell.colSpan}
+                      key={sheet.columns[cellIndex]?.index ?? cellIndex}
+                      rowSpan={cell.rowSpan}
+                      style={cell.style}
+                    >
+                      {cell.value}
+                    </td>
+                  ),
+                )}
               </tr>
             ))}
           </tbody>
@@ -157,13 +167,40 @@ export default function SpreadsheetPreview({ id, demo }: { id: string; demo: boo
   );
 }
 
+function createDemoSheet(name: string, values: string[][]): WorkbookSheet {
+  const width = values.reduce((largest, row) => Math.max(largest, row.length), 0);
+  return {
+    name,
+    columns: Array.from({ length: width }, (_, index) => ({
+      index: index + 1,
+      label: toColumnLabel(index + 1),
+      widthPx: index === 0 ? 176 : 98,
+    })),
+    rows: values.map((row, rowIndex) => ({
+      index: rowIndex + 1,
+      heightPx: 31,
+      cells: Array.from({ length: width }, (_, cellIndex) => ({
+        value: row[cellIndex] ?? "",
+        style:
+          rowIndex === 0
+            ? { backgroundColor: "#f7f9fd", color: "#35445c", fontWeight: 650 }
+            : row[0] === "TOTAL"
+              ? { fontWeight: 650 }
+              : row[0] === "Notes"
+                ? { color: "#1e4089", fontWeight: 650 }
+                : undefined,
+      })),
+    })),
+  };
+}
+
 function toColumnLabel(index: number) {
   let label = "";
-  let remainder = index + 1;
+  let remainder = index;
   while (remainder > 0) {
     const letter = (remainder - 1) % 26;
     label = String.fromCharCode(65 + letter) + label;
-    remainder = Math.floor((remainder - letter) / 26);
+    remainder = Math.floor((remainder - letter - 1) / 26);
   }
   return label;
 }

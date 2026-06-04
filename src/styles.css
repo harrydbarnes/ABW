@@ -1474,8 +1474,8 @@ input:focus-visible {
 }
 
 .sheet {
-  width: 100%;
-  min-width: 802px;
+  width: max-content;
+  min-width: 100%;
   table-layout: fixed;
   border-collapse: collapse;
   transform-origin: top left;
@@ -1485,23 +1485,19 @@ input:focus-visible {
 
 .sheet th,
 .sheet td {
-  width: 98px;
-  min-width: 98px;
-  max-width: 98px;
-  height: 31px;
+  min-width: 0;
+  height: inherit;
   border: 1px solid #e5e9f2;
   padding: 0 10px;
   text-align: left;
+  vertical-align: bottom;
   font-weight: 400;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.sheet th:nth-child(2),
-.sheet td:nth-child(2) {
-  width: 176px;
-  min-width: 176px;
-  max-width: 176px;
+.sheet .row-number-column {
+  width: 38px;
 }
 
 .sheet thead th,
@@ -1515,22 +1511,8 @@ input:focus-visible {
 .sheet .row-number {
   min-width: 38px;
   width: 38px;
+  max-width: 38px;
   padding: 0;
-}
-
-.sheet .heading-row td {
-  background: #f7f9fd;
-  color: #35445c;
-  font-weight: 650;
-}
-
-.sheet .total-row td {
-  font-weight: 650;
-}
-
-.sheet .notes-row td {
-  color: #1e4089;
-  font-weight: 650;
 }
 
 .sheet-tabs {

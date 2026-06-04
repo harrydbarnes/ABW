@@ -84,7 +84,7 @@ export default function PreviewPanel({ record }: { record: DownloadRecord | null
       </header>
       <Suspense fallback={<div className="document-loading">Preparing preview...</div>}>
         {record.kind === "spreadsheet" ? (
-          <SpreadsheetPreview id={record.id} demo={!!record.demo} />
+          <SpreadsheetPreview record={record} demo={!!record.demo} />
         ) : record.kind === "pdf" ? (
           pdfState.status === "loading" || (pdfState.status === "idle" && !record.demo) ? (
             <PreviewLoading

@@ -1,3 +1,5 @@
+import type { CSSProperties } from "react";
+
 export type FileKind = "pdf" | "spreadsheet" | "document" | "other";
 
 export interface DownloadRecord {
@@ -42,11 +44,33 @@ export interface WrikeSession {
 
 export interface WorkbookSheet {
   name: string;
-  rows: string[][];
+  columns: WorkbookColumn[];
+  rows: WorkbookRow[];
+}
+
+export interface WorkbookColumn {
+  index: number;
+  label: string;
+  widthPx: number;
+}
+
+export interface WorkbookRow {
+  index: number;
+  heightPx: number;
+  cells: WorkbookCell[];
+}
+
+export interface WorkbookCell {
+  value: string;
+  style?: CSSProperties;
+  colSpan?: number;
+  rowSpan?: number;
+  coveredByMerge?: boolean;
 }
 
 export interface WorkbookPreview {
   sheets: WorkbookSheet[];
+  activeSheet: number;
 }
 
 export type FileFilter = "all" | FileKind;
