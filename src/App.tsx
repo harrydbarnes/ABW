@@ -1133,6 +1133,20 @@ export function App() {
           </span>
           <span className="tab-space" aria-hidden="true" />
         </div>
+        <div className="titlebar-session-slot" aria-live="polite">
+          {sessionPrompt ? (
+            <div className="titlebar-session-toast" role="status">
+              <span>
+                Reopen previous session with {sessionPrompt.tabs.length}{" "}
+                {sessionPrompt.tabs.length === 1 ? "tab" : "tabs"}?
+              </span>
+              <span className="toast-actions">
+                <button onClick={() => void restorePreviousSession(sessionPrompt)}>Reopen</button>
+                <button onClick={dismissSessionPrompt}>Skip</button>
+              </span>
+            </div>
+          ) : null}
+        </div>
         <div className="topbar-actions">
           <button
             aria-label={`Turn spell check ${settings.spellCheck ? "off" : "on"}`}
@@ -1207,18 +1221,7 @@ export function App() {
           </div>
         </div>
         <div className="topbar-notice-slot" aria-live="polite">
-          {sessionPrompt ? (
-            <div className="topbar-toast session-toast" role="status">
-              <span>
-                Reopen your previous session with {sessionPrompt.tabs.length}{" "}
-                {sessionPrompt.tabs.length === 1 ? "tab" : "tabs"}?
-              </span>
-              <span className="toast-actions">
-                <button onClick={() => void restorePreviousSession(sessionPrompt)}>Reopen</button>
-                <button onClick={dismissSessionPrompt}>Skip</button>
-              </span>
-            </div>
-          ) : notice ? (
+          {notice ? (
             <div className="topbar-toast" role="status">
               {notice}
               <button aria-label="Dismiss" onClick={() => setNotice(null)}>
