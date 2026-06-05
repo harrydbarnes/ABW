@@ -967,9 +967,15 @@ export function App() {
     wrikeTabs.find((tab) => tab.id === activeWrikeTabId) ?? wrikeTabs[0] ?? null;
 
   async function updateSettings(next: Settings) {
+    const startupPreferenceChanged =
+      settings.openAbwAtSystemStartup !== next.openAbwAtSystemStartup;
     const persisted = await saveSettings(next);
     setSettings(persisted);
-    setNotice("Preferences saved.");
+    setNotice(
+      startupPreferenceChanged
+        ? "Startup preference saved. The installer or Windows Startup Apps applies it."
+        : "Preferences saved.",
+    );
   }
 
   function togglePinnedDownload(id: string) {

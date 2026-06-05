@@ -17,7 +17,6 @@ use tauri::{
     },
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, WebviewUrl, WindowEvent,
 };
-use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_notification::NotificationExt;
 use url::Url;
 use uuid::Uuid;
@@ -270,11 +269,7 @@ fn open_download(app: AppHandle, id: String) -> Result<(), String> {
 
 #[tauri::command]
 fn get_settings(app: AppHandle) -> Result<Settings, String> {
-    let mut settings = read_settings(&app)?;
-    if let Ok(enabled) = app.autolaunch().is_enabled() {
-        settings.open_abw_at_system_startup = enabled;
-    }
-    Ok(settings)
+    read_settings(&app)
 }
 
 #[tauri::command]
@@ -289,13 +284,6 @@ fn update_settings(
     settings.pinned_download_ids = normalize_string_ids(settings.pinned_download_ids);
     if settings.theme.trim().is_empty() {
         settings.theme = default_theme();
-    }
-    let autostart_enabled = app
-        .autolaunch()
-        .is_enabled()
-        .unwrap_or(previous.open_abw_at_system_startup);
-    if autostart_enabled != settings.open_abw_at_system_startup {
-        sync_autostart(&app, settings.open_abw_at_system_startup)?;
     }
     write_json(settings_path(&app)?, &settings)?;
     sync_windows_spelling_dictionary(&previous.custom_dictionary, &settings.custom_dictionary);
@@ -829,16 +817,6 @@ fn read_records(app: &AppHandle) -> Result<Vec<DownloadRecord>, String> {
 
 fn read_settings(app: &AppHandle) -> Result<Settings, String> {
     read_json_or_default(settings_path(app)?)
-}
-
-fn sync_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
-    let manager = app.autolaunch();
-    let result = if enabled {
-        manager.enable()
-    } else {
-        manager.disable()
-    };
-    result.map_err(|error| format!("Unable to update system startup preference: {error}"))
 }
 
 fn show_main_window(app: &AppHandle) {
@@ -1513,10 +1491,6 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
-        .plugin(tauri_plugin_autostart::init(
-            MacosLauncher::LaunchAgent,
-            None,
-        ))
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let show_item = MenuItem::with_id(app, "show", "Show ABW", true, None::<&str>)?;
