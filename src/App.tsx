@@ -112,7 +112,7 @@ export function App() {
     spellCheck: true,
     launchWrikeOnStart: true,
     downloadNotifications: true,
-    openAbwAtSystemStartup: true,
+    openAbwAtSystemStartup: false,
     closeToNotificationArea: true,
     theme: "default",
     customDictionary: [],

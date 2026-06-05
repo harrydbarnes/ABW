@@ -30,7 +30,7 @@ export function SettingsPanel({ appVersion, settings, onChange, onTestNotificati
         />
         <SettingToggle
           checked={settings.openAbwAtSystemStartup}
-          description="Launch ABW automatically when you sign in to Windows."
+          description="Launch ABW automatically when you sign in to Windows. Leave this off unless you want ABW to add itself to startup."
           label="Open ABW app at system startup"
           onChange={(openAbwAtSystemStartup) => onChange({ ...settings, openAbwAtSystemStartup })}
         />

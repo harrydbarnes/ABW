@@ -110,7 +110,7 @@ impl Default for Settings {
             spell_check: true,
             launch_wrike_on_start: true,
             download_notifications: true,
-            open_abw_at_system_startup: true,
+            open_abw_at_system_startup: false,
             close_to_notification_area: true,
             theme: "default".to_owned(),
             custom_dictionary: Vec::new(),
@@ -270,7 +270,11 @@ fn open_download(app: AppHandle, id: String) -> Result<(), String> {
 
 #[tauri::command]
 fn get_settings(app: AppHandle) -> Result<Settings, String> {
-    read_settings(&app)
+    let mut settings = read_settings(&app)?;
+    if let Ok(enabled) = app.autolaunch().is_enabled() {
+        settings.open_abw_at_system_startup = enabled;
+    }
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -286,7 +290,11 @@ fn update_settings(
     if settings.theme.trim().is_empty() {
         settings.theme = default_theme();
     }
-    if previous.open_abw_at_system_startup != settings.open_abw_at_system_startup {
+    let autostart_enabled = app
+        .autolaunch()
+        .is_enabled()
+        .unwrap_or(previous.open_abw_at_system_startup);
+    if autostart_enabled != settings.open_abw_at_system_startup {
         sync_autostart(&app, settings.open_abw_at_system_startup)?;
     }
     write_json(settings_path(&app)?, &settings)?;
@@ -1511,11 +1519,6 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
-            let settings = read_settings(app.handle()).unwrap_or_default();
-            if let Err(error) = sync_autostart(app.handle(), settings.open_abw_at_system_startup) {
-                eprintln!("{error}");
-            }
-
             let show_item = MenuItem::with_id(app, "show", "Show ABW", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit ABW", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &quit_item])?;

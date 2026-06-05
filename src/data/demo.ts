@@ -51,7 +51,7 @@ export const DEFAULT_SETTINGS: Settings = {
   spellCheck: true,
   launchWrikeOnStart: true,
   downloadNotifications: true,
-  openAbwAtSystemStartup: true,
+  openAbwAtSystemStartup: false,
   closeToNotificationArea: true,
   theme: "default",
   customDictionary: [],
