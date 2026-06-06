@@ -114,6 +114,8 @@ export function App() {
     downloadNotifications: true,
     openAbwAtSystemStartup: false,
     closeToNotificationArea: true,
+    confirmBeforeClosingTabs: false,
+    openDownloadedFilesAutomatically: false,
     theme: "default",
     customDictionary: [],
     startupTabUrls: [WRIKE_HOME],
@@ -802,6 +804,14 @@ export function App() {
       await appWindow.toggleMaximize();
       setIsWindowMaximized(await appWindow.isMaximized());
     } else {
+      if (
+        settings.confirmBeforeClosingTabs &&
+        !settings.closeToNotificationArea &&
+        wrikeTabsRef.current.length > 1 &&
+        !window.confirm(`Close ABW? You have ${wrikeTabsRef.current.length} tabs open.`)
+      ) {
+        return;
+      }
       await appWindow.close();
     }
   }

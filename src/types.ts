@@ -20,6 +20,8 @@ export interface Settings {
   downloadNotifications: boolean;
   openAbwAtSystemStartup: boolean;
   closeToNotificationArea: boolean;
+  confirmBeforeClosingTabs: boolean;
+  openDownloadedFilesAutomatically: boolean;
   theme: AppThemeId;
   customDictionary: string[];
   startupTabUrls: string[];

@@ -46,6 +46,8 @@ struct Settings {
     download_notifications: bool,
     open_abw_at_system_startup: bool,
     close_to_notification_area: bool,
+    confirm_before_closing_tabs: bool,
+    open_downloaded_files_automatically: bool,
     #[serde(default = "default_theme")]
     theme: String,
     custom_dictionary: Vec<String>,
@@ -111,6 +113,8 @@ impl Default for Settings {
             download_notifications: true,
             open_abw_at_system_startup: false,
             close_to_notification_area: true,
+            confirm_before_closing_tabs: false,
+            open_downloaded_files_automatically: false,
             theme: "default".to_owned(),
             custom_dictionary: Vec::new(),
             startup_tab_urls: default_startup_tab_urls(),
@@ -797,13 +801,17 @@ fn record_completed_download(
     let mut records = read_records(app)?;
     records.insert(0, record.clone());
     write_json(records_path(app)?, &records)?;
-    if read_settings(app)?.download_notifications {
+    let settings = read_settings(app)?;
+    if settings.download_notifications {
         let _ = app
             .notification()
             .builder()
             .title("Download saved to ABW Files")
             .body(format!("{notification_file_name} is ready to preview."))
             .show();
+    }
+    if settings.open_downloaded_files_automatically {
+        let _ = open::that(path);
     }
     app.emit("downloads-updated", ())
         .map_err(|error| format!("Unable to refresh Files view: {error}"))?;

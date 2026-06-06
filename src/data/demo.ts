@@ -53,6 +53,8 @@ export const DEFAULT_SETTINGS: Settings = {
   downloadNotifications: true,
   openAbwAtSystemStartup: false,
   closeToNotificationArea: true,
+  confirmBeforeClosingTabs: false,
+  openDownloadedFilesAutomatically: false,
   theme: "default",
   customDictionary: [],
   startupTabUrls: ["https://www.wrike.com/workspace.htm"],
