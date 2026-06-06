@@ -122,7 +122,7 @@ function evictPdfCache() {
 }
 
 async function loadSpreadsheetPreview(record: DownloadRecord): Promise<WorkbookPreview | null> {
-  if (STYLED_EXCEL_EXTENSIONS.has(record.extension.toLocaleLowerCase())) {
+  if (STYLED_EXCEL_EXTENSIONS.has(record.extension.toLowerCase())) {
     try {
       const styled = await loadStyledExcelPreview(record);
       if (styled) {
@@ -396,7 +396,7 @@ function normalizeLegacyWorkbook(preview: unknown): WorkbookPreview {
   };
 }
 
-function toColumnLabel(index: number) {
+export function toColumnLabel(index: number) {
   let label = "";
   let remainder = index;
   while (remainder > 0) {

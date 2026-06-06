@@ -266,7 +266,7 @@ export function App() {
       window.removeEventListener("resize", closeMenu);
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [activeWrikeTabId, isTopbarActionsMenuOpen, screen, wrikeTabs]);
+  }, []);
 
   useEffect(() => {
     let resizeTimer: number | undefined;

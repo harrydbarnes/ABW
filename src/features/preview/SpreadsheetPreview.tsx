@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { DownloadRecord, WorkbookPreview, WorkbookSheet } from "../../types";
-import { loadCachedSpreadsheetPreview } from "./previewCache";
+import { loadCachedSpreadsheetPreview, toColumnLabel } from "./previewCache";
 
 const DEMO_PREVIEW: WorkbookPreview = {
   activeSheet: 0,
@@ -194,13 +194,3 @@ function createDemoSheet(name: string, values: string[][]): WorkbookSheet {
   };
 }
 
-function toColumnLabel(index: number) {
-  let label = "";
-  let remainder = index;
-  while (remainder > 0) {
-    const letter = (remainder - 1) % 26;
-    label = String.fromCharCode(65 + letter) + label;
-    remainder = Math.floor((remainder - letter - 1) / 26);
-  }
-  return label;
-}
