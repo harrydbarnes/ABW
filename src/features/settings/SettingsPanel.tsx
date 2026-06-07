@@ -41,10 +41,22 @@ export function SettingsPanel({ appVersion, settings, onChange, onTestNotificati
           onChange={(closeToNotificationArea) => onChange({ ...settings, closeToNotificationArea })}
         />
         <SettingToggle
+          checked={settings.confirmBeforeClosingTabs}
+          description="Ask for confirmation before quitting when more than one Wrike tab is open and the app is not set to close to the notification area."
+          label="Confirm before closing with multiple tabs open"
+          onChange={(confirmBeforeClosingTabs) => onChange({ ...settings, confirmBeforeClosingTabs })}
+        />
+        <SettingToggle
           checked={settings.downloadNotifications}
           description="Show a Windows notification when a file from Wrike has been saved into ABW Files."
           label="Download complete notifications"
           onChange={(downloadNotifications) => onChange({ ...settings, downloadNotifications })}
+        />
+        <SettingToggle
+          checked={settings.openDownloadedFilesAutomatically}
+          description="Automatically open each downloaded file in its default Windows application as soon as it is saved into ABW Files."
+          label="Open downloaded files automatically"
+          onChange={(openDownloadedFilesAutomatically) => onChange({ ...settings, openDownloadedFilesAutomatically })}
         />
       </div>
       <StartupTabsSettings
