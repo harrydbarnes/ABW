@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from "react";
+import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 
 type PdfJs = typeof import("pdfjs-dist");
+type PDFLoadingTask = ReturnType<PdfJs["getDocument"]>;
 
 let pdfJsPromise: Promise<PdfJs> | null = null;
+const MAX_CANVAS_DIMENSION = 8_192;
+const MAX_CANVAS_PIXELS = 16_777_216;
 
 function loadPdfJs() {
   pdfJsPromise ??= Promise.all([
@@ -28,43 +32,97 @@ export default function PdfPreview({
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
   const [zoom, setZoom] = useState(135);
+  const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [rendering, setRendering] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
 
   useEffect(() => {
     setPage(1);
     setPages(1);
+    setPdfDocument(null);
     setProblem(null);
   }, [bytes, fileName]);
 
   useEffect(() => {
-    if (demo || !bytes || !canvas.current) {
+    if (demo || !bytes) {
       return;
     }
     let live = true;
-    let renderTask: { cancel: () => void; promise: Promise<unknown> } | null = null;
+    let loadingTask: PDFLoadingTask | null = null;
+    let loadedDocument: PDFDocumentProxy | null = null;
     setRendering(true);
     setProblem(null);
     void loadPdfJs()
       .then(async (pdfjs) => {
-        const document = await pdfjs.getDocument({ data: bytes.slice() }).promise;
+        loadingTask = pdfjs.getDocument({ data: bytes.slice() });
+        const loaded = await loadingTask.promise;
+        loadedDocument = loaded;
         if (!live) {
+          await loaded.destroy();
           return;
         }
-        setPages(document.numPages);
-        const targetPage = Math.min(page, document.numPages);
+        setPdfDocument(loaded);
+        setPages(loaded.numPages);
+        setRendering(false);
+      })
+      .catch(() => {
+        if (live) {
+          setProblem("PDF preview could not be rendered.");
+          setRendering(false);
+        }
+      });
+    return () => {
+      live = false;
+      setPdfDocument(null);
+      if (loadedDocument) {
+        void loadedDocument.destroy();
+      } else if (loadingTask) {
+        void loadingTask.destroy();
+      }
+    };
+  }, [bytes, demo]);
+
+  useEffect(() => {
+    if (demo || !pdfDocument || !canvas.current) {
+      return;
+    }
+    let live = true;
+    let renderTask: RenderTask | null = null;
+    setRendering(true);
+    setProblem(null);
+    void pdfDocument
+      .getPage(Math.min(page, pdfDocument.numPages))
+      .then(async (pdfPage) => {
+        const targetPage = Math.min(page, pdfDocument.numPages);
         if (targetPage !== page) {
           setPage(targetPage);
         }
-        const pdfPage = await document.getPage(targetPage);
-        const viewport = pdfPage.getViewport({ scale: zoom / 100 });
+        const requestedViewport = pdfPage.getViewport({ scale: zoom / 100 });
+        const displayScale = Math.min(
+          1,
+          MAX_CANVAS_DIMENSION / requestedViewport.width,
+          MAX_CANVAS_DIMENSION / requestedViewport.height,
+        );
+        const viewport = pdfPage.getViewport({ scale: (zoom / 100) * displayScale });
         const context = canvas.current?.getContext("2d");
         if (!context || !canvas.current) {
           return;
         }
-        const outputScale = Math.min(window.devicePixelRatio || 1, 2);
-        canvas.current.width = Math.floor(viewport.width * outputScale);
-        canvas.current.height = Math.floor(viewport.height * outputScale);
+        const pixelBudgetScale = Math.sqrt(
+          MAX_CANVAS_PIXELS / Math.max(1, viewport.width * viewport.height),
+        );
+        const outputScale = Math.min(
+          window.devicePixelRatio || 1,
+          2,
+          pixelBudgetScale,
+          MAX_CANVAS_DIMENSION / viewport.width,
+          MAX_CANVAS_DIMENSION / viewport.height,
+        );
+        if (!Number.isFinite(outputScale) || outputScale <= 0) {
+          throw new Error("PDF page dimensions are invalid.");
+        }
+        canvas.current.width = Math.max(1, Math.floor(viewport.width * outputScale));
+        canvas.current.height = Math.max(1, Math.floor(viewport.height * outputScale));
         canvas.current.style.width = `${Math.floor(viewport.width)}px`;
         canvas.current.style.height = `${Math.floor(viewport.height)}px`;
         const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined;
@@ -89,7 +147,7 @@ export default function PdfPreview({
       live = false;
       renderTask?.cancel();
     };
-  }, [bytes, demo, page, zoom]);
+  }, [demo, page, pdfDocument, zoom]);
 
   return (
     <div className="pdf-view">

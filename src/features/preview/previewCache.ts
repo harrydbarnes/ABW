@@ -9,14 +9,20 @@ import type {
 } from "../../types";
 import type { Border, Cell, Color, Fill, Worksheet } from "exceljs";
 
-export const PDF_PREVIEW_BYTE_LIMIT = 512 * 1024 * 1024;
+export const PDF_PREVIEW_BYTE_LIMIT = 128 * 1024 * 1024;
+export const SPREADSHEET_PREVIEW_BYTE_LIMIT = 64 * 1024 * 1024;
 
-const PDF_CACHE_BYTE_LIMIT = 512 * 1024 * 1024;
+const PDF_CACHE_BYTE_LIMIT = 256 * 1024 * 1024;
+const MAX_SPREADSHEET_ARCHIVE_ENTRIES = 2_048;
+const MAX_SPREADSHEET_EXPANDED_BYTES = 256 * 1024 * 1024;
+const MAX_SPREADSHEET_COMPRESSION_RATIO = 100;
 const MAX_SPREADSHEET_ROWS = 250;
 const MAX_SPREADSHEET_COLUMNS = 50;
 const MAX_SPREADSHEET_ROW_SCAN = 10_000;
 const MAX_SPREADSHEET_COLUMN_SCAN = 2_000;
 const STYLED_EXCEL_EXTENSIONS = new Set(["xlsx", "xlsm", "xltx", "xltm"]);
+
+class PreviewSafetyError extends Error {}
 
 type PdfCacheEntry = {
   accessedAt: number;
@@ -38,7 +44,7 @@ export function loadCachedPdfBytes(record: DownloadRecord): Promise<Uint8Array |
   if (record.sizeBytes > PDF_PREVIEW_BYTE_LIMIT) {
     return Promise.reject(
       new Error(
-        `This PDF is ${formatBytes(record.sizeBytes)}. In-app preview supports PDFs up to 512 MB.`,
+        `This PDF is ${formatBytes(record.sizeBytes)}. In-app preview supports PDFs up to 128 MB; you can still open it in Windows.`,
       ),
     );
   }
@@ -122,13 +128,21 @@ function evictPdfCache() {
 }
 
 async function loadSpreadsheetPreview(record: DownloadRecord): Promise<WorkbookPreview | null> {
+  if (record.sizeBytes > SPREADSHEET_PREVIEW_BYTE_LIMIT) {
+    throw new Error(
+      `This spreadsheet is ${formatBytes(record.sizeBytes)}. In-app preview supports spreadsheets up to 64 MB; you can still open it in Windows.`,
+    );
+  }
   if (STYLED_EXCEL_EXTENSIONS.has(record.extension.toLowerCase())) {
     try {
       const styled = await loadStyledExcelPreview(record);
       if (styled) {
         return styled;
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof PreviewSafetyError) {
+        throw error;
+      }
       // Calamine remains a useful fallback for unusual or partially damaged workbooks.
     }
   }
@@ -141,6 +155,7 @@ async function loadStyledExcelPreview(record: DownloadRecord): Promise<WorkbookP
   if (!bytes) {
     return null;
   }
+  assertSafeSpreadsheetArchive(bytes);
   const { Workbook } = await import("exceljs");
   const workbook = new Workbook();
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
@@ -158,6 +173,61 @@ async function loadStyledExcelPreview(record: DownloadRecord): Promise<WorkbookP
     activeSheet,
     sheets: visibleWorksheets.map(buildWorksheetPreview),
   };
+}
+
+function assertSafeSpreadsheetArchive(bytes: Uint8Array) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const minimumEocdSize = 22;
+  const eocdSignature = 0x06054b50;
+  const centralDirectorySignature = 0x02014b50;
+  const searchStart = Math.max(0, bytes.byteLength - 65_557);
+  let eocd = -1;
+  for (let offset = bytes.byteLength - minimumEocdSize; offset >= searchStart; offset -= 1) {
+    if (view.getUint32(offset, true) === eocdSignature) {
+      eocd = offset;
+      break;
+    }
+  }
+  if (eocd < 0) {
+    throw new PreviewSafetyError("This spreadsheet archive is invalid or unsupported.");
+  }
+  const entries = view.getUint16(eocd + 10, true);
+  const centralDirectorySize = view.getUint32(eocd + 12, true);
+  const centralDirectoryOffset = view.getUint32(eocd + 16, true);
+  if (
+    entries > MAX_SPREADSHEET_ARCHIVE_ENTRIES ||
+    centralDirectoryOffset + centralDirectorySize > bytes.byteLength
+  ) {
+    throw new PreviewSafetyError("This spreadsheet is too complex for safe in-app preview.");
+  }
+  let offset = centralDirectoryOffset;
+  let compressedBytes = 0;
+  let expandedBytes = 0;
+  for (let entry = 0; entry < entries; entry += 1) {
+    if (
+      offset + 46 > bytes.byteLength ||
+      view.getUint32(offset, true) !== centralDirectorySignature
+    ) {
+      throw new PreviewSafetyError("This spreadsheet archive is invalid or unsupported.");
+    }
+    const compressed = view.getUint32(offset + 20, true);
+    const expanded = view.getUint32(offset + 24, true);
+    if (compressed === 0xffffffff || expanded === 0xffffffff) {
+      throw new PreviewSafetyError("ZIP64 spreadsheets are not supported for in-app preview.");
+    }
+    compressedBytes += compressed;
+    expandedBytes += expanded;
+    if (
+      expandedBytes > MAX_SPREADSHEET_EXPANDED_BYTES ||
+      (compressedBytes > 0 && expandedBytes / compressedBytes > MAX_SPREADSHEET_COMPRESSION_RATIO)
+    ) {
+      throw new PreviewSafetyError("This spreadsheet expands beyond the safe in-app preview limit.");
+    }
+    const fileNameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    offset += 46 + fileNameLength + extraLength + commentLength;
+  }
 }
 
 function buildWorksheetPreview(worksheet: Worksheet): WorkbookSheet {

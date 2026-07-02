@@ -26,7 +26,7 @@ export default function PreviewPanel({ record }: { record: DownloadRecord | null
       setPdfState({
         status: "error",
         bytes: null,
-        error: `This PDF is ${formatBytes(record.sizeBytes)}. Open it in Windows; in-app preview supports PDFs up to 512 MB.`,
+        error: `This PDF is ${formatBytes(record.sizeBytes)}. Open it in Windows; in-app preview supports PDFs up to 128 MB.`,
       });
       return () => {
         live = false;

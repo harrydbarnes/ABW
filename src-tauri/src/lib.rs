@@ -5,6 +5,7 @@ use std::{
     collections::HashMap,
     env,
     fs,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -22,7 +23,12 @@ use url::Url;
 use uuid::Uuid;
 
 const WRIKE_HOME: &str = "https://www.wrike.com/workspace.htm";
-const MAX_PDF_PREVIEW_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_PDF_PREVIEW_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_SPREADSHEET_PREVIEW_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_SPREADSHEET_EXPANDED_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_SPREADSHEET_ARCHIVE_ENTRIES: u16 = 2_048;
+const MAX_SPREADSHEET_COMPRESSION_RATIO: u64 = 100;
+const MAX_SPREADSHEET_SHEETS: usize = 128;
 const TASKBAR_HEIGHT: f64 = 50.0;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -232,7 +238,7 @@ fn read_download(app: AppHandle, id: String) -> Result<Vec<u8>, String> {
         .len();
     if size > MAX_PDF_PREVIEW_BYTES {
         return Err(format!(
-            "This PDF is {} MB. In-app PDF preview currently supports files up to 512 MB.",
+            "This PDF is {} MB. In-app PDF preview currently supports files up to 128 MB; open it in Windows instead.",
             size.div_ceil(1024 * 1024)
         ));
     }
@@ -242,11 +248,37 @@ fn read_download(app: AppHandle, id: String) -> Result<Vec<u8>, String> {
 #[tauri::command]
 fn preview_spreadsheet(app: AppHandle, id: String) -> Result<WorkbookPreview, String> {
     let path = tracked_path(&app, &id)?;
+    let size = fs::metadata(&path)
+        .map_err(|error| format!("Unable to inspect spreadsheet: {error}"))?
+        .len();
+    if size > MAX_SPREADSHEET_PREVIEW_BYTES {
+        return Err(format!(
+            "This spreadsheet is {} MB. In-app preview supports files up to 64 MB; open it in Windows instead.",
+            size.div_ceil(1024 * 1024)
+        ));
+    }
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "xlsx" | "xlsm" | "xlsb" | "ods"
+            )
+        })
+    {
+        validate_spreadsheet_archive(&path)?;
+    }
     let mut workbook = open_workbook_auto(path)
         .map_err(|error| format!("Unable to open spreadsheet: {error}"))?;
-    let sheets = workbook
-        .sheet_names()
-        .to_owned()
+    let sheet_names = workbook.sheet_names().to_owned();
+    if sheet_names.len() > MAX_SPREADSHEET_SHEETS {
+        return Err(format!(
+            "This spreadsheet has {} sheets. In-app preview supports up to {MAX_SPREADSHEET_SHEETS}; open it in Windows instead.",
+            sheet_names.len()
+        ));
+    }
+    let sheets = sheet_names
         .into_iter()
         .map(|name| {
             let rows = workbook
@@ -263,6 +295,71 @@ fn preview_spreadsheet(app: AppHandle, id: String) -> Result<WorkbookPreview, St
         })
         .collect();
     Ok(WorkbookPreview { sheets })
+}
+
+fn validate_spreadsheet_archive(path: &Path) -> Result<(), String> {
+    const EOCD_SIGNATURE: u32 = 0x0605_4b50;
+    const CENTRAL_DIRECTORY_SIGNATURE: u32 = 0x0201_4b50;
+    const MAX_EOCD_SEARCH: u64 = 65_557;
+
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("Unable to inspect spreadsheet archive: {error}"))?;
+    let length = file
+        .metadata()
+        .map_err(|error| format!("Unable to inspect spreadsheet archive: {error}"))?
+        .len();
+    let tail_length = length.min(MAX_EOCD_SEARCH) as usize;
+    file.seek(SeekFrom::End(-(tail_length as i64)))
+        .map_err(|error| format!("Unable to inspect spreadsheet archive: {error}"))?;
+    let mut tail = vec![0; tail_length];
+    file.read_exact(&mut tail)
+        .map_err(|error| format!("Unable to inspect spreadsheet archive: {error}"))?;
+    let eocd = tail
+        .windows(4)
+        .rposition(|window| u32::from_le_bytes(window.try_into().unwrap()) == EOCD_SIGNATURE)
+        .ok_or_else(|| "This spreadsheet archive is invalid or unsupported.".to_owned())?;
+    if eocd + 22 > tail.len() {
+        return Err("This spreadsheet archive is invalid or unsupported.".into());
+    }
+    let entries = u16::from_le_bytes(tail[eocd + 10..eocd + 12].try_into().unwrap());
+    let central_size = u32::from_le_bytes(tail[eocd + 12..eocd + 16].try_into().unwrap()) as u64;
+    let central_offset = u32::from_le_bytes(tail[eocd + 16..eocd + 20].try_into().unwrap()) as u64;
+    if entries > MAX_SPREADSHEET_ARCHIVE_ENTRIES
+        || central_offset.saturating_add(central_size) > length
+    {
+        return Err("This spreadsheet is too complex for safe in-app preview.".into());
+    }
+    file.seek(SeekFrom::Start(central_offset))
+        .map_err(|error| format!("Unable to inspect spreadsheet archive: {error}"))?;
+    let mut compressed_total = 0_u64;
+    let mut expanded_total = 0_u64;
+    for _ in 0..entries {
+        let mut header = [0_u8; 46];
+        file.read_exact(&mut header)
+            .map_err(|_| "This spreadsheet archive is invalid or unsupported.".to_owned())?;
+        if u32::from_le_bytes(header[0..4].try_into().unwrap()) != CENTRAL_DIRECTORY_SIGNATURE {
+            return Err("This spreadsheet archive is invalid or unsupported.".into());
+        }
+        let compressed = u32::from_le_bytes(header[20..24].try_into().unwrap());
+        let expanded = u32::from_le_bytes(header[24..28].try_into().unwrap());
+        if compressed == u32::MAX || expanded == u32::MAX {
+            return Err("ZIP64 spreadsheets are not supported for in-app preview.".into());
+        }
+        compressed_total = compressed_total.saturating_add(compressed as u64);
+        expanded_total = expanded_total.saturating_add(expanded as u64);
+        if expanded_total > MAX_SPREADSHEET_EXPANDED_BYTES
+            || (compressed_total > 0
+                && expanded_total / compressed_total > MAX_SPREADSHEET_COMPRESSION_RATIO)
+        {
+            return Err("This spreadsheet expands beyond the safe in-app preview limit.".into());
+        }
+        let name_length = u16::from_le_bytes(header[28..30].try_into().unwrap()) as i64;
+        let extra_length = u16::from_le_bytes(header[30..32].try_into().unwrap()) as i64;
+        let comment_length = u16::from_le_bytes(header[32..34].try_into().unwrap()) as i64;
+        file.seek(SeekFrom::Current(name_length + extra_length + comment_length))
+            .map_err(|_| "This spreadsheet archive is invalid or unsupported.".to_owned())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
