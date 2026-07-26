@@ -2,12 +2,22 @@ name: Windows installer
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   nsis:
     runs-on: windows-latest
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -29,16 +39,53 @@ jobs:
         uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: src-tauri
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Read build metadata
+        id: metadata
+        shell: pwsh
+        run: |
+          $packageVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $appVersion = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ($packageVersion -ne $appVersion) {
+            throw "Version mismatch: package.json=$packageVersion, tauri.conf.json=$appVersion."
+          }
+
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
+          "version=$appVersion" >> $env:GITHUB_OUTPUT
+          "short_sha=$shortSha" >> $env:GITHUB_OUTPUT
+
       - name: Build NSIS current-user installer
         run: npm run tauri -- build --bundles nsis
 
+      - name: Create installer checksum
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe" -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one NSIS installer, found $($installers.Count)."
+          }
+
+          $installer = $installers[0]
+          $digest = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksum = "$digest *$($installer.Name)`n"
+          [System.IO.File]::WriteAllText(
+            "$($installer.FullName).sha256",
+            $checksum,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
       - name: Upload ABW installer
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: ABW-Windows-installer
-          path: src-tauri/target/release/bundle/nsis/*-setup.exe
+          name: ABW-Windows-installer-v${{ steps.metadata.outputs.version }}-${{ steps.metadata.outputs.short_sha }}
+          path: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/nsis/*-setup.exe.sha256
           if-no-files-found: error
+          retention-days: 14
