@@ -1,5 +1,7 @@
 import type { DownloadRecord, Settings, WorkbookPreview, WrikeSession } from "../types";
 import { DEFAULT_SETTINGS, DEMO_DOWNLOADS } from "../data/demo";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 const desktopRuntime = "__TAURI_INTERNALS__" in window;
 
@@ -23,8 +25,7 @@ export function isDesktopRuntime(): boolean {
   return desktopRuntime;
 }
 
-async function invokeDesktop<T>(command: string, payload?: Record<string, unknown>) {
-  const { invoke } = await import("@tauri-apps/api/core");
+function invokeDesktop<T>(command: string, payload?: Record<string, unknown>) {
   return invoke<T>(command, payload);
 }
 
@@ -60,7 +61,7 @@ export async function readDownload(id: string): Promise<Uint8Array | null> {
   if (!desktopRuntime) {
     return null;
   }
-  const bytes = await invokeDesktop<number[]>("read_download", { id });
+  const bytes = await invokeDesktop<ArrayBuffer>("read_download", { id });
   return new Uint8Array(bytes);
 }
 
@@ -143,7 +144,6 @@ export async function subscribeToWrikeTabUpdates(
   if (!desktopRuntime) {
     return () => undefined;
   }
-  const { listen } = await import("@tauri-apps/api/event");
   return listen<WrikeTabUpdate>("wrike-tab-updated", (event) => notify(event.payload));
 }
 
@@ -153,7 +153,6 @@ export async function subscribeToSettingsUpdates(
   if (!desktopRuntime) {
     return () => undefined;
   }
-  const { listen } = await import("@tauri-apps/api/event");
   return listen<Settings>("settings-updated", (event) => notify(event.payload));
 }
 
@@ -161,7 +160,6 @@ export async function subscribeToDownloads(refresh: () => void): Promise<() => v
   if (!desktopRuntime) {
     return () => undefined;
   }
-  const { listen } = await import("@tauri-apps/api/event");
   return listen("downloads-updated", refresh);
 }
 
@@ -171,7 +169,6 @@ export async function subscribeToDownloadCompleted(
   if (!desktopRuntime) {
     return () => undefined;
   }
-  const { listen } = await import("@tauri-apps/api/event");
   return listen<DownloadRecord>("download-completed", (event) => notify(event.payload));
 }
 
@@ -179,7 +176,6 @@ export async function subscribeToDownloadErrors(notify: (message: string) => voi
   if (!desktopRuntime) {
     return () => undefined;
   }
-  const { listen } = await import("@tauri-apps/api/event");
   return listen<string>("download-capture-error", (event) => notify(event.payload));
 }
 
