@@ -644,7 +644,7 @@ fn open_wrike_at(
     let builder = WebviewBuilder::new(label, WebviewUrl::External(parsed))
         .auto_resize()
         .zoom_hotkeys_enabled(true)
-        .initialization_script(&apply_spell_check_script(spell_check, false))
+        .initialization_script(apply_spell_check_script(spell_check, false))
         .on_navigation(move |url| {
             if url.scheme() == "abw-dictionary" {
                 let _ = add_custom_dictionary_word(&navigation_app, url);
@@ -679,7 +679,7 @@ fn open_wrike_at(
             .window_features(features)
             .skip_taskbar(true)
             .zoom_hotkeys_enabled(true)
-            .initialization_script(&apply_spell_check_script(spell_check, true))
+            .initialization_script(apply_spell_check_script(spell_check, true))
             .on_navigation(is_safe_remote_destination)
             .on_page_load(move |window, payload| {
                 if matches!(payload.event(), PageLoadEvent::Finished)
@@ -1673,7 +1673,7 @@ pub fn run() {
                 return;
             }
             if let WindowEvent::CloseRequested { api, .. } = event {
-                let close_to_notification_area = read_settings(&window.app_handle())
+                let close_to_notification_area = read_settings(window.app_handle())
                     .map(|settings| settings.close_to_notification_area)
                     .unwrap_or(true);
                 if close_to_notification_area {
