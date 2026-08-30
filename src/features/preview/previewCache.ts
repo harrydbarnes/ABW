@@ -13,6 +13,8 @@ export const PDF_PREVIEW_BYTE_LIMIT = 128 * 1024 * 1024;
 export const SPREADSHEET_PREVIEW_BYTE_LIMIT = 64 * 1024 * 1024;
 
 const PDF_CACHE_BYTE_LIMIT = 256 * 1024 * 1024;
+const SPREADSHEET_CACHE_BYTE_LIMIT = 64 * 1024 * 1024;
+const SPREADSHEET_CACHE_ENTRY_LIMIT = 6;
 const MAX_SPREADSHEET_ARCHIVE_ENTRIES = 2_048;
 const MAX_SPREADSHEET_EXPANDED_BYTES = 256 * 1024 * 1024;
 const MAX_SPREADSHEET_COMPRESSION_RATIO = 100;
@@ -35,6 +37,8 @@ type SpreadsheetCacheEntry = {
   accessedAt: number;
   promise: Promise<WorkbookPreview | null>;
   preview: WorkbookPreview | null;
+  ready: boolean;
+  sizeBytes: number;
 };
 
 const pdfCache = new Map<string, PdfCacheEntry>();
@@ -80,16 +84,21 @@ export function loadCachedSpreadsheetPreview(
   const cached = spreadsheetCache.get(record.id);
   if (cached) {
     cached.accessedAt = Date.now();
-    return cached.preview ? Promise.resolve(cached.preview) : cached.promise;
+    return cached.ready ? Promise.resolve(cached.preview) : cached.promise;
   }
   const entry: SpreadsheetCacheEntry = {
     accessedAt: Date.now(),
     preview: null,
     promise: loadSpreadsheetPreview(record),
+    ready: false,
+    sizeBytes: 0,
   };
   entry.promise = entry.promise
     .then((preview) => {
       entry.preview = preview;
+      entry.ready = true;
+      entry.sizeBytes = estimatePreviewSize(preview);
+      evictSpreadsheetCache();
       return preview;
     })
     .catch((error) => {
@@ -125,6 +134,33 @@ function evictPdfCache() {
     pdfCache.delete(id);
     total -= entry.sizeBytes;
   }
+}
+
+function evictSpreadsheetCache() {
+  let readyEntries = [...spreadsheetCache.values()].filter((entry) => entry.ready);
+  let total = readyEntries.reduce((sum, entry) => sum + entry.sizeBytes, 0);
+  if (readyEntries.length <= SPREADSHEET_CACHE_ENTRY_LIMIT && total <= SPREADSHEET_CACHE_BYTE_LIMIT) {
+    return;
+  }
+  const oldest = [...spreadsheetCache.entries()]
+    .filter(([, entry]) => entry.ready)
+    .sort(([, first], [, second]) => first.accessedAt - second.accessedAt);
+  for (const [id, entry] of oldest) {
+    if (readyEntries.length <= SPREADSHEET_CACHE_ENTRY_LIMIT && total <= SPREADSHEET_CACHE_BYTE_LIMIT) {
+      break;
+    }
+    spreadsheetCache.delete(id);
+    total -= entry.sizeBytes;
+    readyEntries = readyEntries.filter((candidate) => candidate !== entry);
+  }
+}
+
+function estimatePreviewSize(preview: WorkbookPreview | null): number {
+  if (!preview) {
+    return 0;
+  }
+  const serialised = JSON.stringify(preview);
+  return serialised ? serialised.length * 2 : 0;
 }
 
 async function loadSpreadsheetPreview(record: DownloadRecord): Promise<WorkbookPreview | null> {

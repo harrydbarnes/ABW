@@ -55,10 +55,11 @@ export default function PdfPreview({
     void loadPdfJs()
       .then(async (pdfjs) => {
         loadingTask = pdfjs.getDocument({ data: bytes.slice() });
-        const loaded = await loadingTask.promise;
+        const currentLoadingTask = loadingTask;
+        const loaded = await currentLoadingTask.promise;
         loadedDocument = loaded;
         if (!live) {
-          await loaded.destroy();
+          await currentLoadingTask.destroy();
           return;
         }
         setPdfDocument(loaded);
@@ -74,10 +75,10 @@ export default function PdfPreview({
     return () => {
       live = false;
       setPdfDocument(null);
-      if (loadedDocument) {
-        void loadedDocument.destroy();
-      } else if (loadingTask) {
+      if (loadingTask) {
         void loadingTask.destroy();
+      } else if (loadedDocument) {
+        void loadedDocument.cleanup();
       }
     };
   }, [bytes, demo]);
@@ -93,6 +94,10 @@ export default function PdfPreview({
     void pdfDocument
       .getPage(Math.min(page, pdfDocument.numPages))
       .then(async (pdfPage) => {
+        if (!live) {
+          pdfPage.cleanup();
+          return;
+        }
         const targetPage = Math.min(page, pdfDocument.numPages);
         if (targetPage !== page) {
           setPage(targetPage);

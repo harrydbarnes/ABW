@@ -3,13 +3,13 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    env,
-    fs,
+    env, fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 use tauri::{
+    ipc::Response,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     webview::{
@@ -231,7 +231,7 @@ fn list_downloads(app: AppHandle) -> Result<Vec<DownloadRecord>, String> {
 }
 
 #[tauri::command]
-fn read_download(app: AppHandle, id: String) -> Result<Vec<u8>, String> {
+fn read_download(app: AppHandle, id: String) -> Result<Response, String> {
     let path = tracked_path(&app, &id)?;
     let size = fs::metadata(&path)
         .map_err(|error| format!("Unable to inspect download: {error}"))?
@@ -242,7 +242,8 @@ fn read_download(app: AppHandle, id: String) -> Result<Vec<u8>, String> {
             size.div_ceil(1024 * 1024)
         ));
     }
-    fs::read(path).map_err(|error| format!("Unable to read download: {error}"))
+    let bytes = fs::read(path).map_err(|error| format!("Unable to read download: {error}"))?;
+    Ok(Response::new(bytes))
 }
 
 #[tauri::command]
@@ -269,8 +270,8 @@ fn preview_spreadsheet(app: AppHandle, id: String) -> Result<WorkbookPreview, St
     {
         validate_spreadsheet_archive(&path)?;
     }
-    let mut workbook = open_workbook_auto(path)
-        .map_err(|error| format!("Unable to open spreadsheet: {error}"))?;
+    let mut workbook =
+        open_workbook_auto(path).map_err(|error| format!("Unable to open spreadsheet: {error}"))?;
     let sheet_names = workbook.sheet_names().to_owned();
     if sheet_names.len() > MAX_SPREADSHEET_SHEETS {
         return Err(format!(
@@ -356,8 +357,10 @@ fn validate_spreadsheet_archive(path: &Path) -> Result<(), String> {
         let name_length = u16::from_le_bytes(header[28..30].try_into().unwrap()) as i64;
         let extra_length = u16::from_le_bytes(header[30..32].try_into().unwrap()) as i64;
         let comment_length = u16::from_le_bytes(header[32..34].try_into().unwrap()) as i64;
-        file.seek(SeekFrom::Current(name_length + extra_length + comment_length))
-            .map_err(|_| "This spreadsheet archive is invalid or unsupported.".to_owned())?;
+        file.seek(SeekFrom::Current(
+            name_length + extra_length + comment_length,
+        ))
+        .map_err(|_| "This spreadsheet archive is invalid or unsupported.".to_owned())?;
     }
     Ok(())
 }
@@ -387,18 +390,22 @@ fn update_settings(
         settings.theme = default_theme();
     }
     write_json(settings_path(&app)?, &settings)?;
-    sync_windows_spelling_dictionary(&previous.custom_dictionary, &settings.custom_dictionary);
-    let script = apply_spell_check_script(settings.spell_check, false);
-    let tab_ids = state
-        .wrike_tabs
-        .lock()
-        .map(|tabs| tabs.keys().cloned().collect::<Vec<_>>())
-        .unwrap_or_else(|_| vec!["home".to_owned()]);
-    for tab_id in tab_ids {
-        if let Some(webview) = app.get_webview(&wrike_tab_label(&tab_id)?) {
-            webview
-                .eval(&script)
-                .map_err(|error| format!("Unable to apply spell-check preference: {error}"))?;
+    if previous.custom_dictionary != settings.custom_dictionary {
+        sync_windows_spelling_dictionary(&previous.custom_dictionary, &settings.custom_dictionary);
+    }
+    if previous.spell_check != settings.spell_check {
+        let script = apply_spell_check_script(settings.spell_check, false);
+        let tab_ids = state
+            .wrike_tabs
+            .lock()
+            .map(|tabs| tabs.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_else(|_| vec!["home".to_owned()]);
+        for tab_id in tab_ids {
+            if let Some(webview) = app.get_webview(&wrike_tab_label(&tab_id)?) {
+                webview
+                    .eval(&script)
+                    .map_err(|error| format!("Unable to apply spell-check preference: {error}"))?;
+            }
         }
     }
     app.emit("settings-updated", settings.clone())
@@ -678,7 +685,8 @@ fn open_wrike_at(
                 if matches!(payload.event(), PageLoadEvent::Finished)
                     && is_wrike_workspace_destination(payload.url())
                 {
-                    if let Some(workspace) = completion_app.get_webview(&completion_workspace_label) {
+                    if let Some(workspace) = completion_app.get_webview(&completion_workspace_label)
+                    {
                         let _ = workspace.navigate(payload.url().clone());
                         let _ = workspace.show();
                         let _ = workspace.set_focus();
@@ -740,12 +748,13 @@ fn open_wrike_at(
             }
             emit_wrike_tab_update(&title_app, &title_context);
         })
-        .on_download(download_handler(app.clone(), Arc::clone(&context), None, false));
-    host.add_child(
-        builder,
-        content_position,
-        content_size,
-    )
+        .on_download(download_handler(
+            app.clone(),
+            Arc::clone(&context),
+            None,
+            false,
+        ));
+    host.add_child(builder, content_position, content_size)
         .map_err(|error| format!("Unable to open Wrike workspace: {error}"))?;
     emit_wrike_tab_update(app, &context);
     Ok(())
@@ -794,7 +803,10 @@ fn download_handler(
 ) -> impl Fn(tauri::Webview, DownloadEvent<'_>) -> bool + Send + Sync + 'static {
     move |webview, event| {
         match event {
-            DownloadEvent::Requested { url: _, destination } => {
+            DownloadEvent::Requested {
+                url: _,
+                destination,
+            } => {
                 if close_webview_on_finish {
                     let _ = webview.hide();
                 }
@@ -809,10 +821,12 @@ fn download_handler(
                         return false;
                     }
                 };
-                let provenance = provenance_override.clone().unwrap_or_else(|| PendingDownload {
-                    source_url: webview.url().ok().map(|current| current.to_string()),
-                    source_label: captured_provenance(&context).source_label,
-                });
+                let provenance = provenance_override
+                    .clone()
+                    .unwrap_or_else(|| PendingDownload {
+                        source_url: webview.url().ok().map(|current| current.to_string()),
+                        source_label: captured_provenance(&context).source_label,
+                    });
                 if let Ok(mut pending) = context.pending.lock() {
                     pending.insert(path.clone(), provenance);
                 }
@@ -837,7 +851,8 @@ fn download_handler(
                     } else {
                         emit_download_capture_error(
                             &app,
-                            "Wrike completed a download without reporting its saved location.".into(),
+                            "Wrike completed a download without reporting its saved location."
+                                .into(),
                         );
                     }
                 }
@@ -884,7 +899,9 @@ fn record_completed_download(
         .and_then(|extension| extension.to_str())
         .unwrap_or("")
         .to_lowercase();
-    let size_bytes = fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0);
+    let size_bytes = fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
     let record = DownloadRecord {
         id: Uuid::new_v4().to_string(),
         file_name,
@@ -987,7 +1004,9 @@ fn unique_download_path(app: &AppHandle, suggested_name: &str) -> Result<PathBuf
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("wrike-download");
-    let extension = original.extension().and_then(|extension| extension.to_str());
+    let extension = original
+        .extension()
+        .and_then(|extension| extension.to_str());
     let mut candidate = directory.join(sanitized);
     let mut suffix = 1;
     while candidate.exists() {
@@ -1110,7 +1129,10 @@ fn normalize_wrike_session(session: WrikeSession) -> WrikeSession {
     let active_tab_id = if tab_ids.iter().any(|id| id == &session.active_tab_id) {
         session.active_tab_id
     } else {
-        tab_ids.first().cloned().unwrap_or_else(|| "home".to_owned())
+        tab_ids
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "home".to_owned())
     };
     let split = session.split.filter(|split| {
         tab_ids.iter().any(|id| id == &split.left_tab_id)
@@ -1126,9 +1148,9 @@ fn normalize_wrike_session(session: WrikeSession) -> WrikeSession {
 }
 
 fn normalize_dictionary_word(word: &str) -> Option<String> {
-    let trimmed = word
-        .trim()
-        .trim_matches(|character: char| !character.is_alphanumeric() && character != '-' && character != '\'');
+    let trimmed = word.trim().trim_matches(|character: char| {
+        !character.is_alphanumeric() && character != '-' && character != '\''
+    });
     if trimmed.is_empty() {
         return None;
     }
@@ -1184,8 +1206,12 @@ fn sync_windows_spelling_dictionary(old_words: &[String], new_words: &[String]) 
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>();
         entries.retain(|entry| {
-            new_words.iter().any(|word| word.eq_ignore_ascii_case(entry))
-                || !old_words.iter().any(|word| word.eq_ignore_ascii_case(entry))
+            new_words
+                .iter()
+                .any(|word| word.eq_ignore_ascii_case(entry))
+                || !old_words
+                    .iter()
+                    .any(|word| word.eq_ignore_ascii_case(entry))
         });
         entries.extend(new_words.iter().cloned());
         entries = normalize_dictionary(entries);
@@ -1307,11 +1333,22 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
     let auto_download_literal = if auto_download { "true" } else { "false" };
     r##"
         (() => {
+          window.__abwSpellCleanup?.();
           const enabled = __ABW_SPELL_CHECK_ENABLED__;
           const abwAutoDownload = __ABW_AUTO_DOWNLOAD__;
+          let abwSpellApplyTimer = 0;
           const apply = () => {
             document.querySelectorAll('textarea, input[type="text"], [contenteditable="true"], [role="textbox"]')
-              .forEach((element) => element.spellcheck = enabled);
+              .forEach((element) => {
+                if (element.spellcheck !== enabled) element.spellcheck = enabled;
+              });
+          };
+          const scheduleApply = () => {
+            if (abwSpellApplyTimer) return;
+            abwSpellApplyTimer = window.setTimeout(() => {
+              abwSpellApplyTimer = 0;
+              apply();
+            }, 50);
           };
           const findEditable = (element) => {
             const active = document.activeElement;
@@ -1566,7 +1603,12 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
           };
           const start = () => {
             apply();
-            new MutationObserver(apply).observe(document.body, { childList: true, subtree: true });
+            const observer = new MutationObserver(scheduleApply);
+            observer.observe(document.body, { childList: true, subtree: true });
+            window.__abwSpellCleanup = () => {
+              window.clearTimeout(abwSpellApplyTimer);
+              observer.disconnect();
+            };
             if (!window.__abwContextMenuGuard) {
               document.addEventListener('contextmenu', keepWrikeEditorToolsVisible, true);
               window.__abwContextMenuGuard = true;
