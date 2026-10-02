@@ -40,6 +40,9 @@ Set-Content $sentinel 'preserve local user data'
 } | ConvertTo-Json | Set-Content (Join-Path $dataDirectory 'settings.json')
 New-Item $preferenceKey -Force | Out-Null
 New-ItemProperty $preferenceKey -Name StartupEnabled -Value 1 -PropertyType DWord -Force | Out-Null
+if (-not (Test-Path -LiteralPath $runKey)) {
+    New-Item -Path $runKey -Force | Out-Null
+}
 New-ItemProperty $runKey -Name ABW -Value ('"' + $executable + '"') -PropertyType String -Force | Out-Null
 $app = Start-Process $executable -WindowStyle Hidden -PassThru
 Start-Sleep -Seconds 8
