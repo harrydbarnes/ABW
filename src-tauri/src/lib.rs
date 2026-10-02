@@ -972,19 +972,6 @@ fn needs_quit_confirmation(enabled: bool, tab_count: usize) -> bool {
     enabled && tab_count > 1
 }
 
-#[cfg(test)]
-mod close_tests {
-    use super::needs_quit_confirmation;
-
-    #[test]
-    fn confirmation_requires_multiple_tabs_and_enabled_preference() {
-        assert!(!needs_quit_confirmation(true, 0));
-        assert!(!needs_quit_confirmation(true, 1));
-        assert!(needs_quit_confirmation(true, 2));
-        assert!(!needs_quit_confirmation(false, 2));
-    }
-}
-
 fn request_quit(app: &AppHandle, explicit: bool) {
     let Ok(settings) = read_settings(app) else {
         show_main_window(app);
@@ -1758,4 +1745,17 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running ABW");
+}
+
+#[cfg(test)]
+mod close_tests {
+    use super::needs_quit_confirmation;
+
+    #[test]
+    fn confirmation_requires_multiple_tabs_and_enabled_preference() {
+        assert!(!needs_quit_confirmation(true, 0));
+        assert!(!needs_quit_confirmation(true, 1));
+        assert!(needs_quit_confirmation(true, 2));
+        assert!(!needs_quit_confirmation(false, 2));
+    }
 }
