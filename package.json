@@ -1,13 +1,15 @@
 {
   "name": "abw",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
     "test:smoke": "node --test scripts/dependency-smoke.test.mjs scripts/desktop-regressions.test.mjs",
     "dependencies:report": "node scripts/dependency-report.mjs",
+    "release:prepare": "node scripts/release-version.mjs",
+    "release:check": "node scripts/release-version.mjs --check",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"

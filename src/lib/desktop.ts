@@ -41,6 +41,10 @@ export async function loadSettings(): Promise<Settings> {
     : Promise.resolve(DEFAULT_SETTINGS);
 }
 
+export async function loadStorageHealth(): Promise<string[]> {
+  return desktopRuntime ? invokeDesktop<string[]>("storage_health") : [];
+}
+
 export async function saveSettings(settings: Settings): Promise<Settings> {
   if (!desktopRuntime) {
     return {

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { execFileSync } from 'node:child_process';
 
 const source = readFileSync(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf8');
 const start = source.indexOf('const selectedWord = () => {');
@@ -26,4 +27,15 @@ test('dictionary ignores collapsed and empty selections', () => {
   assert.equal(selectedWord(), '');
   assert.equal(wordFromText('', 0), '');
   assert.equal(wordFromText('Wrike', 999), 'Wrike');
+});
+
+test('release checks accept matching versions and reject mismatched tags', () => {
+  const version = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+  const environment = { ...process.env, GITHUB_REF_TYPE: 'tag', GITHUB_REF_NAME: `v${version}` };
+  assert.match(execFileSync(process.execPath, ['scripts/release-version.mjs', '--check'], {
+    encoding: 'utf8', env: environment,
+  }), /is consistent/);
+  assert.throws(() => execFileSync(process.execPath, ['scripts/release-version.mjs', '--check'], {
+    env: { ...environment, GITHUB_REF_NAME: 'v0.0.0' }, stdio: 'pipe',
+  }), /does not match version/);
 });

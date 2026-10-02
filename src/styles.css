@@ -2163,6 +2163,22 @@ input:focus-visible {
   }
 }
 
+.storage-warning {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: #fff3cd;
+  color: #573f00;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.app-shell:has(> .storage-warning) { grid-template-rows: 50px auto minmax(0, 1fr); }
+
+.storage-warning span { flex: 1; min-width: 0; }
+.storage-warning button { flex: none; width: 28px; height: 28px; border: 0; background: transparent; color: inherit; cursor: pointer; }
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

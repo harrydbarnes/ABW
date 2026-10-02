@@ -139,6 +139,38 @@ on a Windows runner when local Rust/MSVC build tools are unavailable.
 - Workbooks are parsed in the trusted Rust process using `calamine 0.36`, rather than executing a
   large JavaScript parser in the UI or Wrike webview.
 
+## Releases And Recovery
+
+`npm run release:prepare -- patch` increments the app version and synchronizes
+the npm package, npm lockfile, Tauri configuration and Cargo package/lockfile.
+Use `minor` or `major` for larger releases. `npm run release:check` validates
+versions, including the Git tag in CI. Settings displays the version and build
+commit automatically; no manual UI version update is needed.
+
+Commit the prepared version, then push its matching `vX.Y.Z` tag to publish.
+Tag builds must pass audits, native tests, installer lifecycle tests and an
+upgrade from the latest older stable release before publication. Until the first
+release exists, the upgrade baseline is the latest retained older successful main
+installer artifact. Missing baselines fail visibly instead of silently skipping
+the upgrade check. Releases include a tested installer and SHA-256 checksum.
+Main builds retain artifacts for 14 days and do not publish releases or raise PRs.
+No local administrator tools or code-signing certificate are required.
+
+Before replacing existing valid settings/download metadata, ABW atomically
+saves a `.json.bak` last-known-good copy. A damaged primary file can be read
+from that backup; a persistent warning identifies the affected file. The next
+save archives the damaged original as `.corrupt-<id>.json`. If neither copy is
+valid, ABW does not reset or overwrite it: restore a known-good file and restart.
+Save failures remain visible until dismissed. These backups cover metadata, not
+the downloaded documents themselves.
+
+Windows CI runs installed-app checks for native close-to-tray, native window
+quit, and second-instance reactivation without signing in to Wrike. Rust tests
+cover tray Quit, multiple-tab confirmation/cancellation, and startup registry
+updates in an isolated per-user test key. They do not replace a manual test of
+the actual confirmation dialog with authenticated Wrike tabs. All installer
+smoke scripts refuse to run outside disposable CI.
+
 ## Dependency Checks
 
 Run `npm ci` followed by `npm run test:smoke` to check PDF worker loading,

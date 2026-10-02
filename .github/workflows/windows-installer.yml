@@ -9,6 +9,7 @@ on:
       - "docs/**"
   push:
     branches: [main]
+    tags: ['v*']
     paths-ignore:
       - "**/*.md"
       - "docs/**"
@@ -41,6 +42,9 @@ jobs:
       - name: Type-check frontend
         run: npm run typecheck
 
+      - name: Check release versions
+        run: npm run release:check
+
       - name: Check PDF and spreadsheet dependencies
         run: npm run test:smoke
 
@@ -57,10 +61,14 @@ jobs:
 
   nsis:
     needs: quality
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      short_sha: ${{ steps.metadata.outputs.short_sha }}
     runs-on: windows-latest
     timeout-minutes: 45
     permissions:
       contents: read
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -122,6 +130,17 @@ jobs:
         shell: pwsh
         run: ./scripts/installer-smoke.ps1
 
+      - name: Fetch previous tested installer
+        id: previous
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/previous-installer.ps1
+
+      - name: Check previous-version upgrade
+        shell: pwsh
+        run: ./scripts/installer-smoke.ps1 -PreviousInstaller '${{ steps.previous.outputs.previous_installer }}'
+
       - name: Create installer checksum
         shell: pwsh
         run: |
@@ -149,3 +168,27 @@ jobs:
             src-tauri/target/release/bundle/nsis/*-setup.exe.sha256
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: nsis
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+      ARTIFACT_NAME: ABW-Windows-installer-v${{ needs.nsis.outputs.version }}-${{ needs.nsis.outputs.short_sha }}
+    steps:
+      - name: Download tested installer
+        run: gh run download "$GITHUB_RUN_ID" --name "$ARTIFACT_NAME" --dir installer
+      - name: Verify checksum and publish release
+        working-directory: installer
+        run: |
+          sha256sum --check *.sha256
+          gh release create "$RELEASE_TAG" *-setup.exe *-setup.exe.sha256 \
+            --verify-tag --generate-notes --title "ABW $RELEASE_TAG" \
+            --notes "Current-user Windows installer; no administrator rights required. This build is unsigned, so Windows may display an unknown-publisher warning. Verify the SHA-256 checksum before installation."

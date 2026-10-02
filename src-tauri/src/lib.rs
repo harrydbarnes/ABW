@@ -24,8 +24,20 @@ use tauri_plugin_notification::NotificationExt;
 use url::Url;
 use uuid::Uuid;
 
+mod close_policy;
 mod persistence;
 mod startup;
+
+#[tauri::command]
+fn storage_health(app: AppHandle) -> Result<Vec<String>, String> {
+    Ok([
+        persistence::health::<Settings>(&settings_path(&app)?),
+        persistence::health::<Vec<DownloadRecord>>(&records_path(&app)?),
+    ]
+    .into_iter()
+    .flatten()
+    .collect())
+}
 
 const WRIKE_HOME: &str = "https://www.wrike.com/workspace.htm";
 const MAX_PDF_PREVIEW_BYTES: u64 = 128 * 1024 * 1024;
@@ -968,24 +980,24 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
-fn needs_quit_confirmation(enabled: bool, tab_count: usize) -> bool {
-    enabled && tab_count > 1
-}
-
 fn request_quit(app: &AppHandle, explicit: bool) {
-    let Ok(settings) = read_settings(app) else {
-        show_main_window(app);
-        return;
-    };
-    if !explicit && settings.close_to_notification_area {
+    // Corrupt preferences must not make the application impossible to quit.
+    let settings = read_settings(app).unwrap_or_default();
+    let state = app.state::<AppState>();
+    let tab_count = state.wrike_tabs.lock().map(|tabs| tabs.len()).unwrap_or(2);
+    let action = close_policy::action(
+        explicit,
+        settings.close_to_notification_area,
+        settings.confirm_before_closing_tabs,
+        tab_count,
+    );
+    if action == close_policy::CloseAction::Hide {
         if let Some(window) = app.get_window("main") {
             let _ = window.hide();
         }
         return;
     }
-    let state = app.state::<AppState>();
-    let tab_count = state.wrike_tabs.lock().map(|tabs| tabs.len()).unwrap_or(2);
-    if !needs_quit_confirmation(settings.confirm_before_closing_tabs, tab_count) {
+    if action == close_policy::CloseAction::Quit {
         app.exit(0);
         return;
     }
@@ -1005,7 +1017,7 @@ fn request_quit(app: &AppHandle, explicit: bool) {
             app.state::<AppState>()
                 .quit_prompt_open
                 .store(false, Ordering::SeqCst);
-            if confirmed {
+            if close_policy::finish_confirmation(confirmed).is_some() {
                 app.exit(0);
             }
         });
@@ -1739,23 +1751,11 @@ pub fn run() {
             read_download,
             resize_wrike_tabs,
             send_test_notification,
+            storage_health,
             update_last_wrike_session,
             update_settings,
             wrike_tab_action
         ])
         .run(tauri::generate_context!())
         .expect("error while running ABW");
-}
-
-#[cfg(test)]
-mod close_tests {
-    use super::needs_quit_confirmation;
-
-    #[test]
-    fn confirmation_requires_multiple_tabs_and_enabled_preference() {
-        assert!(!needs_quit_confirmation(true, 0));
-        assert!(!needs_quit_confirmation(true, 1));
-        assert!(needs_quit_confirmation(true, 2));
-        assert!(!needs_quit_confirmation(false, 2));
-    }
 }

@@ -24,6 +24,7 @@ import {
   isDesktopRuntime,
   loadDownloads,
   loadSettings,
+  loadStorageHealth,
   resizeWrikeTabs,
   saveSettings,
   saveWrikeSession,
@@ -43,7 +44,7 @@ import type { DownloadRecord, FileFilter, Settings, WrikeSession } from "./types
 const PreviewPanel = lazy(() => import("./features/preview/PreviewPanel"));
 const WRIKE_HOME = "https://www.wrike.com/workspace.htm";
 const READ_ONLY_URL = "https://login.wrike.com/login/?forceLogin=false&read";
-const APP_VERSION = "0.1.1";
+const APP_VERSION = import.meta.env.VITE_APP_VERSION;
 const LAUNCH_SPLASH_DURATION_MS = 2800;
 
 type Screen = "wrike" | "files" | "settings";
@@ -123,6 +124,7 @@ export function App() {
     lastWrikeSession: null,
   });
   const [notice, setNotice] = useState<string | null>(null);
+  const [storageWarning, setStorageWarning] = useState<string | null>(null);
   const [sessionPrompt, setSessionPrompt] = useState<WrikeSession | null>(null);
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [reloadingTabId, setReloadingTabId] = useState<string | null>(null);
@@ -135,6 +137,10 @@ export function App() {
   const closingTabIdsRef = useRef(new Set<string>());
   const tabIdCounterRef = useRef(0);
   const launchStartedAtRef = useRef(Date.now());
+
+  useEffect(() => {
+    if (storageWarning) setScreen("settings");
+  }, [storageWarning]);
 
   useEffect(() => {
     const splashTimer = window.setTimeout(
@@ -169,7 +175,9 @@ export function App() {
     }
     window.clearTimeout(sessionSaveTimerRef.current);
     sessionSaveTimerRef.current = window.setTimeout(() => {
-      void saveWrikeSession(currentWrikeSession()).catch(() => undefined);
+      void saveWrikeSession(currentWrikeSession()).catch((error) =>
+        setStorageWarning(`Unable to save your tab session: ${String(error)}`),
+      );
     }, 450);
     return () => window.clearTimeout(sessionSaveTimerRef.current);
   }, [activeWrikeTabId, wrikeSplit, wrikeTabs]);
@@ -187,11 +195,16 @@ export function App() {
       void loadDownloads().then((records) => {
         setDownloads(records);
         setSelectedId((current) => current ?? records[0]?.id ?? null);
-      });
+      }).catch((error) => setStorageWarning(`Unable to load your files: ${String(error)}`));
     };
     refresh();
-    void loadSettings().then(async (next) => {
+    void Promise.all([loadSettings(), loadStorageHealth()]).then(async ([next, warnings]) => {
       setSettings(next);
+      if (warnings.length) {
+        setStorageWarning(warnings.join(" "));
+        setScreen("settings");
+        return;
+      }
       if (hasRestorableSession(next.lastWrikeSession)) {
         setSessionPrompt(next.lastWrikeSession);
       }
@@ -207,7 +220,7 @@ export function App() {
           canPersistSessionRef.current = true;
         }
       }
-    });
+    }).catch((error) => setStorageWarning(`Unable to load preferences: ${String(error)}`));
     let dispose: () => void = () => undefined;
     let disposeCompleted: () => void = () => undefined;
     let disposeErrors: () => void = () => undefined;
@@ -974,7 +987,7 @@ export function App() {
       setSettings(persisted);
       setNotice("Preferences saved.");
     } catch (error) {
-      setNotice(`Unable to save preferences: ${String(error)}`);
+      setStorageWarning(`Unable to save preferences: ${String(error)}`);
     }
   }
 
@@ -991,9 +1004,13 @@ export function App() {
   async function toggleSpellCheck() {
     await closeTopbarActionsMenu();
     const spellCheck = !settings.spellCheck;
-    const persisted = await saveSettings({ ...settings, spellCheck });
-    setSettings(persisted);
-    setNotice(`Spell check ${persisted.spellCheck ? "enabled" : "disabled"}.`);
+    try {
+      const persisted = await saveSettings({ ...settings, spellCheck });
+      setSettings(persisted);
+      setNotice(`Spell check ${persisted.spellCheck ? "enabled" : "disabled"}.`);
+    } catch (error) {
+      setStorageWarning(`Unable to save spell-check preference: ${String(error)}`);
+    }
   }
 
   async function testNotification() {
@@ -1241,6 +1258,14 @@ export function App() {
           onAction={(action) => void runWindowAction(action)}
         />
       </header>
+      {storageWarning ? (
+        <div className="storage-warning" role="alert">
+          <span>{storageWarning}</span>
+          <button aria-label="Dismiss data warning" onClick={() => setStorageWarning(null)}>
+            <NavIcon kind="close" />
+          </button>
+        </div>
+      ) : null}
       {tabMenu && menuTab ? (
         <div
           className="tab-context-menu"
