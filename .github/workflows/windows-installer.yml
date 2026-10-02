@@ -115,6 +115,13 @@ jobs:
       - name: Build NSIS current-user installer
         run: npm run tauri -- build --bundles nsis -- --locked
 
+      - name: Test native persistence
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
+
+      - name: Check installer lifecycle
+        shell: pwsh
+        run: ./scripts/installer-smoke.ps1
+
       - name: Create installer checksum
         shell: pwsh
         run: |

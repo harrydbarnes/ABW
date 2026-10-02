@@ -1,6 +1,7 @@
 use calamine::{open_workbook_auto, Reader};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::HashMap,
     env, fs,
@@ -18,9 +19,13 @@ use tauri::{
     },
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, WebviewUrl, WindowEvent,
 };
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_notification::NotificationExt;
 use url::Url;
 use uuid::Uuid;
+
+mod persistence;
+mod startup;
 
 const WRIKE_HOME: &str = "https://www.wrike.com/workspace.htm";
 const MAX_PDF_PREVIEW_BYTES: u64 = 128 * 1024 * 1024;
@@ -165,6 +170,7 @@ enum WrikePane {
 #[derive(Default)]
 struct AppState {
     wrike_tabs: Mutex<HashMap<String, Arc<CaptureContext>>>,
+    quit_prompt_open: AtomicBool,
 }
 
 #[derive(Default)]
@@ -382,14 +388,22 @@ fn update_settings(
     state: State<'_, AppState>,
     mut settings: Settings,
 ) -> Result<Settings, String> {
-    let previous = read_settings(&app).unwrap_or_default();
     settings.custom_dictionary = normalize_dictionary(settings.custom_dictionary);
     settings.startup_tab_urls = normalize_startup_tab_urls(settings.startup_tab_urls);
     settings.pinned_download_ids = normalize_string_ids(settings.pinned_download_ids);
     if settings.theme.trim().is_empty() {
         settings.theme = default_theme();
     }
-    write_json(settings_path(&app)?, &settings)?;
+    let (settings, previous) =
+        persistence::update::<Settings, _>(&settings_path(&app)?, |stored| {
+            let previous = stored.clone();
+            settings.last_wrike_session = stored.last_wrike_session.clone();
+            if settings.open_abw_at_system_startup != startup::enabled()? {
+                startup::set_enabled(settings.open_abw_at_system_startup)?;
+            }
+            *stored = settings;
+            Ok(previous)
+        })?;
     if previous.custom_dictionary != settings.custom_dictionary {
         sync_windows_spelling_dictionary(&previous.custom_dictionary, &settings.custom_dictionary);
     }
@@ -415,9 +429,11 @@ fn update_settings(
 
 #[tauri::command]
 fn update_last_wrike_session(app: AppHandle, session: WrikeSession) -> Result<(), String> {
-    let mut settings = read_settings(&app).unwrap_or_default();
-    settings.last_wrike_session = Some(normalize_wrike_session(session));
-    write_json(settings_path(&app)?, &settings)
+    persistence::update::<Settings, _>(&settings_path(&app)?, |settings| {
+        settings.last_wrike_session = Some(normalize_wrike_session(session));
+        Ok(())
+    })
+    .map(|_| ())
 }
 
 #[tauri::command]
@@ -912,9 +928,10 @@ fn record_completed_download(
         source_url: provenance.source_url,
         source_label: provenance.source_label,
     };
-    let mut records = read_records(app)?;
-    records.insert(0, record.clone());
-    write_json(records_path(app)?, &records)?;
+    persistence::update::<Vec<DownloadRecord>, _>(&records_path(app)?, |records| {
+        records.insert(0, record.clone());
+        Ok(())
+    })?;
     let settings = read_settings(app)?;
     if settings.download_notifications {
         let _ = app
@@ -934,11 +951,13 @@ fn record_completed_download(
 }
 
 fn read_records(app: &AppHandle) -> Result<Vec<DownloadRecord>, String> {
-    read_json_or_default(records_path(app)?)
+    persistence::read(&records_path(app)?)
 }
 
 fn read_settings(app: &AppHandle) -> Result<Settings, String> {
-    read_json_or_default(settings_path(app)?)
+    let mut settings: Settings = persistence::read(&settings_path(app)?)?;
+    settings.open_abw_at_system_startup = startup::enabled()?;
+    Ok(settings)
 }
 
 fn show_main_window(app: &AppHandle) {
@@ -949,26 +968,60 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
-fn read_json_or_default<T>(path: PathBuf) -> Result<T, String>
-where
-    T: for<'a> Deserialize<'a> + Default,
-{
-    if !path.exists() {
-        return Ok(T::default());
-    }
-    let contents = fs::read_to_string(path)
-        .map_err(|error| format!("Unable to read application data: {error}"))?;
-    serde_json::from_str(&contents).map_err(|error| format!("Invalid application data: {error}"))
+fn needs_quit_confirmation(enabled: bool, tab_count: usize) -> bool {
+    enabled && tab_count > 1
 }
 
-fn write_json<T: Serialize>(path: PathBuf, value: &T) -> Result<(), String> {
-    if let Some(directory) = path.parent() {
-        fs::create_dir_all(directory)
-            .map_err(|error| format!("Unable to create application directory: {error}"))?;
+#[cfg(test)]
+mod close_tests {
+    use super::needs_quit_confirmation;
+
+    #[test]
+    fn confirmation_requires_multiple_tabs_and_enabled_preference() {
+        assert!(!needs_quit_confirmation(true, 0));
+        assert!(!needs_quit_confirmation(true, 1));
+        assert!(needs_quit_confirmation(true, 2));
+        assert!(!needs_quit_confirmation(false, 2));
     }
-    let contents = serde_json::to_vec_pretty(value)
-        .map_err(|error| format!("Unable to serialise application data: {error}"))?;
-    fs::write(path, contents).map_err(|error| format!("Unable to save application data: {error}"))
+}
+
+fn request_quit(app: &AppHandle, explicit: bool) {
+    let Ok(settings) = read_settings(app) else {
+        show_main_window(app);
+        return;
+    };
+    if !explicit && settings.close_to_notification_area {
+        if let Some(window) = app.get_window("main") {
+            let _ = window.hide();
+        }
+        return;
+    }
+    let state = app.state::<AppState>();
+    let tab_count = state.wrike_tabs.lock().map(|tabs| tabs.len()).unwrap_or(2);
+    if !needs_quit_confirmation(settings.confirm_before_closing_tabs, tab_count) {
+        app.exit(0);
+        return;
+    }
+    if state.quit_prompt_open.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    app.clone()
+        .dialog()
+        .message("Close all open Wrike tabs and quit ABW?")
+        .title("Quit ABW")
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Quit".into(),
+            "Cancel".into(),
+        ))
+        .show(move |confirmed| {
+            app.state::<AppState>()
+                .quit_prompt_open
+                .store(false, Ordering::SeqCst);
+            if confirmed {
+                app.exit(0);
+            }
+        });
 }
 
 fn application_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1163,11 +1216,15 @@ fn add_custom_dictionary_word(app: &AppHandle, url: &Url) -> Result<(), String> 
         .find_map(|(key, value)| (key == "word").then(|| value.into_owned()))
         .and_then(|word| normalize_dictionary_word(&word))
         .ok_or_else(|| "No dictionary word was provided.".to_owned())?;
-    let mut settings = read_settings(app)?;
-    let previous = settings.custom_dictionary.clone();
-    settings.custom_dictionary.push(word);
-    settings.custom_dictionary = normalize_dictionary(settings.custom_dictionary);
-    write_json(settings_path(app)?, &settings)?;
+    let (settings, previous) =
+        persistence::update::<Settings, _>(&settings_path(app)?, |settings| {
+            let previous = settings.custom_dictionary.clone();
+            settings.custom_dictionary.push(word);
+            settings.custom_dictionary =
+                normalize_dictionary(std::mem::take(&mut settings.custom_dictionary));
+            settings.open_abw_at_system_startup = startup::enabled()?;
+            Ok(previous)
+        })?;
     sync_windows_spelling_dictionary(&previous, &settings.custom_dictionary);
     app.emit("settings-updated", settings)
         .map_err(|error| format!("Unable to refresh settings: {error}"))
@@ -1379,14 +1436,14 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
           const selectedWord = () => {
             const selection = window.getSelection();
             const text = selection && !selection.isCollapsed ? selection.toString() : "";
-            return (text.match(/[\\p{L}\\p{N}][\\p{L}\\p{N}'-]*/u) || [])[0] || "";
+            return (text.match(/[\p{L}\p{N}][\p{L}\p{N}'-]*/u) || [])[0] || "";
           };
           const wordFromText = (text, offset) => {
             if (!text) return "";
             let start = Math.max(0, Math.min(offset, text.length));
             let end = start;
-            while (start > 0 && /[\\p{L}\\p{N}'-]/u.test(text[start - 1])) start -= 1;
-            while (end < text.length && /[\\p{L}\\p{N}'-]/u.test(text[end])) end += 1;
+            while (start > 0 && /[\p{L}\p{N}'-]/u.test(text[start - 1])) start -= 1;
+            while (end < text.length && /[\p{L}\p{N}'-]/u.test(text[end])) end += 1;
             return text.slice(start, end);
           };
           const nearestTextWord = (root, event) => {
@@ -1396,7 +1453,7 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
             while (walker.nextNode()) {
               const node = walker.currentNode;
               const text = node.textContent || "";
-              if (!/[\\p{L}\\p{N}]/u.test(text)) continue;
+              if (!/[\p{L}\p{N}]/u.test(text)) continue;
               const range = document.createRange();
               range.selectNodeContents(node);
               const rects = Array.from(range.getClientRects());
@@ -1637,8 +1694,12 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            show_main_window(app)
+        }))
         .manage(AppState::default())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let show_item = MenuItem::with_id(app, "show", "Show ABW", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit ABW", true, None::<&str>)?;
@@ -1649,7 +1710,7 @@ pub fn run() {
                 .tooltip("ABW")
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_main_window(app),
-                    "quit" => app.exit(0),
+                    "quit" => request_quit(app, true),
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -1673,13 +1734,8 @@ pub fn run() {
                 return;
             }
             if let WindowEvent::CloseRequested { api, .. } = event {
-                let close_to_notification_area = read_settings(window.app_handle())
-                    .map(|settings| settings.close_to_notification_area)
-                    .unwrap_or(true);
-                if close_to_notification_area {
-                    api.prevent_close();
-                    let _ = window.hide();
-                }
+                api.prevent_close();
+                request_quit(window.app_handle(), false);
             }
         })
         .invoke_handler(tauri::generate_handler![

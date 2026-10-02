@@ -30,7 +30,7 @@ export function SettingsPanel({ appVersion, settings, onChange, onTestNotificati
         />
         <SettingToggle
           checked={settings.openAbwAtSystemStartup}
-          description="Installer preference only. To avoid Defender persistence warnings, ABW does not edit Windows startup while it is running."
+          description="Start ABW automatically when you sign in to Windows."
           label="Open ABW app at system startup"
           onChange={(openAbwAtSystemStartup) => onChange({ ...settings, openAbwAtSystemStartup })}
         />
@@ -42,7 +42,7 @@ export function SettingsPanel({ appVersion, settings, onChange, onTestNotificati
         />
         <SettingToggle
           checked={settings.confirmBeforeClosingTabs}
-          description="Ask for confirmation before quitting when more than one Wrike tab is open and the app is not set to close to the notification area."
+          description="Ask before quitting when more than one Wrike tab is open. Closing to the notification area keeps your tabs running."
           label="Confirm before closing with multiple tabs open"
           onChange={(confirmBeforeClosingTabs) => onChange({ ...settings, confirmBeforeClosingTabs })}
         />

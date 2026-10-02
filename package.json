@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
-    "test:smoke": "node --test scripts/dependency-smoke.test.mjs",
+    "test:smoke": "node --test scripts/dependency-smoke.test.mjs scripts/desktop-regressions.test.mjs",
     "dependencies:report": "node scripts/dependency-report.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",

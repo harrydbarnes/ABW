@@ -804,14 +804,6 @@ export function App() {
       await appWindow.toggleMaximize();
       setIsWindowMaximized(await appWindow.isMaximized());
     } else {
-      if (
-        settings.confirmBeforeClosingTabs &&
-        !settings.closeToNotificationArea &&
-        wrikeTabsRef.current.length > 1 &&
-        !window.confirm(`Close ABW? You have ${wrikeTabsRef.current.length} tabs open.`)
-      ) {
-        return;
-      }
       await appWindow.close();
     }
   }
@@ -977,15 +969,13 @@ export function App() {
     wrikeTabs.find((tab) => tab.id === activeWrikeTabId) ?? wrikeTabs[0] ?? null;
 
   async function updateSettings(next: Settings) {
-    const startupPreferenceChanged =
-      settings.openAbwAtSystemStartup !== next.openAbwAtSystemStartup;
-    const persisted = await saveSettings(next);
-    setSettings(persisted);
-    setNotice(
-      startupPreferenceChanged
-        ? "Startup preference saved. The installer or Windows Startup Apps applies it."
-        : "Preferences saved.",
-    );
+    try {
+      const persisted = await saveSettings(next);
+      setSettings(persisted);
+      setNotice("Preferences saved.");
+    } catch (error) {
+      setNotice(`Unable to save preferences: ${String(error)}`);
+    }
   }
 
   function togglePinnedDownload(id: string) {
