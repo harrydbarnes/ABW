@@ -49,16 +49,16 @@ export default function PdfPreview({
     }
     let live = true;
     let loadingTask: PDFLoadingTask | null = null;
-    let loadedDocument: PDFDocumentProxy | null = null;
     setRendering(true);
     setProblem(null);
     void loadPdfJs()
       .then(async (pdfjs) => {
+        if (!live) {
+          return;
+        }
         loadingTask = pdfjs.getDocument({ data: bytes.slice() });
         const loaded = await loadingTask.promise;
-        loadedDocument = loaded;
         if (!live) {
-          await loaded.destroy();
           return;
         }
         setPdfDocument(loaded);
@@ -74,9 +74,7 @@ export default function PdfPreview({
     return () => {
       live = false;
       setPdfDocument(null);
-      if (loadedDocument) {
-        void loadedDocument.destroy();
-      } else if (loadingTask) {
+      if (loadingTask) {
         void loadingTask.destroy();
       }
     };
