@@ -41,8 +41,19 @@ jobs:
       - name: Type-check frontend
         run: npm run typecheck
 
+      - name: Check PDF and spreadsheet dependencies
+        run: npm run test:smoke
+
       - name: Audit npm dependencies
         run: npm audit --audit-level=high
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-audit@0.22.2
+
+      - name: Audit Rust dependencies
+        run: cargo audit --file src-tauri/Cargo.lock
 
   nsis:
     needs: quality
@@ -63,7 +74,7 @@ jobs:
           cache: npm
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
           toolchain: 1.99.0
           components: rustfmt, clippy

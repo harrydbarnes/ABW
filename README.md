@@ -136,5 +136,30 @@ on a Windows runner when local Rust/MSVC build tools are unavailable.
 - PDF preview is capped at 512 MB with a displayed size explanation when exceeded; spreadsheet
   output is capped to 250 rows and 50 columns per sheet in the current viewer to keep the UI
   responsive.
-- Workbooks are parsed in the trusted Rust process using `calamine 0.35`, rather than executing a
+- Workbooks are parsed in the trusted Rust process using `calamine 0.36`, rather than executing a
   large JavaScript parser in the UI or Wrike webview.
+
+## Dependency Checks
+
+Run `npm ci` followed by `npm run test:smoke` to check PDF worker loading,
+rendering, teardown, and ExcelJS workbook round trips. The smoke suite uses
+PDF.js's Node compatibility build; it does not replace testing previews in the
+installed Windows app. CI runs these checks before building an installer.
+
+Run `cargo audit --file src-tauri/Cargo.lock` with cargo-audit installed to check
+Rust dependencies against the current RustSec database. CI installs a pinned
+audit tool and fails on known vulnerabilities; informational warnings remain
+visible without being suppressed.
+
+`npm run dependencies:report` reports npm versions, compatible Cargo updates,
+and newer stable GitHub Action releases without changing dependency files.
+The weekly dependency-health workflow runs on Mondays at 08:23 UTC and also
+audits npm and Rust dependencies. Results appear in the Actions job summary and
+logs; it creates no PRs, issues, installers, or uploaded artifacts.
+
+Dependabot's weekly schedules and compatible-update groups are configured with
+`open-pull-requests-limit: 0`, which disables version-update PRs. Those groups
+are dormant unless PRs are deliberately enabled later. Dependabot security
+updates must also remain disabled in the repository's code-security settings;
+the PR limit does not apply to security updates. Keep Dependabot alerts enabled
+for visibility. The weekly workflow is the active report-only alternative.

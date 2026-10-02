@@ -1,0 +1,49 @@
+name: Weekly dependency health
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 8 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-health-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-audit@0.22.2
+
+      - name: Report available dependency updates
+        run: npm run dependencies:report
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Audit npm dependencies
+        if: ${{ !cancelled() }}
+        run: npm audit --audit-level=high
+
+      - name: Audit Rust dependencies
+        if: ${{ !cancelled() }}
+        run: cargo audit --file src-tauri/Cargo.lock
