@@ -91,6 +91,10 @@ export default function PdfPreview({
     void pdfDocument
       .getPage(Math.min(page, pdfDocument.numPages))
       .then(async (pdfPage) => {
+        if (!live) {
+          pdfPage.cleanup();
+          return;
+        }
         const targetPage = Math.min(page, pdfDocument.numPages);
         if (targetPage !== page) {
           setPage(targetPage);
