@@ -1,6 +1,9 @@
-param([string] $PreviousInstaller)
+param([string] $PreviousInstaller, [string] $ExpectedExecutableHash)
 $ErrorActionPreference = 'Stop'
 if (-not $env:CI) { throw 'Installer smoke checks must run on a disposable CI runner.' }
+if ($PreviousInstaller -and $ExpectedExecutableHash -notmatch '^[A-Fa-f0-9]{64}$') {
+    throw 'Previous-version upgrades require the verified current installer executable hash.'
+}
 $installers = @(Get-ChildItem 'src-tauri/target/release/bundle/nsis/*-setup.exe' -File)
 if ($installers.Count -ne 1) { throw 'Expected one installer.' }
 $directory = Join-Path $env:RUNNER_TEMP 'ABW-installer-smoke'
@@ -26,6 +29,15 @@ $script:setupPath = if ($PreviousInstaller) { (Resolve-Path -LiteralPath $Previo
 Invoke-Setup @('/S', "/D=$directory")
 $executable = Join-Path $directory 'ABW.exe'
 if (-not (Test-Path $executable)) { throw 'Fresh installation did not create ABW.exe.' }
+if (-not $PreviousInstaller) {
+    $version = (Get-Content 'src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json).version
+    $installedVersion = (Get-Item $executable).VersionInfo.ProductVersion
+    if ($installedVersion -notmatch ('^' + [regex]::Escape($version) + '(?:\.0)?$')) {
+        throw "Fresh installer version mismatch: expected $version, found $installedVersion."
+    }
+    $ExpectedExecutableHash = (Get-FileHash $executable -Algorithm SHA256).Hash
+    if ($env:GITHUB_OUTPUT) { "executable_hash=$ExpectedExecutableHash" >> $env:GITHUB_OUTPUT }
+}
 Assert-Startup $false
 $dataDirectory = Join-Path $env:APPDATA 'net.insidemedia.abw'
 if (Test-Path $dataDirectory) { throw 'Refusing to overwrite existing application data.' }
@@ -50,13 +62,18 @@ if ($app.HasExited) { throw 'Installed app failed to stay running.' }
 $script:setupPath = $installers[0].FullName
 Invoke-Setup @('/S', '/UPDATE', "/D=$directory")
 Assert-Startup $true
-if ((Get-FileHash $executable).Hash -ne (Get-FileHash 'src-tauri/target/release/ABW.exe').Hash) { throw 'Upgrade did not install the new executable.' }
+if ((Get-FileHash $executable -Algorithm SHA256).Hash -ne $ExpectedExecutableHash) {
+    throw 'Upgrade executable differs from the verified fresh current installation.'
+}
 if ((Get-Content $sentinel -Raw).Trim() -ne 'preserve local user data') { throw 'Upgrade changed local user data.' }
 if ((Get-Content (Join-Path $dataDirectory 'settings.json') -Raw | ConvertFrom-Json).customDictionary -notcontains 'InstallerSmoke') { throw 'Upgrade lost saved preferences.' }
 Remove-ItemProperty $runKey -Name ABW
 Set-ItemProperty $preferenceKey -Name StartupEnabled -Value 0
 Invoke-Setup @('/S', '/UPDATE', "/D=$directory")
 Assert-Startup $false
+if ((Get-FileHash $executable -Algorithm SHA256).Hash -ne $ExpectedExecutableHash) {
+    throw 'Startup-disabled upgrade executable differs from the verified fresh current installation.'
+}
 ./scripts/native-workflow-smoke.ps1 -Executable $executable -DataDirectory $dataDirectory
 $uninstaller = Join-Path $directory 'uninstall.exe'
 if (-not (Test-Path $uninstaller)) { throw 'Uninstaller was not created.' }

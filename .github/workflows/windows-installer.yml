@@ -127,6 +127,7 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
 
       - name: Check installer lifecycle
+        id: lifecycle
         shell: pwsh
         run: ./scripts/installer-smoke.ps1
 
@@ -139,7 +140,10 @@ jobs:
 
       - name: Check previous-version upgrade
         shell: pwsh
-        run: ./scripts/installer-smoke.ps1 -PreviousInstaller '${{ steps.previous.outputs.previous_installer }}'
+        env:
+          PREVIOUS_INSTALLER: ${{ steps.previous.outputs.previous_installer }}
+          EXPECTED_EXECUTABLE_HASH: ${{ steps.lifecycle.outputs.executable_hash }}
+        run: ./scripts/installer-smoke.ps1 -PreviousInstaller $env:PREVIOUS_INSTALLER -ExpectedExecutableHash $env:EXPECTED_EXECUTABLE_HASH
 
       - name: Create installer checksum
         shell: pwsh
