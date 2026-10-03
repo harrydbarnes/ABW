@@ -1,5 +1,6 @@
 param([string] $PreviousInstaller, [string] $ExpectedExecutableHash)
 $ErrorActionPreference = 'Stop'
+$env:ABW_CI_TRACE = '1'
 if (-not $env:CI) { throw 'Installer smoke checks must run on a disposable CI runner.' }
 if ($PreviousInstaller -and $ExpectedExecutableHash -notmatch '^[A-Fa-f0-9]{64}$') {
     throw 'Previous-version upgrades require the verified current installer executable hash.'

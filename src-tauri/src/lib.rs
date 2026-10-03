@@ -991,6 +991,13 @@ fn request_quit(app: &AppHandle, explicit: bool) {
         settings.confirm_before_closing_tabs,
         tab_count,
     );
+    trace_native_event(
+        app,
+        &format!(
+            "close explicit={explicit} tray={} confirm={} tabs={tab_count} action={action:?}",
+            settings.close_to_notification_area, settings.confirm_before_closing_tabs
+        ),
+    );
     if action == close_policy::CloseAction::Hide {
         if let Some(window) = app.get_window("main") {
             let _ = window.hide();
@@ -1021,6 +1028,29 @@ fn request_quit(app: &AppHandle, explicit: bool) {
                 app.exit(0);
             }
         });
+}
+
+fn trace_native_event(app: &AppHandle, event: &str) {
+    if env::var("ABW_CI_TRACE").as_deref() != Ok("1") {
+        return;
+    }
+    use std::io::Write;
+    if let Ok(directory) = application_dir(app) {
+        let _ = fs::create_dir_all(&directory);
+        if let Ok(mut file) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(directory.join("native-ci.log"))
+        {
+            let _ = writeln!(
+                file,
+                "pid={} version={} data={} {event}",
+                std::process::id(),
+                env!("CARGO_PKG_VERSION"),
+                directory.display()
+            );
+        }
+    }
 }
 
 fn application_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1700,6 +1730,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            trace_native_event(app.handle(), "setup");
             let show_item = MenuItem::with_id(app, "show", "Show ABW", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit ABW", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
@@ -1728,15 +1759,6 @@ pub fn run() {
             tray.build(app)?;
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if window.label() != "main" {
-                return;
-            }
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                request_quit(window.app_handle(), false);
-            }
-        })
         .invoke_handler(tauri::generate_handler![
             close_wrike_tab,
             focus_wrike_tab,
@@ -1756,6 +1778,20 @@ pub fn run() {
             update_settings,
             wrike_tab_action
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running ABW");
+        .build(tauri::generate_context!())
+        .expect("error while building ABW")
+        .run(|app, event| {
+            if let tauri::RunEvent::WindowEvent {
+                label,
+                event: WindowEvent::CloseRequested { api, .. },
+                ..
+            } = event
+            {
+                trace_native_event(app, &format!("native close label={label}"));
+                if label == "main" {
+                    api.prevent_close();
+                    request_quit(app, false);
+                }
+            }
+        });
 }

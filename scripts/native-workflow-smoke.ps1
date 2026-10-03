@@ -47,7 +47,11 @@ $deadline = [DateTime]::UtcNow.AddSeconds(10)
 while (-not $app.HasExited -and [AbwWindow]::IsWindowVisible($window) -and [DateTime]::UtcNow -lt $deadline) {
     Start-Sleep -Milliseconds 250
 }
-if ($app.HasExited) { throw "Native close exited the window-owning process $($app.Id), exit code $($app.ExitCode)." }
+if ($app.HasExited) {
+    Get-Content (Join-Path $DataDirectory 'native-ci.log') -ErrorAction Continue | Write-Output
+    Get-Content $settingsPath | Write-Output
+    throw "Native close exited the window-owning process $($app.Id), exit code $($app.ExitCode)."
+}
 if ([AbwWindow]::IsWindowVisible($window)) { throw "Native close left window $window visible for process $($app.Id)." }
 $second = Start-Process $Executable -WindowStyle Hidden -PassThru
 if (-not $second.WaitForExit(15000) -or $second.ExitCode -ne 0) { throw 'Second instance did not exit cleanly.' }
