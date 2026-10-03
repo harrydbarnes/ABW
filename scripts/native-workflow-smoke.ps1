@@ -25,7 +25,16 @@ $settings = @{
     customDictionary = @(); theme = 'default'; startupTabUrls = @(); pinnedDownloadIds = @()
 }
 $settings | ConvertTo-Json | Set-Content $settingsPath
-$app = Start-Process $Executable -WindowStyle Hidden -PassThru
+$resolvedExecutable = (Resolve-Path -LiteralPath $Executable).Path
+# An update can leave a running instance; track the window-owning process,
+# not the short-lived launcher that the single-instance plugin closes.
+$instances = @(Get-Process | Where-Object {
+    $_.ProcessName -ieq 'ABW' -and $_.Path -ieq $resolvedExecutable
+})
+if ($instances.Count -gt 1) { throw 'Multiple ABW instances are running before the native workflow test.' }
+$app = if ($instances.Count -eq 1) { $instances[0] } else {
+    Start-Process $Executable -WindowStyle Hidden -PassThru
+}
 $deadline = [DateTime]::UtcNow.AddSeconds(30)
 do {
     Start-Sleep -Milliseconds 250
@@ -34,8 +43,12 @@ do {
 } until ($window -ne [IntPtr]::Zero -or $app.HasExited -or [DateTime]::UtcNow -gt $deadline)
 if ($app.HasExited -or $window -eq [IntPtr]::Zero) { throw 'Installed app has no main window.' }
 [AbwWindow]::Close($window)
-Start-Sleep -Seconds 1
-if ($app.HasExited -or [AbwWindow]::IsWindowVisible($window)) { throw 'Native close did not keep ABW running in the tray.' }
+$deadline = [DateTime]::UtcNow.AddSeconds(10)
+while (-not $app.HasExited -and [AbwWindow]::IsWindowVisible($window) -and [DateTime]::UtcNow -lt $deadline) {
+    Start-Sleep -Milliseconds 250
+}
+if ($app.HasExited) { throw "Native close exited the window-owning process $($app.Id), exit code $($app.ExitCode)." }
+if ([AbwWindow]::IsWindowVisible($window)) { throw "Native close left window $window visible for process $($app.Id)." }
 $second = Start-Process $Executable -WindowStyle Hidden -PassThru
 if (-not $second.WaitForExit(15000) -or $second.ExitCode -ne 0) { throw 'Second instance did not exit cleanly.' }
 $deadline = [DateTime]::UtcNow.AddSeconds(10)
