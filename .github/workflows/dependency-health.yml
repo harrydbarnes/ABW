@@ -23,7 +23,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
 
@@ -31,7 +31,7 @@ jobs:
         run: npm ci
 
       - name: Install cargo-audit
-        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
           tool: cargo-audit@0.22.2
 
@@ -42,7 +42,7 @@ jobs:
 
       - name: Audit npm dependencies
         if: ${{ !cancelled() }}
-        run: npm audit --audit-level=high
+        run: npm audit --audit-level=moderate
 
       - name: Audit Rust dependencies
         if: ${{ !cancelled() }}
