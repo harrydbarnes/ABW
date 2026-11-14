@@ -39,3 +39,17 @@ test('release checks accept matching versions and reject mismatched tags', () =>
     env: { ...environment, GITHUB_REF_NAME: 'v0.0.0' }, stdio: 'pipe',
   }), /does not match version/);
 });
+
+test('tauri updater config specifies valid minisign key, HTTPS GitHub endpoint, and passive install mode', () => {
+  const tauriConf = JSON.parse(readFileSync(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'));
+  assert.equal(tauriConf.bundle?.createUpdaterArtifacts, true);
+  const updater = tauriConf.plugins?.updater;
+  assert.ok(updater, 'plugins.updater must be configured');
+  const decodedKey = Buffer.from(updater.pubkey, 'base64').toString('utf8');
+  assert.match(decodedKey, /^untrusted comment: minisign public key:/);
+  assert.deepEqual(updater.endpoints, [
+    'https://github.com/harrydbarnes/ABW/releases/latest/download/latest.json',
+  ]);
+  assert.equal(updater.windows?.installMode, 'passive');
+});
+

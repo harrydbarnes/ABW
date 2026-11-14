@@ -136,25 +136,29 @@ on a Windows runner when local Rust/MSVC build tools are unavailable.
 - PDF preview is capped at 512 MB with a displayed size explanation when exceeded; spreadsheet
   output is capped to 250 rows and 50 columns per sheet in the current viewer to keep the UI
   responsive.
-- Workbooks are parsed in the trusted Rust process using `calamine 0.36`, rather than executing a
+- Workbooks are parsed in the trusted Rust process using `calamine 0.38`, rather than executing a
   large JavaScript parser in the UI or Wrike webview.
+- In-app updates download `latest.json` and the NSIS installer from HTTPS GitHub Releases and verify
+  a cryptographic Tauri minisign signature against the embedded public key in `src-tauri/tauri.conf.json`
+  before launching passive upgrades.
 
 ## Releases And Recovery
 
 `npm run release:prepare -- patch` increments the app version and synchronizes
 the npm package, npm lockfile, Tauri configuration and Cargo package/lockfile.
 Use `minor` or `major` for larger releases. `npm run release:check` validates
-versions, including the Git tag in CI. Settings displays the version and build
-commit automatically; no manual UI version update is needed.
+versions, including the Git tag in CI. Settings displays the version automatically;
+no manual UI version update is needed.
 
 Commit the prepared version, then push its matching `vX.Y.Z` tag to publish.
-Tag builds must pass audits, native tests, installer lifecycle tests and an
-upgrade from the latest older stable release before publication. Until the first
-release exists, the upgrade baseline is the latest retained older successful main
-installer artifact. Missing baselines fail visibly instead of silently skipping
-the upgrade check. Releases include a tested installer and SHA-256 checksum.
-Main builds retain artifacts for 14 days and do not publish releases or raise PRs.
-No local administrator tools or code-signing certificate are required.
+Tag builds require the `TAURI_SIGNING_PRIVATE_KEY` repository secret and must pass
+audits, native tests, and installer lifecycle tests before publication. Each
+published release attaches the tested NSIS installer, `.sha256` checksum, `.sig`
+updater signature, and generated `latest.json` manifest so installed copies can
+update in-app (both automatically via a quiet launch check and on demand in
+`Settings > App updates`). Main builds retain artifacts for 90 days and do not
+publish releases or raise PRs. No local administrator tools or Windows code-signing
+certificate are required.
 
 Before replacing existing valid settings/download metadata, ABW atomically
 saves a `.json.bak` last-known-good copy. A damaged primary file can be read

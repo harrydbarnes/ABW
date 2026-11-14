@@ -22,6 +22,7 @@ $settings = @{
     spellCheck = $true; launchWrikeOnStart = $false; downloadNotifications = $false
     openAbwAtSystemStartup = $false; closeToNotificationArea = $true
     confirmBeforeClosingTabs = $true; openDownloadedFilesAutomatically = $false
+    autoCheckForUpdates = $false
     customDictionary = @(); theme = 'default'; startupTabUrls = @(); pinnedDownloadIds = @()
 }
 $settings | ConvertTo-Json | Set-Content $settingsPath

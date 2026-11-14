@@ -1,14 +1,25 @@
 import { useState } from "react";
-import { APP_THEMES, type AppThemeId, type Settings } from "../../types";
+import { APP_THEMES, type AppThemeId, type AppUpdateState, type Settings } from "../../types";
 
 interface Props {
   appVersion: string;
   settings: Settings;
+  updateState: AppUpdateState;
   onChange: (next: Settings) => void;
+  onCheckForUpdates: () => void;
+  onInstallUpdate: () => void;
   onTestNotification: () => void;
 }
 
-export function SettingsPanel({ appVersion, settings, onChange, onTestNotification }: Props) {
+export function SettingsPanel({
+  appVersion,
+  settings,
+  updateState,
+  onChange,
+  onCheckForUpdates,
+  onInstallUpdate,
+  onTestNotification,
+}: Props) {
   return (
     <section className="settings-panel">
       <header>
@@ -58,7 +69,19 @@ export function SettingsPanel({ appVersion, settings, onChange, onTestNotificati
           label="Open downloaded files automatically"
           onChange={(openDownloadedFilesAutomatically) => onChange({ ...settings, openDownloadedFilesAutomatically })}
         />
+        <SettingToggle
+          checked={settings.autoCheckForUpdates}
+          description="Check GitHub Releases quietly when ABW opens and show a prompt in the title bar when a newer version is ready."
+          label="Check for updates automatically"
+          onChange={(autoCheckForUpdates) => onChange({ ...settings, autoCheckForUpdates })}
+        />
       </div>
+      <AppUpdateSettings
+        appVersion={appVersion}
+        onCheckForUpdates={onCheckForUpdates}
+        onInstallUpdate={onInstallUpdate}
+        updateState={updateState}
+      />
       <StartupTabsSettings
         urls={settings.startupTabUrls}
         onChange={(startupTabUrls) => onChange({ ...settings, startupTabUrls })}
@@ -94,6 +117,115 @@ export function SettingsPanel({ appVersion, settings, onChange, onTestNotificati
         ABW v{appVersion} · Questions or support: Harry Barnes
       </footer>
     </section>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) {
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatUpdateDate(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return date.toLocaleString(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function AppUpdateSettings({
+  appVersion,
+  updateState,
+  onCheckForUpdates,
+  onInstallUpdate,
+}: {
+  appVersion: string;
+  updateState: AppUpdateState;
+  onCheckForUpdates: () => void;
+  onInstallUpdate: () => void;
+}) {
+  const { phase, latestVersion, notes, pubDate, checkedAt, downloadedBytes, totalBytes, error } =
+    updateState;
+  const isBusy = phase === "checking" || phase === "downloading" || phase === "installing";
+  const progressPercent =
+    totalBytes && totalBytes > 0
+      ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100))
+      : null;
+  const releaseDate = formatUpdateDate(pubDate);
+  const checkedTime = checkedAt
+    ? new Date(checkedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+    : null;
+
+  let summary = `Running ABW v${appVersion}.`;
+  if (phase === "checking") {
+    summary = `Checking GitHub Releases for a newer version than v${appVersion}...`;
+  } else if (phase === "available" && latestVersion) {
+    summary = `ABW v${latestVersion} is ready to install${releaseDate ? ` (released ${releaseDate})` : ""}.`;
+  } else if (phase === "downloading") {
+    summary =
+      progressPercent !== null && totalBytes
+        ? `Downloading ABW v${latestVersion ?? ""}: ${formatBytes(downloadedBytes)} of ${formatBytes(totalBytes)} (${progressPercent}%).`
+        : `Downloading ABW v${latestVersion ?? ""} (${formatBytes(downloadedBytes)})...`;
+  } else if (phase === "installing") {
+    summary = `Verifying signature and installing ABW v${latestVersion ?? ""}. ABW will restart automatically.`;
+  } else if (phase === "up-to-date") {
+    summary = `You're up to date on ABW v${appVersion}${checkedTime ? ` · Last checked at ${checkedTime}` : ""}.`;
+  } else if (phase === "no-release") {
+    summary = `Running ABW v${appVersion}. No published release was found on GitHub Releases yet.`;
+  } else if (phase === "error") {
+    summary = error || "Unable to check for updates right now.";
+  }
+
+  return (
+    <div className="update-panel">
+      <div className="update-panel-header">
+        <div>
+          <h2>App updates</h2>
+          <p className={phase === "error" ? "update-error" : undefined}>{summary}</p>
+        </div>
+        <div className="update-actions">
+          {(phase === "available" || (phase === "error" && latestVersion)) && latestVersion ? (
+            <button
+              className="primary-action"
+              disabled={isBusy}
+              onClick={onInstallUpdate}
+            >
+              Install v{latestVersion}
+            </button>
+          ) : null}
+          <button className="secondary-action" disabled={isBusy} onClick={onCheckForUpdates}>
+            {phase === "checking" ? "Checking..." : "Check for updates"}
+          </button>
+        </div>
+      </div>
+      {phase === "downloading" || phase === "installing" ? (
+        <div
+          aria-label="Update download progress"
+          aria-valuemax={100}
+          aria-valuemin={0}
+          aria-valuenow={phase === "installing" ? 100 : progressPercent ?? undefined}
+          className="update-progress"
+          role="progressbar"
+        >
+          <div
+            className={`update-progress-fill ${progressPercent === null && phase === "downloading" ? "indeterminate" : ""}`}
+            style={{ width: `${phase === "installing" ? 100 : progressPercent ?? 35}%` }}
+          />
+        </div>
+      ) : null}
+      {notes && (phase === "available" || phase === "downloading" || phase === "installing") ? (
+        <pre className="update-notes">{notes}</pre>
+      ) : null}
+    </div>
   );
 }
 

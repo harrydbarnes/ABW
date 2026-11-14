@@ -771,6 +771,19 @@ input:focus-visible {
   filter: brightness(1.08);
 }
 
+.titlebar-update-toast {
+  min-width: 240px;
+}
+
+.settings-update-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: #4cd97b;
+  box-shadow: 0 0 0 2px rgb(76 217 123 / 22%);
+}
+
 .nav-item {
   position: relative;
   height: 34px;
@@ -1843,6 +1856,7 @@ input:focus-visible {
 
 .storage-note,
 .notification-note,
+.update-panel,
 .theme-panel,
 .startup-tabs-panel,
 .dictionary-panel {
@@ -1855,6 +1869,7 @@ input:focus-visible {
 
 .storage-note h2,
 .notification-note h2,
+.update-panel h2,
 .theme-panel h2,
 .startup-tabs-panel h2,
 .dictionary-panel h2 {
@@ -1864,6 +1879,7 @@ input:focus-visible {
 
 .storage-note p,
 .notification-note p,
+.update-panel p,
 .theme-panel p,
 .startup-tabs-panel p,
 .dictionary-panel p {
@@ -2110,6 +2126,92 @@ input:focus-visible {
   background: #fff;
   font-size: 13px;
   font-weight: 550;
+}
+
+.secondary-action:disabled,
+.primary-action:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.primary-action {
+  min-width: 148px;
+  height: 40px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: #fff;
+  background: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.primary-action:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.update-panel-header {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.update-panel-header > div:first-child {
+  flex: 1 1 280px;
+}
+
+.update-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.update-error {
+  color: #a83c42 !important;
+}
+
+.update-progress {
+  margin-top: 16px;
+  height: 7px;
+  border-radius: 99px;
+  overflow: hidden;
+  background: #e6ecf6;
+}
+
+.update-progress-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: var(--accent);
+  transition: width 150ms ease;
+}
+
+.update-progress-fill.indeterminate {
+  animation: abw-update-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes abw-update-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.update-notes {
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: #31425d;
+  font: 12px/1.55 "Segoe UI", system-ui, sans-serif;
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
 }
 
 .toast {

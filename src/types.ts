@@ -22,11 +22,56 @@ export interface Settings {
   closeToNotificationArea: boolean;
   confirmBeforeClosingTabs: boolean;
   openDownloadedFilesAutomatically: boolean;
+  autoCheckForUpdates: boolean;
   theme: AppThemeId;
   customDictionary: string[];
   startupTabUrls: string[];
   pinnedDownloadIds: string[];
   lastWrikeSession: WrikeSession | null;
+}
+
+export type AppUpdateCheckStatus = "available" | "up-to-date" | "no-release";
+
+export interface AppUpdateCheckResult {
+  status: AppUpdateCheckStatus;
+  currentVersion: string;
+  latestVersion: string | null;
+  notes: string | null;
+  pubDate: string | null;
+}
+
+export type AppUpdateDownloadEvent =
+  | { event: "started"; data: { contentLength: number | null } }
+  | {
+      event: "progress";
+      data: {
+        chunkLength: number;
+        downloaded: number;
+        contentLength: number | null;
+      };
+    }
+  | { event: "finished" };
+
+export type AppUpdatePhase =
+  | "idle"
+  | "checking"
+  | "available"
+  | "up-to-date"
+  | "no-release"
+  | "downloading"
+  | "installing"
+  | "error";
+
+export interface AppUpdateState {
+  phase: AppUpdatePhase;
+  latestVersion: string | null;
+  notes: string | null;
+  pubDate: string | null;
+  checkedAt: string | null;
+  downloadedBytes: number;
+  totalBytes: number | null;
+  error: string | null;
+  dismissedPrompt: boolean;
 }
 
 export interface WrikeSessionTab {
