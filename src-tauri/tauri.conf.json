@@ -31,6 +31,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "publisher": "Harry Barnes",
     "icon": [
       "icons/32x32.png",
@@ -54,6 +55,17 @@
         "headerImage": "assets/installer-header.bmp",
         "sidebarImage": "assets/installer-sidebar.bmp",
         "installerHooks": "assets/installer-hooks.nsh"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlFQjdENDRGQUVCRjg0REQKUldUZGhMK3VUOVMzbm5uVXhtRTFzVmZ6Z1NLdTY5aWJIc0tIUVNmOWcvY2J3cUkzVzhqTHVkVUUK",
+      "endpoints": [
+        "https://github.com/harrydbarnes/ABW/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

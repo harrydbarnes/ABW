@@ -36,11 +36,24 @@ jobs:
           node-version-file: .node-version
           cache: npm
 
+      - name: Set up Rust formatting toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: 1.100.0
+          profile: minimal
+          components: rustfmt
+
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
       - name: Type-check frontend
         run: npm run typecheck
+
+      - name: Build frontend bundle
+        run: npm run build
 
       - name: Check release versions
         run: npm run release:check
@@ -52,9 +65,9 @@ jobs:
         run: npm audit --audit-level=moderate
 
       - name: Install cargo-audit
-        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
         with:
-          tool: cargo-audit@0.22.2
+          tool: cargo-audit@0.23.0
 
       - name: Audit Rust dependencies
         run: cargo audit --file src-tauri/Cargo.lock
@@ -64,6 +77,7 @@ jobs:
     outputs:
       version: ${{ steps.metadata.outputs.version }}
       short_sha: ${{ steps.metadata.outputs.short_sha }}
+      signed: ${{ steps.metadata.outputs.signed }}
     runs-on: windows-latest
     timeout-minutes: 45
     permissions:
@@ -84,31 +98,31 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
-          toolchain: 1.99.0
-          components: rustfmt, clippy
+          toolchain: 1.100.0
+          profile: minimal
+          components: clippy
 
       - name: Cache Rust compilation
         uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: src-tauri
           cache-targets: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-
-      - name: Check Rust compilation
-        run: cargo check --manifest-path src-tauri/Cargo.toml --locked
+        run: npm ci --no-audit --no-fund
 
       - name: Lint Rust
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features --locked -- -D warnings
 
+      - name: Test native logic
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
+
       - name: Read build metadata
         id: metadata
         shell: pwsh
+        env:
+          HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
         run: |
           $packageVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
           $appVersion = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
@@ -117,14 +131,30 @@ jobs:
           }
 
           $shortSha = "${{ github.sha }}".Substring(0, 7)
+          $signed = if ($env:HAS_UPDATER_KEY -eq 'true') { 'true' } else { 'false' }
+          if ($env:GITHUB_REF -like 'refs/tags/v*' -and $signed -ne 'true') {
+            throw 'TAURI_SIGNING_PRIVATE_KEY secret is required for tagged release builds.'
+          }
+
           "version=$appVersion" >> $env:GITHUB_OUTPUT
           "short_sha=$shortSha" >> $env:GITHUB_OUTPUT
+          "signed=$signed" >> $env:GITHUB_OUTPUT
 
       - name: Build NSIS current-user installer
-        run: npm run tauri -- build --bundles nsis -- --locked
-
-      - name: Test native persistence
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib --locked
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            Write-Warning 'TAURI_SIGNING_PRIVATE_KEY is unavailable; building installer without updater signature.'
+            $overridePath = Join-Path $env:RUNNER_TEMP 'tauri-unsigned.conf.json'
+            '{"bundle":{"createUpdaterArtifacts":false}}' | Set-Content -Path $overridePath -Encoding utf8NoBOM
+            npm run tauri -- build --bundles nsis --config $overridePath -- --locked
+          } else {
+            npm run tauri -- build --bundles nsis -- --locked
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Check installer lifecycle
         id: lifecycle
@@ -139,14 +169,17 @@ jobs:
         run: ./scripts/previous-installer.ps1
 
       - name: Check previous-version upgrade
+        if: steps.previous.outputs.has_previous == 'true'
         shell: pwsh
         env:
           PREVIOUS_INSTALLER: ${{ steps.previous.outputs.previous_installer }}
           EXPECTED_EXECUTABLE_HASH: ${{ steps.lifecycle.outputs.executable_hash }}
         run: ./scripts/installer-smoke.ps1 -PreviousInstaller $env:PREVIOUS_INSTALLER -ExpectedExecutableHash $env:EXPECTED_EXECUTABLE_HASH
 
-      - name: Create installer checksum
+      - name: Create installer checksum and verify signature
         shell: pwsh
+        env:
+          EXPECT_SIGNED: ${{ steps.metadata.outputs.signed }}
         run: |
           $installers = @(Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe" -File)
           if ($installers.Count -ne 1) {
@@ -154,6 +187,11 @@ jobs:
           }
 
           $installer = $installers[0]
+          $sigPath = "$($installer.FullName).sig"
+          if ($env:EXPECT_SIGNED -eq 'true' -and -not (Test-Path $sigPath)) {
+            throw "Expected updater signature at $sigPath."
+          }
+
           $digest = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           $checksum = "$digest *$($installer.Name)`n"
           [System.IO.File]::WriteAllText(
@@ -169,9 +207,10 @@ jobs:
           name: ABW-Windows-installer-v${{ steps.metadata.outputs.version }}-${{ steps.metadata.outputs.short_sha }}
           path: |
             src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/nsis/*-setup.exe.sig
             src-tauri/target/release/bundle/nsis/*-setup.exe.sha256
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 90
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -185,14 +224,56 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_VERSION: ${{ needs.nsis.outputs.version }}
       ARTIFACT_NAME: ABW-Windows-installer-v${{ needs.nsis.outputs.version }}-${{ needs.nsis.outputs.short_sha }}
     steps:
       - name: Download tested installer
         run: gh run download "$GITHUB_RUN_ID" --name "$ARTIFACT_NAME" --dir installer
-      - name: Verify checksum and publish release
+
+      - name: Verify checksum, generate update manifest, and publish release
         working-directory: installer
         run: |
+          set -euo pipefail
           sha256sum --check *.sha256
-          gh release create "$RELEASE_TAG" *-setup.exe *-setup.exe.sha256 \
-            --verify-tag --generate-notes --title "ABW $RELEASE_TAG" \
-            --notes "Current-user Windows installer; no administrator rights required. This build is unsigned, so Windows may display an unknown-publisher warning. Verify the SHA-256 checksum before installation."
+
+          installer=(*-setup.exe)
+          sig_file="${installer[0]}.sig"
+          if [ ! -f "$sig_file" ]; then
+            echo "Missing updater signature file: $sig_file" >&2
+            exit 1
+          fi
+
+          notes=$(gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$RELEASE_TAG" --jq '.body' || true)
+          if [ -z "$notes" ]; then
+            notes="Updated ABW Windows installer."
+          fi
+
+          INSTALLER_NAME="${installer[0]}" \
+          SIG_FILE="$sig_file" \
+          RELEASE_NOTES="$notes" \
+          node -e '
+            const fs = require("node:fs");
+            const signature = fs.readFileSync(process.env.SIG_FILE, "utf8").trim();
+            const installer = process.env.INSTALLER_NAME;
+            const repo = process.env.GH_REPO;
+            const tag = process.env.RELEASE_TAG;
+            const manifest = {
+              version: process.env.RELEASE_VERSION,
+              notes: process.env.RELEASE_NOTES,
+              pub_date: new Date().toISOString(),
+              platforms: {
+                "windows-x86_64": {
+                  signature,
+                  url: `https://github.com/${repo}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(installer)}`,
+                },
+              },
+            };
+            fs.writeFileSync("latest.json", `${JSON.stringify(manifest, null, 2)}\n`);
+          '
+
+          release_body="$(printf '%s\n\n---\nCurrent-user Windows installer (no administrator rights required). In-app updates are cryptographically signed via Tauri minisign; Windows SmartScreen may still prompt for unsigned executables. Verify the `.sha256` checksum before manual installation.' "$notes")"
+
+          gh release create "$RELEASE_TAG" "${installer[0]}" "$sig_file" "${installer[0]}.sha256" latest.json \
+            --verify-tag \
+            --title "ABW $RELEASE_TAG" \
+            --notes "$release_body"

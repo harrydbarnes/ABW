@@ -49,6 +49,7 @@ Set-Content $sentinel 'preserve local user data'
     spellCheck = $true; launchWrikeOnStart = $false; downloadNotifications = $false
     openAbwAtSystemStartup = $false; closeToNotificationArea = $true
     confirmBeforeClosingTabs = $true; openDownloadedFilesAutomatically = $false
+    autoCheckForUpdates = $false
     customDictionary = @('InstallerSmoke'); theme = 'default'; startupTabUrls = @(); pinnedDownloadIds = @()
 } | ConvertTo-Json | Set-Content (Join-Path $dataDirectory 'settings.json')
 New-Item $preferenceKey -Force | Out-Null

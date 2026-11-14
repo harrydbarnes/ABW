@@ -1,6 +1,13 @@
-import type { DownloadRecord, Settings, WorkbookPreview, WrikeSession } from "../types";
+import type {
+  AppUpdateCheckResult,
+  AppUpdateDownloadEvent,
+  DownloadRecord,
+  Settings,
+  WorkbookPreview,
+  WrikeSession,
+} from "../types";
 import { DEFAULT_SETTINGS, DEMO_DOWNLOADS } from "../data/demo";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 const desktopRuntime = "__TAURI_INTERNALS__" in window;
@@ -86,6 +93,30 @@ export async function sendTestNotification(): Promise<void> {
   if (desktopRuntime) {
     await invokeDesktop("send_test_notification");
   }
+}
+
+export async function checkForAppUpdate(): Promise<AppUpdateCheckResult> {
+  if (!desktopRuntime) {
+    return {
+      status: "up-to-date",
+      currentVersion: import.meta.env.VITE_APP_VERSION ?? "0.0.0",
+      latestVersion: null,
+      notes: null,
+      pubDate: null,
+    };
+  }
+  return invokeDesktop<AppUpdateCheckResult>("check_for_update");
+}
+
+export async function installAppUpdate(
+  onEvent: (event: AppUpdateDownloadEvent) => void,
+): Promise<void> {
+  if (!desktopRuntime) {
+    return;
+  }
+  const channel = new Channel<AppUpdateDownloadEvent>();
+  channel.onmessage = onEvent;
+  await invokeDesktop("install_update", { onEvent: channel });
 }
 
 export async function openSourceTask(record: DownloadRecord): Promise<void> {

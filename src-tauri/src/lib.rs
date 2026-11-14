@@ -27,6 +27,7 @@ use uuid::Uuid;
 mod close_policy;
 mod persistence;
 mod startup;
+mod updater;
 
 #[tauri::command]
 fn storage_health(app: AppHandle) -> Result<Vec<String>, String> {
@@ -71,6 +72,8 @@ struct Settings {
     close_to_notification_area: bool,
     confirm_before_closing_tabs: bool,
     open_downloaded_files_automatically: bool,
+    #[serde(default = "default_true")]
+    auto_check_for_updates: bool,
     #[serde(default = "default_theme")]
     theme: String,
     custom_dictionary: Vec<String>,
@@ -114,6 +117,10 @@ struct WorkbookSheet {
     rows: Vec<Vec<String>>,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_theme() -> String {
     "default".to_owned()
 }
@@ -138,6 +145,7 @@ impl Default for Settings {
             close_to_notification_area: true,
             confirm_before_closing_tabs: false,
             open_downloaded_files_automatically: false,
+            auto_check_for_updates: true,
             theme: "default".to_owned(),
             custom_dictionary: Vec::new(),
             startup_tab_urls: default_startup_tab_urls(),
@@ -1727,8 +1735,10 @@ pub fn run() {
             show_main_window(app)
         }))
         .manage(AppState::default())
+        .manage(updater::PendingUpdateState::default())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             trace_native_event(app.handle(), "setup");
             let show_item = MenuItem::with_id(app, "show", "Show ABW", true, None::<&str>)?;
@@ -1760,11 +1770,13 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            updater::check_for_update,
             close_wrike_tab,
             focus_wrike_tab,
             get_wrike_tab_state,
             get_settings,
             hide_wrike_tabs,
+            updater::install_update,
             launch_wrike,
             list_downloads,
             open_download,

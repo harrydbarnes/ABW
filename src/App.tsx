@@ -16,9 +16,11 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { FilesLibrary } from "./features/files/FilesLibrary";
 import { SettingsPanel } from "./features/settings/SettingsPanel";
 import {
+  checkForAppUpdate,
   closeWrikeTab,
   focusWrikeTab,
   getWrikeTabState,
+  installAppUpdate,
   launchWrike,
   hideWrike,
   isDesktopRuntime,
@@ -39,7 +41,13 @@ import {
   type WrikeTabLayout,
   type WrikeTabUpdate,
 } from "./lib/desktop";
-import type { DownloadRecord, FileFilter, Settings, WrikeSession } from "./types";
+import type {
+  AppUpdateState,
+  DownloadRecord,
+  FileFilter,
+  Settings,
+  WrikeSession,
+} from "./types";
 
 const PreviewPanel = lazy(() => import("./features/preview/PreviewPanel"));
 const WRIKE_HOME = "https://www.wrike.com/workspace.htm";
@@ -117,11 +125,23 @@ export function App() {
     closeToNotificationArea: true,
     confirmBeforeClosingTabs: false,
     openDownloadedFilesAutomatically: false,
+    autoCheckForUpdates: true,
     theme: "default",
     customDictionary: [],
     startupTabUrls: [WRIKE_HOME],
     pinnedDownloadIds: [],
     lastWrikeSession: null,
+  });
+  const [appUpdate, setAppUpdate] = useState<AppUpdateState>({
+    phase: "idle",
+    latestVersion: null,
+    notes: null,
+    pubDate: null,
+    checkedAt: null,
+    downloadedBytes: 0,
+    totalBytes: null,
+    error: null,
+    dismissedPrompt: false,
   });
   const [notice, setNotice] = useState<string | null>(null);
   const [storageWarning, setStorageWarning] = useState<string | null>(null);
@@ -132,6 +152,9 @@ export function App() {
   const activeWrikeTabIdRef = useRef(activeWrikeTabId);
   const wrikeSplitRef = useRef(wrikeSplit);
   const canPersistSessionRef = useRef(false);
+  const updateRequestInFlightRef = useRef(false);
+  const appUpdatePhaseRef = useRef(appUpdate.phase);
+  const autoUpdateTimerRef = useRef<number | undefined>(undefined);
   const reloadAnimationTimerRef = useRef<number | undefined>(undefined);
   const sessionSaveTimerRef = useRef<number | undefined>(undefined);
   const closingTabIdsRef = useRef(new Set<string>());
@@ -152,10 +175,15 @@ export function App() {
 
   useEffect(() => {
     return () => {
+      window.clearTimeout(autoUpdateTimerRef.current);
       window.clearTimeout(reloadAnimationTimerRef.current);
       window.clearTimeout(sessionSaveTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    appUpdatePhaseRef.current = appUpdate.phase;
+  }, [appUpdate.phase]);
 
   useEffect(() => {
     wrikeTabsRef.current = wrikeTabs;
@@ -190,6 +218,137 @@ export function App() {
     return () => window.clearTimeout(noticeTimer);
   }, [notice]);
 
+  async function runUpdateCheck(manual: boolean) {
+    if (
+      updateRequestInFlightRef.current ||
+      appUpdatePhaseRef.current === "downloading" ||
+      appUpdatePhaseRef.current === "installing"
+    ) {
+      return;
+    }
+    updateRequestInFlightRef.current = true;
+    if (manual) {
+      setAppUpdate((current) => ({
+        ...current,
+        phase: "checking",
+        error: null,
+      }));
+    }
+    try {
+      const result = await checkForAppUpdate();
+      const checkedAt = new Date().toISOString();
+      if (result.status === "available" && result.latestVersion) {
+        setAppUpdate((current) => ({
+          phase: "available",
+          latestVersion: result.latestVersion,
+          notes: result.notes,
+          pubDate: result.pubDate,
+          checkedAt,
+          downloadedBytes: 0,
+          totalBytes: null,
+          error: null,
+          dismissedPrompt: manual
+            ? false
+            : current.dismissedPrompt && current.latestVersion === result.latestVersion,
+        }));
+      } else if (result.status === "no-release") {
+        setAppUpdate({
+          phase: manual ? "no-release" : "idle",
+          latestVersion: null,
+          notes: null,
+          pubDate: null,
+          checkedAt,
+          downloadedBytes: 0,
+          totalBytes: null,
+          error: null,
+          dismissedPrompt: false,
+        });
+      } else {
+        setAppUpdate({
+          phase: "up-to-date",
+          latestVersion: null,
+          notes: null,
+          pubDate: null,
+          checkedAt,
+          downloadedBytes: 0,
+          totalBytes: null,
+          error: null,
+          dismissedPrompt: false,
+        });
+      }
+    } catch (error) {
+      if (manual) {
+        setAppUpdate((current) => ({
+          ...current,
+          phase: "error",
+          checkedAt: new Date().toISOString(),
+          error: String(error),
+        }));
+      }
+    } finally {
+      updateRequestInFlightRef.current = false;
+    }
+  }
+
+  async function startUpdateInstall() {
+    if (
+      updateRequestInFlightRef.current ||
+      appUpdatePhaseRef.current === "downloading" ||
+      appUpdatePhaseRef.current === "installing"
+    ) {
+      return;
+    }
+    updateRequestInFlightRef.current = true;
+    setAppUpdate((current) => ({
+      ...current,
+      phase: "downloading",
+      downloadedBytes: 0,
+      totalBytes: null,
+      error: null,
+      dismissedPrompt: false,
+    }));
+    try {
+      await installAppUpdate((event) => {
+        if (event.event === "started") {
+          setAppUpdate((current) => ({
+            ...current,
+            phase: "downloading",
+            downloadedBytes: 0,
+            totalBytes: event.data.contentLength,
+          }));
+        } else if (event.event === "progress") {
+          setAppUpdate((current) => ({
+            ...current,
+            phase: "downloading",
+            downloadedBytes: event.data.downloaded,
+            totalBytes: event.data.contentLength ?? current.totalBytes,
+          }));
+        } else if (event.event === "finished") {
+          setAppUpdate((current) => ({
+            ...current,
+            phase: "installing",
+          }));
+        }
+      });
+    } catch (error) {
+      setAppUpdate((current) => ({
+        ...current,
+        phase: "error",
+        error: String(error),
+      }));
+      setNotice(`Update failed: ${String(error)}`);
+    } finally {
+      updateRequestInFlightRef.current = false;
+    }
+  }
+
+  function dismissUpdatePrompt() {
+    setAppUpdate((current) => ({
+      ...current,
+      dismissedPrompt: true,
+    }));
+  }
+
   useEffect(() => {
     const refresh = () => {
       void loadDownloads().then((records) => {
@@ -204,6 +363,12 @@ export function App() {
         setStorageWarning(warnings.join(" "));
         setScreen("settings");
         return;
+      }
+      if (isDesktopRuntime() && next.autoCheckForUpdates) {
+        window.clearTimeout(autoUpdateTimerRef.current);
+        autoUpdateTimerRef.current = window.setTimeout(() => {
+          void runUpdateCheck(false);
+        }, 3500);
       }
       if (hasRestorableSession(next.lastWrikeSession)) {
         setSessionPrompt(next.lastWrikeSession);
@@ -1157,7 +1322,17 @@ export function App() {
           <span className="tab-space" aria-hidden="true" />
         </div>
         <div className="titlebar-session-slot" aria-live="polite">
-          {sessionPrompt ? (
+          {appUpdate.phase === "downloading" || appUpdate.phase === "installing" ? (
+            <div className="titlebar-session-toast titlebar-update-toast" role="status">
+              <span>
+                {appUpdate.phase === "installing"
+                  ? `Installing v${appUpdate.latestVersion ?? ""} and restarting...`
+                  : appUpdate.totalBytes && appUpdate.totalBytes > 0
+                    ? `Downloading v${appUpdate.latestVersion ?? ""}... ${Math.min(100, Math.round((appUpdate.downloadedBytes / appUpdate.totalBytes) * 100))}%`
+                    : `Downloading v${appUpdate.latestVersion ?? ""}...`}
+              </span>
+            </div>
+          ) : sessionPrompt ? (
             <div className="titlebar-session-toast" role="status">
               <span>
                 Reopen previous session with {sessionPrompt.tabs.length}{" "}
@@ -1166,6 +1341,16 @@ export function App() {
               <span className="toast-actions">
                 <button onClick={() => void restorePreviousSession(sessionPrompt)}>Reopen</button>
                 <button onClick={dismissSessionPrompt}>Skip</button>
+              </span>
+            </div>
+          ) : appUpdate.phase === "available" &&
+            appUpdate.latestVersion &&
+            !appUpdate.dismissedPrompt ? (
+            <div className="titlebar-session-toast titlebar-update-toast" role="status">
+              <span>Update v{appUpdate.latestVersion} available</span>
+              <span className="toast-actions">
+                <button onClick={() => void startUpdateInstall()}>Update</button>
+                <button onClick={dismissUpdatePrompt}>Later</button>
               </span>
             </div>
           ) : null}
@@ -1194,9 +1379,17 @@ export function App() {
             <button
               className={`nav-item ${screen === "settings" ? "selected" : ""}`}
               onClick={() => void showLocalScreen("settings")}
+              title={
+                appUpdate.phase === "available" && appUpdate.latestVersion
+                  ? `Settings (Update v${appUpdate.latestVersion} available)`
+                  : undefined
+              }
             >
               <MaterialIcon kind="settings" />
               Settings
+              {appUpdate.phase === "available" ? (
+                <span className="settings-update-dot" aria-hidden="true" />
+              ) : null}
             </button>
           </nav>
         </div>
@@ -1240,6 +1433,9 @@ export function App() {
             >
               <MaterialIcon kind="settings" />
               <span>Settings</span>
+              {appUpdate.phase === "available" ? (
+                <span className="settings-update-dot" aria-hidden="true" />
+              ) : null}
             </button>
           </div>
         </div>
@@ -1390,7 +1586,10 @@ export function App() {
             <SettingsPanel
               appVersion={APP_VERSION}
               settings={settings}
+              updateState={appUpdate}
               onChange={(next) => void updateSettings(next)}
+              onCheckForUpdates={() => void runUpdateCheck(true)}
+              onInstallUpdate={() => void startUpdateInstall()}
               onTestNotification={() => void testNotification()}
             />
           </div>
