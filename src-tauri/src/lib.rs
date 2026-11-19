@@ -2106,6 +2106,8 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
               window.__abwDownloadBridge = true;
             }
             window.addEventListener("load", () => abwScheduleThemeDetect(120), { once: true });
+            window.addEventListener("resize", () => abwScheduleThemeDetect(80));
+            document.addEventListener("click", () => abwScheduleThemeDetect(220), true);
             abwScheduleThemeDetect(350);
             if (abwAutoDownload) {
               window.setTimeout(() => {
