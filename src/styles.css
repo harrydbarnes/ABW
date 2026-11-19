@@ -269,13 +269,45 @@ input:focus-visible {
   padding: 4px 12px;
 }
 
-.launch-splash-wordmark {
-  display: block;
-  width: 132px;
-  height: auto;
+.launch-splash-brand-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
   opacity: 0;
   transform: translateY(-22px);
   animation: launch-title-slide 640ms cubic-bezier(.18, .88, .24, 1) 620ms forwards;
+}
+
+.splash-word {
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.splash-letter {
+  display: block;
+  height: 22px;
+  width: auto;
+  flex: none;
+  transform: translateY(1px);
+}
+
+.splash-letter-b {
+  margin-right: 1px;
+}
+
+.splash-letter-w {
+  margin-right: 1px;
+}
+
+.splash-word-tail {
+  font-size: 25px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  background: linear-gradient(120deg, #03bb69 0%, #05cb63 52%, #45dc68 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 @keyframes launch-mark-intro {
