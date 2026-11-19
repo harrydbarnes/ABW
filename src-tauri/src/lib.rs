@@ -862,6 +862,26 @@ fn open_wrike_at(
         .zoom_hotkeys_enabled(true)
         .initialization_script(apply_spell_check_script(spell_check, false))
         .on_navigation(move |url| {
+            if url.scheme() == "abw-po" {
+                let from_wrike = navigation_context
+                    .page_url
+                    .lock()
+                    .ok()
+                    .and_then(|page| page.as_ref().and_then(|value| Url::parse(value).ok()))
+                    .is_some_and(|source| is_wrike_workspace_destination(&source));
+                if from_wrike && url.host_str() == Some("check") && url.as_str().len() < 8192 {
+                    let mut target = Url::parse("https://go.mediaocean.com/robots.txt").unwrap();
+                    target
+                        .set_fragment(Some(&format!("abw-check-po?{}", url.query().unwrap_or(""))));
+                    if open::with_detached(target.as_str(), "chrome.exe").is_err() {
+                        navigation_app
+                            .dialog()
+                            .message("Unable to open Chrome for the PO check.")
+                            .show(|_| {});
+                    }
+                }
+                return false;
+            }
             if url.scheme() == "abw-dictionary" {
                 let _ = add_custom_dictionary_word(&navigation_app, url);
                 return false;
@@ -1740,6 +1760,7 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
     let auto_download_literal = if auto_download { "true" } else { "false" };
     r##"
         (() => {
+          __ABW_TASK_PO__
           window.__abwSpellCleanup?.();
           const enabled = __ABW_SPELL_CHECK_ENABLED__;
           const abwAutoDownload = __ABW_AUTO_DOWNLOAD__;
@@ -2471,6 +2492,7 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
           if (document.body) start(); else document.addEventListener('DOMContentLoaded', start, { once: true });
         })();
         "##
+    .replace("__ABW_TASK_PO__", if auto_download { "" } else { include_str!("task-po.js") })
     .replace("__ABW_SPELL_CHECK_ENABLED__", enabled_literal)
     .replace("__ABW_AUTO_DOWNLOAD__", auto_download_literal)
 }
