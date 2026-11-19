@@ -1791,12 +1791,20 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
             const viewportWidth = window.innerWidth || document.documentElement?.clientWidth || 0;
             if (viewportHeight < 200 || viewportWidth < 300) return;
 
+            const parseRgb = (color) => {
+              const match = String(color || "").match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)/i);
+              if (!match) return null;
+              const alpha = match[4] === undefined ? 1 : Number(match[4]);
+              if (alpha <= 0.05) return null;
+              return [Number(match[1]), Number(match[2]), Number(match[3])];
+            };
+
             const resolveBackgroundColor = (element) => {
               for (let node = element; node && node instanceof Element; node = node.parentElement) {
                 const style = window.getComputedStyle(node);
                 if (style.visibility === "hidden" || style.display === "none") continue;
                 const bg = style.backgroundColor || "";
-                if (bg && bg !== "transparent" && bg !== "rgba(0, 0, 0, 0)") {
+                if (parseRgb(bg)) {
                   return bg;
                 }
                 const extracted = abwExtractCssColors(style.backgroundImage);
@@ -1808,16 +1816,50 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
               return "";
             };
 
-            let sidebarElement = null;
-            let sidebarRect = null;
-            let sidebarColor = "";
+            const isNearWhite = (color) => {
+              const rgb = parseRgb(color);
+              return Boolean(rgb && rgb[0] >= 235 && rgb[1] >= 235 && rgb[2] >= 235);
+            };
 
-            const probePoints = [
-              [18, 140],
-              [18, Math.round(viewportHeight * 0.45)],
-              [56, 140]
-            ];
-            for (const [px, py] of probePoints) {
+            let cornerLeft = null;
+            let cornerTop = 0;
+
+            // 1. Primary: find the main white content container directly.
+            const contentProbeX = Math.round(viewportWidth * 0.6);
+            for (const py of [32, 80, 140]) {
+              const stack =
+                document.elementsFromPoint?.(contentProbeX, py) ||
+                [document.elementFromPoint?.(contentProbeX, py)].filter(Boolean);
+              for (const node of stack) {
+                if (!(node instanceof Element) || node.id === cornerId) continue;
+                if (node === document.body || node === document.documentElement) continue;
+                if (node.closest?.('[role="dialog"], [aria-modal="true"]')) continue;
+                const rect = node.getBoundingClientRect?.();
+                if (
+                  !rect ||
+                  rect.left < 44 ||
+                  rect.left > Math.min(420, viewportWidth * 0.48) ||
+                  rect.top < 0 ||
+                  rect.top > 48 ||
+                  rect.width < viewportWidth * 0.45 ||
+                  rect.height < viewportHeight * 0.6
+                ) {
+                  continue;
+                }
+                const style = window.getComputedStyle(node);
+                if (style.visibility === "hidden" || style.display === "none") continue;
+                if (isNearWhite(style.backgroundColor)) {
+                  cornerLeft = Math.round(rect.left);
+                  cornerTop = Math.max(0, Math.round(rect.top));
+                  break;
+                }
+              }
+              if (cornerLeft !== null) break;
+            }
+
+            // 2. Fallback: find the left sidebar column and use its right edge.
+            let sidebarColor = "";
+            for (const [px, py] of [[18, 24], [18, 140], [18, Math.round(viewportHeight * 0.45)], [56, 140]]) {
               const stack =
                 document.elementsFromPoint?.(px, py) ||
                 [document.elementFromPoint?.(px, py)].filter(Boolean);
@@ -1836,7 +1878,7 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
                     rect.left > 8 ||
                     rect.top > 60 ||
                     rect.width < 44 ||
-                    rect.width > Math.min(380, viewportWidth * 0.48) ||
+                    rect.width > Math.min(420, viewportWidth * 0.48) ||
                     rect.height < viewportHeight * 0.6
                   ) {
                     continue;
@@ -1844,26 +1886,31 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
                   const style = window.getComputedStyle(current);
                   if (style.visibility === "hidden" || style.display === "none") continue;
                   const bg = resolveBackgroundColor(current);
-                  if (!bg) continue;
-                  if (!sidebarRect || rect.right > sidebarRect.right) {
-                    sidebarElement = current;
-                    sidebarRect = rect;
-                    sidebarColor = bg;
+                  if (!bg || isNearWhite(bg)) continue;
+                  sidebarColor = bg;
+                  if (cornerLeft === null) {
+                    cornerLeft = Math.round(rect.right);
+                    cornerTop = Math.max(0, Math.round(rect.top));
                   }
+                  break;
+                }
+                if (sidebarColor) break;
+              }
+              if (sidebarColor) break;
+            }
+
+            if (!sidebarColor) {
+              const topLeftNode = document.elementFromPoint?.(16, 16);
+              if (topLeftNode instanceof Element) {
+                const bg = resolveBackgroundColor(topLeftNode);
+                if (bg && !isNearWhite(bg)) {
+                  sidebarColor = bg;
                 }
               }
-              if (sidebarElement) break;
             }
 
             const existing = document.getElementById(cornerId);
-            if (!sidebarElement || !sidebarRect || !sidebarColor) {
-              existing?.remove();
-              return;
-            }
-
-            const cornerLeft = Math.round(sidebarRect.right);
-            const cornerTop = Math.max(0, Math.round(sidebarRect.top));
-            if (cornerLeft <= 0 || cornerLeft >= viewportWidth - 60) {
+            if (cornerLeft === null || !sidebarColor || cornerLeft <= 0 || cornerLeft >= viewportWidth - 60) {
               existing?.remove();
               return;
             }
