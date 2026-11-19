@@ -876,7 +876,9 @@ fn open_wrike_at(
                     .find_map(|(key, value)| (key == "hasUnread").then(|| value == "true"))
                     .unwrap_or(false);
                 if let Some(state) = navigation_app.try_state::<AppState>() {
-                    state.wrike_inbox_unread.store(has_unread, Ordering::Relaxed);
+                    state
+                        .wrike_inbox_unread
+                        .store(has_unread, Ordering::Relaxed);
                     sync_taskbar_badge(&navigation_app, state.inner());
                 }
                 return false;
