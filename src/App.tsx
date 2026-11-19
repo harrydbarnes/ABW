@@ -136,6 +136,7 @@ export function App() {
     closeToNotificationArea: true,
     confirmBeforeClosingTabs: false,
     openDownloadedFilesAutomatically: false,
+    openExternalLinksInBrowser: true,
     autoCheckForUpdates: true,
     autoMatchWrikeTheme: true,
     theme: "default",

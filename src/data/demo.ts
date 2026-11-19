@@ -56,6 +56,7 @@ export const DEFAULT_SETTINGS: Settings = {
   closeToNotificationArea: true,
   confirmBeforeClosingTabs: false,
   openDownloadedFilesAutomatically: false,
+  openExternalLinksInBrowser: true,
   autoCheckForUpdates: true,
   autoMatchWrikeTheme: true,
   theme: "default",

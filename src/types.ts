@@ -23,6 +23,7 @@ export interface Settings {
   closeToNotificationArea: boolean;
   confirmBeforeClosingTabs: boolean;
   openDownloadedFilesAutomatically: boolean;
+  openExternalLinksInBrowser: boolean;
   autoCheckForUpdates: boolean;
   autoMatchWrikeTheme: boolean;
   theme: AppThemeId;

@@ -75,6 +75,8 @@ struct Settings {
     confirm_before_closing_tabs: bool,
     open_downloaded_files_automatically: bool,
     #[serde(default = "default_true")]
+    open_external_links_in_browser: bool,
+    #[serde(default = "default_true")]
     auto_check_for_updates: bool,
     #[serde(default = "default_true")]
     auto_match_wrike_theme: bool,
@@ -150,6 +152,7 @@ impl Default for Settings {
             close_to_notification_area: true,
             confirm_before_closing_tabs: false,
             open_downloaded_files_automatically: false,
+            open_external_links_in_browser: true,
             auto_check_for_updates: true,
             auto_match_wrike_theme: true,
             theme: "default".to_owned(),
@@ -193,7 +196,6 @@ enum WrikePane {
     Right,
 }
 
-#[derive(Default)]
 struct AppState {
     wrike_tabs: Mutex<HashMap<String, Arc<CaptureContext>>>,
     detected_wrike_theme: Mutex<Option<String>>,
@@ -201,6 +203,21 @@ struct AppState {
     quit_prompt_open: AtomicBool,
     wrike_inbox_unread: AtomicBool,
     update_available_badge: AtomicBool,
+    open_external_links_in_browser: AtomicBool,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            wrike_tabs: Mutex::new(HashMap::new()),
+            detected_wrike_theme: Mutex::new(None),
+            top_inset: Mutex::new(0.0),
+            quit_prompt_open: AtomicBool::new(false),
+            wrike_inbox_unread: AtomicBool::new(false),
+            update_available_badge: AtomicBool::new(false),
+            open_external_links_in_browser: AtomicBool::new(true),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -410,8 +427,12 @@ fn open_download(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn get_settings(app: AppHandle) -> Result<Settings, String> {
-    read_settings(&app)
+fn get_settings(app: AppHandle, state: State<'_, AppState>) -> Result<Settings, String> {
+    let settings = read_settings(&app)?;
+    state
+        .open_external_links_in_browser
+        .store(settings.open_external_links_in_browser, Ordering::Relaxed);
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -446,6 +467,9 @@ fn update_settings(
             *stored = settings;
             Ok(previous)
         })?;
+    state
+        .open_external_links_in_browser
+        .store(settings.open_external_links_in_browser, Ordering::Relaxed);
     if previous.custom_dictionary != settings.custom_dictionary {
         sync_windows_spelling_dictionary(&previous.custom_dictionary, &settings.custom_dictionary);
     }
@@ -1639,6 +1663,33 @@ fn is_wrike_workspace_destination(url: &Url) -> bool {
         .host_str()
         .is_some_and(|host| host == "wrike.com" || host.ends_with(".wrike.com"));
     url.scheme() == "https" && is_wrike && url.path().ends_with("/workspace.htm")
+}
+
+fn is_internal_wrike_or_auth_host(host: &str) -> bool {
+    host == "wrike.com"
+        || host.ends_with(".wrike.com")
+        || host == "login.microsoftonline.com"
+        || host == "login.live.com"
+        || host == "accounts.google.com"
+        || host.ends_with(".okta.com")
+        || host.ends_with(".onelogin.com")
+        || host.ends_with(".pingidentity.com")
+        || host.ends_with(".duosecurity.com")
+}
+
+fn should_open_link_externally(app: &AppHandle, url: &Url) -> bool {
+    if url.as_str() == "about:blank" || url.scheme() == "blob" {
+        return false;
+    }
+    let open_externally = app
+        .try_state::<AppState>()
+        .map(|state| state.open_external_links_in_browser.load(Ordering::Relaxed))
+        .unwrap_or(true);
+    if !open_externally {
+        return false;
+    }
+    url.host_str()
+        .is_some_and(|host| !is_internal_wrike_or_auth_host(host))
 }
 
 fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {

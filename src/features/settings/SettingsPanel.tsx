@@ -63,6 +63,14 @@ export function SettingsPanel({
           label="Confirm before closing with multiple tabs open"
           onChange={(confirmBeforeClosingTabs) => onChange({ ...settings, confirmBeforeClosingTabs })}
         />
+        <SettingToggle
+          checked={settings.openExternalLinksInBrowser}
+          description="Open non-Wrike links in your default Windows browser instead of opening them inside ABW."
+          label="Open external links in default browser"
+          onChange={(openExternalLinksInBrowser) =>
+            onChange({ ...settings, openExternalLinksInBrowser })
+          }
+        />
         <StartupTabsSettings
           urls={settings.startupTabUrls}
           onChange={(startupTabUrls) => onChange({ ...settings, startupTabUrls })}
