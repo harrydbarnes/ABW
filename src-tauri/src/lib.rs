@@ -885,6 +885,10 @@ fn open_wrike_at(
             }
             let allowed = is_safe_remote_destination(url);
             if allowed {
+                if should_open_link_externally(&navigation_app, url) {
+                    let _ = open::that(url.as_str());
+                    return false;
+                }
                 set_title_loading(&navigation_context, true);
                 record_wrike_navigation(&navigation_context, url.as_str());
                 emit_wrike_tab_update(&navigation_app, &navigation_context);
@@ -893,6 +897,10 @@ fn open_wrike_at(
         })
         .on_new_window(move |url, features| {
             if !is_safe_remote_destination(&url) {
+                return NewWindowResponse::Deny;
+            }
+            if should_open_link_externally(&popup_app, &url) {
+                let _ = open::that(url.as_str());
                 return NewWindowResponse::Deny;
             }
             let parent_provenance = captured_provenance(&popup_context);
