@@ -685,6 +685,23 @@ export function App() {
     return normalized.length ? [...new Set(normalized)] : [WRIKE_HOME];
   }
 
+  function isWrikeHomepageUrl(rawUrl: string): boolean {
+    try {
+      const parsed = new URL(rawUrl);
+      const isWrikeHost =
+        parsed.hostname === "wrike.com" || parsed.hostname.endsWith(".wrike.com");
+      if (!isWrikeHost || !parsed.pathname.endsWith("/workspace.htm")) {
+        return false;
+      }
+      if (parsed.searchParams.has("id") || /\bid=\d+/i.test(parsed.hash)) {
+        return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function hasRestorableSession(
     session: WrikeSession | null,
     startupUrls = settings.startupTabUrls,
@@ -702,9 +719,13 @@ export function App() {
             return false;
           }
           const actualUrl = normalizeUrlInput(tab.url ?? "");
-          return Boolean(
-            actualUrl && actualUrl.replace(/\/$/, "") === expected[index].replace(/\/$/, ""),
-          );
+          if (!actualUrl) {
+            return false;
+          }
+          if (actualUrl.replace(/\/$/, "") === expected[index].replace(/\/$/, "")) {
+            return true;
+          }
+          return isWrikeHomepageUrl(expected[index]) && isWrikeHomepageUrl(actualUrl);
         })
       ) {
         return false;
@@ -2050,7 +2071,7 @@ export function App() {
             <img src="/abw.svg" alt="" />
           </div>
           <div className="launch-splash-title-clip">
-            <span className="launch-splash-title">A Better Wrike</span>
+            <img className="launch-splash-wordmark" src="/abw-wordmark.svg" alt="ABW" />
           </div>
         </div>
       </div>
