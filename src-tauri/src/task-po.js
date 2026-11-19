@@ -32,7 +32,9 @@
     const host = anchor.closest('dialog:modal') || document.body;
     if (button.parentElement !== host) host.append(button);
   }
-  button.onclick = () => {
+  button.onclick = event => {
+    event.preventDefault();
+    event.stopPropagation();
     if (!panel) return;
     const lines = panel.innerText.split(/\n/).map(s => s.trim()).filter(Boolean);
     const values = new URLSearchParams();
@@ -40,7 +42,7 @@
       const i = lines.findIndex(s => s.replace(/[\s*:]+$/,'').toLowerCase() === label.toLowerCase());
       if (i >= 0 && lines[i+1]) values.set(key,lines[i+1].slice(0,100));
     }
-    location.href = 'abw-po://check?' + values;
+    location.assign('https://go.mediaocean.com/robots.txt#abw-check-po?' + values);
   };
   let scheduled = false;
   function schedule() {

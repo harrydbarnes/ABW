@@ -896,23 +896,22 @@ fn open_wrike_at(
         .zoom_hotkeys_enabled(true)
         .initialization_script(apply_spell_check_script(spell_check, false))
         .on_navigation(move |url| {
-            if url.scheme() == "abw-po" {
+            if is_po_handoff(url) {
                 let from_wrike = navigation_context
                     .page_url
                     .lock()
                     .ok()
                     .and_then(|page| page.as_ref().and_then(|value| Url::parse(value).ok()))
                     .is_some_and(|source| is_wrike_workspace_destination(&source));
-                if from_wrike && url.host_str() == Some("check") && url.as_str().len() < 8192 {
-                    let mut target = Url::parse("https://go.mediaocean.com/robots.txt").unwrap();
-                    target
-                        .set_fragment(Some(&format!("abw-check-po?{}", url.query().unwrap_or(""))));
-                    if open_po_in_chrome(&target).is_err() {
-                        navigation_app
-                            .dialog()
-                            .message("Unable to open Chrome for the PO check.")
-                            .show(|_| {});
-                    }
+                let message = if !from_wrike || url.as_str().len() >= 8192 {
+                    Some("Unable to read the task for Check PO. Reopen the Wrike task and try again.")
+                } else if open_po_in_chrome(url).is_err() {
+                    Some("Unable to open Chrome for the PO check.")
+                } else {
+                    None
+                };
+                if let Some(message) = message {
+                    navigation_app.dialog().message(message).show(|_| {});
                 }
                 return false;
             }
@@ -1771,6 +1770,15 @@ fn is_safe_blob_destination(url: &Url) -> bool {
         .strip_prefix("blob:")
         .and_then(|inner| Url::parse(inner).ok())
         .is_some_and(|inner| inner.scheme() == "https")
+}
+
+fn is_po_handoff(url: &Url) -> bool {
+    url.origin().ascii_serialization() == "https://go.mediaocean.com"
+        && url.path() == "/robots.txt"
+        && url.query().is_none()
+        && url
+            .fragment()
+            .is_some_and(|value| value.starts_with("abw-check-po?"))
 }
 
 fn open_po_in_chrome(url: &Url) -> std::io::Result<()> {
