@@ -424,18 +424,23 @@ export function App() {
           void runUpdateCheck(false);
         }, 3500);
       }
-      if (hasRestorableSession(next.lastWrikeSession)) {
+      const canRestoreSession = hasRestorableSession(
+        next.lastWrikeSession,
+        next.startupTabUrls,
+        next.launchWrikeOnStart,
+      );
+      if (canRestoreSession) {
         setSessionPrompt(next.lastWrikeSession);
       }
       if (next.launchWrikeOnStart) {
         await waitForLaunchSplash();
         await openStartupTabs(next.startupTabUrls);
-        if (!hasRestorableSession(next.lastWrikeSession)) {
+        if (!canRestoreSession) {
           canPersistSessionRef.current = true;
         }
       } else {
         setScreen("files");
-        if (!hasRestorableSession(next.lastWrikeSession)) {
+        if (!canRestoreSession) {
           canPersistSessionRef.current = true;
         }
       }
@@ -576,8 +581,32 @@ export function App() {
     return normalized.length ? [...new Set(normalized)] : [WRIKE_HOME];
   }
 
-  function hasRestorableSession(session: WrikeSession | null): session is WrikeSession {
-    return Boolean(session?.tabs.some((tab) => normalizeUrlInput(tab.url ?? "")));
+  function hasRestorableSession(
+    session: WrikeSession | null,
+    startupUrls = settings.startupTabUrls,
+    launchOnStart = settings.launchWrikeOnStart,
+  ): session is WrikeSession {
+    if (!session?.tabs.some((tab) => normalizeUrlInput(tab.url ?? ""))) {
+      return false;
+    }
+    if (launchOnStart && !session.split) {
+      const expected = normalizedStartupUrls(startupUrls);
+      if (
+        session.tabs.length === expected.length &&
+        session.tabs.every((tab, index) => {
+          if (tab.mode !== "standard") {
+            return false;
+          }
+          const actualUrl = normalizeUrlInput(tab.url ?? "");
+          return Boolean(
+            actualUrl && actualUrl.replace(/\/$/, "") === expected[index].replace(/\/$/, ""),
+          );
+        })
+      ) {
+        return false;
+      }
+    }
+    return true;
   }
 
   function wrikeModeForUrl(url: string): WrikeTabMode {
