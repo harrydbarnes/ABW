@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { APP_THEMES, type AppThemeId, type AppUpdateState, type Settings } from "../../types";
 
 interface Props {
@@ -11,6 +11,55 @@ interface Props {
   onTestNotification: () => void;
 }
 
+function matchesSearch(query: string, ...fields: Array<string | undefined>): boolean {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  return fields.some((field) => (field ?? "").toLowerCase().includes(normalized));
+}
+
+function HighlightText({ text, query }: { text: string; query: string }) {
+  const normalized = query.trim();
+  if (!normalized) {
+    return <>{text}</>;
+  }
+  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parts = text.split(new RegExp(`(${escaped})`, "gi"));
+  return (
+    <>
+      {parts.map((part, index) =>
+        part.toLowerCase() === normalized.toLowerCase() ? (
+          <mark className="setting-highlight" key={index}>
+            {part}
+          </mark>
+        ) : (
+          <span key={index}>{part}</span>
+        ),
+      )}
+    </>
+  );
+}
+
+function AnimatedSettingItem({
+  visible,
+  children,
+  className = "",
+}: {
+  visible: boolean;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      aria-hidden={!visible}
+      className={`setting-filter-item ${visible ? "is-visible" : "is-hidden"} ${className}`.trim()}
+    >
+      <div className="setting-filter-inner">{children}</div>
+    </div>
+  );
+}
+
 export function SettingsPanel({
   appVersion,
   settings,
@@ -20,129 +69,338 @@ export function SettingsPanel({
   onInstallUpdate,
   onTestNotification,
 }: Props) {
+  const [searchQuery, setSearchQuery] = useState("");
+  const query = searchQuery.trim();
+
+  const showUpdatesHeader = matchesSearch(query, "App updates", "version", "GitHub Releases", "install");
+  const showAutoUpdateToggle = matchesSearch(
+    query,
+    "Check for updates automatically",
+    "Check GitHub Releases quietly when ABW opens and periodically in the background.",
+  );
+  const showUpdatesSection = showUpdatesHeader || showAutoUpdateToggle;
+
+  const showLaunchWrike = matchesSearch(
+    query,
+    "Show Wrike workspace on launch",
+    "Open your startup tabs whenever ABW starts. You can still reopen the previous session from the launch toast.",
+  );
+  const showSystemStartup = matchesSearch(
+    query,
+    "Open ABW app at system startup",
+    "Start ABW automatically when you sign in to Windows.",
+  );
+  const showCloseToTray = matchesSearch(
+    query,
+    "Close app to notification area (higher memory usage)",
+    "Keep ABW running in the notification area when its window is closed so it can reopen quickly. This uses more memory.",
+  );
+  const showConfirmClose = matchesSearch(
+    query,
+    "Confirm before closing with multiple tabs open",
+    "Ask before quitting when more than one Wrike tab is open. Closing to the notification area keeps your tabs running.",
+  );
+  const showExternalLinks = matchesSearch(
+    query,
+    "Open external links in default browser",
+    "Open non-Wrike links in your default Windows browser instead of opening them inside ABW.",
+  );
+  const showStartupTabs = matchesSearch(
+    query,
+    "Startup and new tabs",
+    "The first URL is the new tab default. All URLs open together on launch.",
+    ...settings.startupTabUrls,
+  );
+  const showAbwPrefsHeader = matchesSearch(
+    query,
+    "ABW preferences",
+    "Control how ABW launches, behaves in the background, and opens tabs.",
+  );
+  const showAbwPrefsSection =
+    showAbwPrefsHeader ||
+    showLaunchWrike ||
+    showSystemStartup ||
+    showCloseToTray ||
+    showConfirmClose ||
+    showExternalLinks ||
+    showStartupTabs;
+
+  const showDownloadNotifications = matchesSearch(
+    query,
+    "Download complete notifications",
+    "Show a Windows notification when a file from Wrike has been saved into ABW Files.",
+  );
+  const showOpenDownloaded = matchesSearch(
+    query,
+    "Open downloaded files automatically",
+    "Automatically open each downloaded file in its default Windows application as soon as it is saved into ABW Files.",
+  );
+  const showWrikeNotifications = matchesSearch(
+    query,
+    "Wrike notifications",
+    "Comments, mentions and assignments use Wrike notifications in the live workspace tab. Keep it open and enable notifications when Wrike prompts you.",
+    "Send test notification",
+  );
+  const showFileManagementHeader = matchesSearch(
+    query,
+    "File management",
+    "ABW stores intercepted downloads in its per-user application data directory. Files can always be opened in Windows from the preview pane.",
+  );
+  const showFileManagementSection =
+    showFileManagementHeader ||
+    showDownloadNotifications ||
+    showOpenDownloaded ||
+    showWrikeNotifications;
+
+  const showThemeSection = matchesSearch(
+    query,
+    "Theme",
+    "Match ABW's title bar to a Wrike-inspired workspace colour.",
+    "Automatically match Wrike theme",
+    "Automatically match the top window bar to the theme selected in your Wrike workspace sidebar. Choosing a theme below switches to manual selection.",
+    ...APP_THEMES.map((theme) => theme.label),
+  );
+
+  const showSpellCheckToggle = matchesSearch(
+    query,
+    "Spell check",
+    "Mark misspellings in Wrike editors and ABW search fields using WebView2 spell checking.",
+  );
+  const showSpellCheckTopbar = matchesSearch(
+    query,
+    "Show in topbar",
+    "Show a quick spell check toggle button in the top window bar.",
+  );
+  const showDictionary = matchesSearch(
+    query,
+    "Custom dictionary",
+    "Add campaign names, client names and abbreviations that ABW should accept.",
+    ...settings.customDictionary,
+  );
+  const showSpellHeader = matchesSearch(
+    query,
+    "Spell check",
+    "Manage spell checking in Wrike editors and your custom dictionary.",
+  );
+  const showSpellSection =
+    showSpellHeader || showSpellCheckToggle || showSpellCheckTopbar || showDictionary;
+
+  const hasAnyMatches =
+    showUpdatesSection ||
+    showAbwPrefsSection ||
+    showFileManagementSection ||
+    showThemeSection ||
+    showSpellSection;
+
   return (
     <section className="settings-panel">
-      <header>
-        <h1>Settings</h1>
-        <p>Preferences apply to ABW and the live Wrike workspace tab.</p>
+      <header className="settings-header-row">
+        <div>
+          <h1>Settings</h1>
+          <p>Preferences apply to ABW and the live Wrike workspace tab.</p>
+        </div>
+        <div className="settings-search-box">
+          <input
+            aria-label="Search settings"
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search settings..."
+            type="search"
+            value={searchQuery}
+          />
+          {searchQuery ? (
+            <button
+              aria-label="Clear settings search"
+              className="settings-search-clear"
+              onClick={() => setSearchQuery("")}
+              type="button"
+            >
+              ×
+            </button>
+          ) : null}
+        </div>
       </header>
-      <AppUpdateSettings
-        appVersion={appVersion}
-        autoCheckForUpdates={settings.autoCheckForUpdates}
-        onAutoCheckChange={(autoCheckForUpdates) => onChange({ ...settings, autoCheckForUpdates })}
-        onCheckForUpdates={onCheckForUpdates}
-        onInstallUpdate={onInstallUpdate}
-        updateState={updateState}
-      />
-      <div className="setting-group">
-        <div className="setting-group-header">
-          <h2>ABW preferences</h2>
-          <p>Control how ABW launches, behaves in the background, and opens tabs.</p>
+
+      {!hasAnyMatches ? (
+        <div className="settings-no-results">
+          <strong>No matching settings</strong>
+          <p>Try searching for updates, theme, notifications, spell check, or tabs.</p>
         </div>
-        <SettingToggle
-          checked={settings.launchWrikeOnStart}
-          description="Open your startup tabs whenever ABW starts. You can still reopen the previous session from the launch toast."
-          label="Show Wrike workspace on launch"
-          onChange={(launchWrikeOnStart) => onChange({ ...settings, launchWrikeOnStart })}
+      ) : null}
+
+      <AnimatedSettingItem className="setting-section-item" visible={showUpdatesSection}>
+        <AppUpdateSettings
+          appVersion={appVersion}
+          autoCheckForUpdates={settings.autoCheckForUpdates}
+          onAutoCheckChange={(autoCheckForUpdates) => onChange({ ...settings, autoCheckForUpdates })}
+          onCheckForUpdates={onCheckForUpdates}
+          onInstallUpdate={onInstallUpdate}
+          query={query}
+          showAutoUpdateToggle={showAutoUpdateToggle || showUpdatesHeader}
+          updateState={updateState}
         />
-        <SettingToggle
-          checked={settings.openAbwAtSystemStartup}
-          description="Start ABW automatically when you sign in to Windows."
-          label="Open ABW app at system startup"
-          onChange={(openAbwAtSystemStartup) => onChange({ ...settings, openAbwAtSystemStartup })}
-        />
-        <SettingToggle
-          checked={settings.closeToNotificationArea}
-          description="Keep ABW running in the notification area when its window is closed so it can reopen quickly. This uses more memory."
-          label="Close app to notification area (higher memory usage)"
-          onChange={(closeToNotificationArea) => onChange({ ...settings, closeToNotificationArea })}
-        />
-        <SettingToggle
-          checked={settings.confirmBeforeClosingTabs}
-          description="Ask before quitting when more than one Wrike tab is open. Closing to the notification area keeps your tabs running."
-          label="Confirm before closing with multiple tabs open"
-          onChange={(confirmBeforeClosingTabs) => onChange({ ...settings, confirmBeforeClosingTabs })}
-        />
-        <SettingToggle
-          checked={settings.openExternalLinksInBrowser}
-          description="Open non-Wrike links in your default Windows browser instead of opening them inside ABW."
-          label="Open external links in default browser"
-          onChange={(openExternalLinksInBrowser) =>
-            onChange({ ...settings, openExternalLinksInBrowser })
-          }
-        />
-        <StartupTabsSettings
-          urls={settings.startupTabUrls}
-          onChange={(startupTabUrls) => onChange({ ...settings, startupTabUrls })}
-        />
-      </div>
-      <div className="setting-group">
-        <div className="setting-group-header">
-          <h2>File management</h2>
-          <p>
-            ABW stores intercepted downloads in its per-user application data directory. Files can
-            always be opened in Windows from the preview pane.
-          </p>
+      </AnimatedSettingItem>
+
+      <AnimatedSettingItem className="setting-section-item" visible={showAbwPrefsSection}>
+        <div className="setting-group">
+          <div className="setting-group-header">
+            <h2><HighlightText query={query} text="ABW preferences" /></h2>
+            <p><HighlightText query={query} text="Control how ABW launches, behaves in the background, and opens tabs." /></p>
+          </div>
+          <AnimatedSettingItem visible={showLaunchWrike || showAbwPrefsHeader}>
+            <SettingToggle
+              checked={settings.launchWrikeOnStart}
+              description="Open your startup tabs whenever ABW starts. You can still reopen the previous session from the launch toast."
+              label="Show Wrike workspace on launch"
+              onChange={(launchWrikeOnStart) => onChange({ ...settings, launchWrikeOnStart })}
+              query={query}
+            />
+          </AnimatedSettingItem>
+          <AnimatedSettingItem visible={showSystemStartup || showAbwPrefsHeader}>
+            <SettingToggle
+              checked={settings.openAbwAtSystemStartup}
+              description="Start ABW automatically when you sign in to Windows."
+              label="Open ABW app at system startup"
+              onChange={(openAbwAtSystemStartup) => onChange({ ...settings, openAbwAtSystemStartup })}
+              query={query}
+            />
+          </AnimatedSettingItem>
+          <AnimatedSettingItem visible={showCloseToTray || showAbwPrefsHeader}>
+            <SettingToggle
+              checked={settings.closeToNotificationArea}
+              description="Keep ABW running in the notification area when its window is closed so it can reopen quickly. This uses more memory."
+              label="Close app to notification area (higher memory usage)"
+              onChange={(closeToNotificationArea) => onChange({ ...settings, closeToNotificationArea })}
+              query={query}
+            />
+          </AnimatedSettingItem>
+          <AnimatedSettingItem visible={showConfirmClose || showAbwPrefsHeader}>
+            <SettingToggle
+              checked={settings.confirmBeforeClosingTabs}
+              description="Ask before quitting when more than one Wrike tab is open. Closing to the notification area keeps your tabs running."
+              label="Confirm before closing with multiple tabs open"
+              onChange={(confirmBeforeClosingTabs) => onChange({ ...settings, confirmBeforeClosingTabs })}
+              query={query}
+            />
+          </AnimatedSettingItem>
+          <AnimatedSettingItem visible={showExternalLinks || showAbwPrefsHeader}>
+            <SettingToggle
+              checked={settings.openExternalLinksInBrowser}
+              description="Open non-Wrike links in your default Windows browser instead of opening them inside ABW."
+              label="Open external links in default browser"
+              onChange={(openExternalLinksInBrowser) =>
+                onChange({ ...settings, openExternalLinksInBrowser })
+              }
+              query={query}
+            />
+          </AnimatedSettingItem>
+          <AnimatedSettingItem visible={showStartupTabs || showAbwPrefsHeader}>
+            <StartupTabsSettings
+              onChange={(startupTabUrls) => onChange({ ...settings, startupTabUrls })}
+              query={query}
+              urls={settings.startupTabUrls}
+            />
+          </AnimatedSettingItem>
         </div>
-        <SettingToggle
-          checked={settings.downloadNotifications}
-          description="Show a Windows notification when a file from Wrike has been saved into ABW Files."
-          label="Download complete notifications"
-          onChange={(downloadNotifications) => onChange({ ...settings, downloadNotifications })}
-        />
-        <SettingToggle
-          checked={settings.openDownloadedFilesAutomatically}
-          description="Automatically open each downloaded file in its default Windows application as soon as it is saved into ABW Files."
-          label="Open downloaded files automatically"
-          onChange={(openDownloadedFilesAutomatically) =>
-            onChange({ ...settings, openDownloadedFilesAutomatically })
-          }
-        />
-        <div className="notification-note">
-          <div>
-            <h3>Wrike notifications</h3>
+      </AnimatedSettingItem>
+
+      <AnimatedSettingItem className="setting-section-item" visible={showFileManagementSection}>
+        <div className="setting-group">
+          <div className="setting-group-header">
+            <h2><HighlightText query={query} text="File management" /></h2>
             <p>
-              Comments, mentions and assignments use Wrike notifications in the live workspace tab.
-              Keep it open and enable notifications when Wrike prompts you.
+              <HighlightText
+                query={query}
+                text="ABW stores intercepted downloads in its per-user application data directory. Files can always be opened in Windows from the preview pane."
+              />
             </p>
           </div>
-          <button className="secondary-action" onClick={onTestNotification}>
-            Send test notification
-          </button>
+          <AnimatedSettingItem visible={showDownloadNotifications || showFileManagementHeader}>
+            <SettingToggle
+              checked={settings.downloadNotifications}
+              description="Show a Windows notification when a file from Wrike has been saved into ABW Files."
+              label="Download complete notifications"
+              onChange={(downloadNotifications) => onChange({ ...settings, downloadNotifications })}
+              query={query}
+            />
+          </AnimatedSettingItem>
+          <AnimatedSettingItem visible={showOpenDownloaded || showFileManagementHeader}>
+            <SettingToggle
+              checked={settings.openDownloadedFilesAutomatically}
+              description="Automatically open each downloaded file in its default Windows application as soon as it is saved into ABW Files."
+              label="Open downloaded files automatically"
+              onChange={(openDownloadedFilesAutomatically) =>
+                onChange({ ...settings, openDownloadedFilesAutomatically })
+              }
+              query={query}
+            />
+          </AnimatedSettingItem>
+          <AnimatedSettingItem visible={showWrikeNotifications || showFileManagementHeader}>
+            <div className="notification-note">
+              <div>
+                <h3><HighlightText query={query} text="Wrike notifications" /></h3>
+                <p>
+                  <HighlightText
+                    query={query}
+                    text="Comments, mentions and assignments use Wrike notifications in the live workspace tab. Keep it open and enable notifications when Wrike prompts you."
+                  />
+                </p>
+              </div>
+              <button className="secondary-action" onClick={onTestNotification}>
+                <HighlightText query={query} text="Send test notification" />
+              </button>
+            </div>
+          </AnimatedSettingItem>
         </div>
-      </div>
-      <ThemeSettings
-        autoMatch={settings.autoMatchWrikeTheme}
-        selected={settings.theme}
-        onAutoMatchChange={(autoMatchWrikeTheme) =>
-          onChange({ ...settings, autoMatchWrikeTheme })
-        }
-        onChange={(theme) =>
-          onChange({ ...settings, theme, autoMatchWrikeTheme: false })
-        }
-      />
-      <div className="setting-group">
-        <div className="setting-group-header">
-          <h2>Spell check</h2>
-          <p>Manage spell checking in Wrike editors and your custom dictionary.</p>
+      </AnimatedSettingItem>
+
+      <AnimatedSettingItem className="setting-section-item" visible={showThemeSection}>
+        <ThemeSettings
+          autoMatch={settings.autoMatchWrikeTheme}
+          onAutoMatchChange={(autoMatchWrikeTheme) =>
+            onChange({ ...settings, autoMatchWrikeTheme })
+          }
+          onChange={(theme) =>
+            onChange({ ...settings, theme, autoMatchWrikeTheme: false })
+          }
+          query={query}
+          selected={settings.theme}
+        />
+      </AnimatedSettingItem>
+
+      <AnimatedSettingItem className="setting-section-item" visible={showSpellSection}>
+        <div className="setting-group">
+          <div className="setting-group-header">
+            <h2><HighlightText query={query} text="Spell check" /></h2>
+            <p><HighlightText query={query} text="Manage spell checking in Wrike editors and your custom dictionary." /></p>
+          </div>
+          <AnimatedSettingItem visible={showSpellCheckToggle || showSpellHeader}>
+            <SettingToggle
+              checked={settings.spellCheck}
+              description="Mark misspellings in Wrike editors and ABW search fields using WebView2 spell checking."
+              label="Spell check"
+              onChange={(spellCheck) => onChange({ ...settings, spellCheck })}
+              query={query}
+            />
+          </AnimatedSettingItem>
+          <AnimatedSettingItem visible={showSpellCheckTopbar || showSpellHeader}>
+            <SettingToggle
+              checked={settings.showSpellCheckInTopbar}
+              description="Show a quick spell check toggle button in the top window bar."
+              label="Show in topbar"
+              onChange={(showSpellCheckInTopbar) => onChange({ ...settings, showSpellCheckInTopbar })}
+              query={query}
+            />
+          </AnimatedSettingItem>
+          <AnimatedSettingItem visible={showDictionary || showSpellHeader}>
+            <DictionarySettings
+              onChange={(customDictionary) => onChange({ ...settings, customDictionary })}
+              query={query}
+              words={settings.customDictionary}
+            />
+          </AnimatedSettingItem>
         </div>
-        <SettingToggle
-          checked={settings.spellCheck}
-          description="Mark misspellings in Wrike editors and ABW search fields using WebView2 spell checking."
-          label="Spell check"
-          onChange={(spellCheck) => onChange({ ...settings, spellCheck })}
-        />
-        <SettingToggle
-          checked={settings.showSpellCheckInTopbar}
-          description="Show a quick spell check toggle button in the top window bar."
-          label="Show in topbar"
-          onChange={(showSpellCheckInTopbar) => onChange({ ...settings, showSpellCheckInTopbar })}
-        />
-        <DictionarySettings
-          words={settings.customDictionary}
-          onChange={(customDictionary) => onChange({ ...settings, customDictionary })}
-        />
-      </div>
+      </AnimatedSettingItem>
+
       <footer className="settings-footer">
         ABW v{appVersion} · Questions or support: Harry Barnes
       </footer>
@@ -175,6 +433,8 @@ function formatUpdateDate(value: string | null): string | null {
 function AppUpdateSettings({
   appVersion,
   autoCheckForUpdates,
+  query,
+  showAutoUpdateToggle,
   updateState,
   onAutoCheckChange,
   onCheckForUpdates,
@@ -182,6 +442,8 @@ function AppUpdateSettings({
 }: {
   appVersion: string;
   autoCheckForUpdates: boolean;
+  query: string;
+  showAutoUpdateToggle: boolean;
   updateState: AppUpdateState;
   onAutoCheckChange: (checked: boolean) => void;
   onCheckForUpdates: () => void;
@@ -223,8 +485,10 @@ function AppUpdateSettings({
     <div className="setting-group">
       <div className="setting-group-header update-panel-header">
         <div>
-          <h2>App updates</h2>
-          <p className={phase === "error" ? "update-error" : undefined}>{summary}</p>
+          <h2><HighlightText query={query} text="App updates" /></h2>
+          <p className={phase === "error" ? "update-error" : undefined}>
+            <HighlightText query={query} text={summary} />
+          </p>
         </div>
         <div className="update-actions">
           {(phase === "available" || (phase === "error" && latestVersion)) && latestVersion ? (
@@ -261,21 +525,26 @@ function AppUpdateSettings({
       {notes && (phase === "available" || phase === "downloading" || phase === "installing") ? (
         <pre className="update-notes">{notes}</pre>
       ) : null}
-      <SettingToggle
-        checked={autoCheckForUpdates}
-        description="Check GitHub Releases quietly when ABW opens and periodically in the background."
-        label="Check for updates automatically"
-        onChange={onAutoCheckChange}
-      />
+      <AnimatedSettingItem visible={showAutoUpdateToggle}>
+        <SettingToggle
+          checked={autoCheckForUpdates}
+          description="Check GitHub Releases quietly when ABW opens and periodically in the background."
+          label="Check for updates automatically"
+          onChange={onAutoCheckChange}
+          query={query}
+        />
+      </AnimatedSettingItem>
     </div>
   );
 }
 
 function StartupTabsSettings({
   urls,
+  query,
   onChange,
 }: {
   urls: string[];
+  query: string;
   onChange: (urls: string[]) => void;
 }) {
   const [draft, setDraft] = useState("");
@@ -304,8 +573,8 @@ function StartupTabsSettings({
   return (
     <div className="startup-tabs-panel">
       <div>
-        <h2>Startup and new tabs</h2>
-        <p>The first URL is the new tab default. All URLs open together on launch.</p>
+        <h2><HighlightText query={query} text="Startup and new tabs" /></h2>
+        <p><HighlightText query={query} text="The first URL is the new tab default. All URLs open together on launch." /></p>
       </div>
       <div className="startup-url-list">
         {normalizedUrls.map((url, index) => (
@@ -376,11 +645,13 @@ function normalizeUrl(value: string) {
 
 function ThemeSettings({
   autoMatch,
+  query,
   selected,
   onAutoMatchChange,
   onChange,
 }: {
   autoMatch: boolean;
+  query: string;
   selected: AppThemeId;
   onAutoMatchChange: (autoMatch: boolean) => void;
   onChange: (theme: AppThemeId) => void;
@@ -388,8 +659,8 @@ function ThemeSettings({
   return (
     <div className="theme-panel">
       <div>
-        <h2>Theme</h2>
-        <p>Match ABW's title bar to a Wrike-inspired workspace colour.</p>
+        <h2><HighlightText query={query} text="Theme" /></h2>
+        <p><HighlightText query={query} text="Match ABW's title bar to a Wrike-inspired workspace colour." /></p>
       </div>
       <div className="theme-auto-toggle">
         <SettingToggle
@@ -397,6 +668,7 @@ function ThemeSettings({
           description="Automatically match the top window bar to the theme selected in your Wrike workspace sidebar. Choosing a theme below switches to manual selection."
           label="Automatically match Wrike theme"
           onChange={onAutoMatchChange}
+          query={query}
         />
       </div>
       <div className="theme-grid" role="radiogroup" aria-label="ABW theme">
@@ -414,7 +686,7 @@ function ThemeSettings({
               <span />
               <span />
             </span>
-            <span>{theme.label}</span>
+            <span><HighlightText query={query} text={theme.label} /></span>
           </button>
         ))}
       </div>
@@ -424,9 +696,11 @@ function ThemeSettings({
 
 function DictionarySettings({
   words,
+  query,
   onChange,
 }: {
   words: string[];
+  query: string;
   onChange: (words: string[]) => void;
 }) {
   const [draft, setDraft] = useState("");
@@ -463,8 +737,8 @@ function DictionarySettings({
   return (
     <div className="dictionary-panel">
       <div>
-        <h2>Custom dictionary</h2>
-        <p>Add campaign names, client names and abbreviations that ABW should accept.</p>
+        <h2><HighlightText query={query} text="Custom dictionary" /></h2>
+        <p><HighlightText query={query} text="Add campaign names, client names and abbreviations that ABW should accept." /></p>
       </div>
       <div className="dictionary-add">
         <input
@@ -501,7 +775,7 @@ function DictionarySettings({
                   value={editDraft}
                 />
               ) : (
-                <strong>{word}</strong>
+                <strong><HighlightText query={query} text={word} /></strong>
               )}
               <span>
                 {editing === word ? (
@@ -527,18 +801,20 @@ function SettingToggle({
   checked,
   description,
   label,
+  query = "",
   onChange,
 }: {
   checked: boolean;
   description: string;
   label: string;
+  query?: string;
   onChange: (checked: boolean) => void;
 }) {
   return (
     <label className="setting">
       <span>
-        <strong>{label}</strong>
-        <small>{description}</small>
+        <strong><HighlightText query={query} text={label} /></strong>
+        <small><HighlightText query={query} text={description} /></small>
       </span>
       <input
         checked={checked}

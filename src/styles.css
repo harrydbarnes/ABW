@@ -1902,6 +1902,111 @@ input:focus-visible {
   padding: 43px 0 48px;
 }
 
+.settings-header-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.settings-search-box {
+  position: relative;
+  width: min(280px, 100%);
+  flex: none;
+}
+
+.settings-search-box input {
+  width: 100%;
+  height: 38px;
+  padding: 0 32px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: #192943;
+  font-size: 13px;
+  box-shadow: var(--shadow);
+}
+
+.settings-search-box input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.settings-search-clear {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: 16px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.settings-search-clear:hover {
+  background: #f1f5fb;
+  color: #192943;
+}
+
+.settings-no-results {
+  margin-top: 24px;
+  padding: 28px 24px;
+  border-radius: 11px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  text-align: center;
+}
+
+.settings-no-results strong {
+  display: block;
+  font-size: 15px;
+  margin-bottom: 6px;
+}
+
+.settings-no-results p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.setting-highlight {
+  background: #fef08a;
+  color: #192943;
+  padding: 0 2px;
+  border-radius: 3px;
+}
+
+.setting-filter-item {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition:
+    grid-template-rows 240ms cubic-bezier(.22, 1, .36, 1),
+    opacity 200ms ease,
+    margin-top 240ms cubic-bezier(.22, 1, .36, 1);
+}
+
+.setting-filter-item > .setting-filter-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.setting-filter-item.is-hidden {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.setting-group .setting-filter-item.is-visible + .setting-filter-item.is-visible {
+  border-top: 1px solid var(--border);
+}
+
 .setting-group {
   margin-top: 24px;
   background: var(--surface);
@@ -1929,17 +2034,16 @@ input:focus-visible {
   line-height: 1.5;
 }
 
-.setting-group > .setting {
+.setting-group .setting {
   padding-left: 38px;
 }
 
-.setting-group > .startup-tabs-panel,
-.setting-group > .notification-note,
-.setting-group > .dictionary-panel {
+.setting-group .startup-tabs-panel,
+.setting-group .notification-note,
+.setting-group .dictionary-panel {
   margin-top: 0;
   border: 0;
   border-radius: 0;
-  border-top: 1px solid var(--border);
   padding: 20px 22px 20px 38px;
 }
 

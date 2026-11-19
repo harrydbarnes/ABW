@@ -2093,9 +2093,45 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
             corner.style.top = `${Math.floor(cornerTop) - 1}px`;
             corner.style.color = sidebarColor;
           };
+          const abwDetectWrikeInboxUnread = () => {
+            if (abwAutoDownload || !document.body) return false;
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              const raw = (node.textContent || "").trim();
+              if (!/^inbox$/i.test(raw)) continue;
+              const parent = node.parentElement;
+              if (!parent) continue;
+              const rect = parent.getBoundingClientRect?.();
+              if (!rect || rect.width === 0 || rect.height === 0 || rect.left > 360) continue;
+
+              let row = parent;
+              for (let depth = 0; depth < 4 && row.parentElement; depth += 1) {
+                const next = row.parentElement;
+                const nextRect = next.getBoundingClientRect?.();
+                if (!nextRect || nextRect.height > 72 || nextRect.width > 380 || nextRect.left > 360) {
+                  break;
+                }
+                row = next;
+                const rowText = (row.textContent || "").replace(/\s+/g, " ").trim();
+                const match = rowText.match(/\b(\d+)\+?\b/);
+                if (match && Number.parseInt(match[1], 10) > 0) {
+                  return true;
+                }
+              }
+            }
+            return false;
+          };
           const abwReportWrikeTheme = (force = false) => {
             if (abwAutoDownload) return null;
             abwSyncWrikeContentCorner();
+            const hasUnread = abwDetectWrikeInboxUnread();
+            if (window.__abwLastInboxUnread !== hasUnread) {
+              window.__abwLastInboxUnread = hasUnread;
+              window.setTimeout(() => {
+                window.location.href = `abw-inbox://unread?hasUnread=${hasUnread ? "true" : "false"}`;
+              }, 40);
+            }
             const detected = abwDetectWrikeThemeFromDom();
             if (!detected) return null;
             if (!force && window.__abwLastDetectedWrikeTheme === detected) {
