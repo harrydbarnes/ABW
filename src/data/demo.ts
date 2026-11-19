@@ -63,5 +63,7 @@ export const DEFAULT_SETTINGS: Settings = {
   customDictionary: [],
   startupTabUrls: ["https://www.wrike.com/workspace.htm"],
   pinnedDownloadIds: [],
+  favoriteTickets: [],
+  visitHistory: [],
   lastWrikeSession: null,
 };

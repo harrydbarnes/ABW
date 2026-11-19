@@ -14,6 +14,25 @@ export interface DownloadRecord {
   demo?: boolean;
 }
 
+export interface FavoriteTicket {
+  id: string;
+  title: string;
+  url: string;
+  client?: string;
+  details?: string;
+  addedAt: string;
+}
+
+export interface VisitHistoryEntry {
+  id: string;
+  title: string;
+  url: string;
+  client?: string;
+  details?: string;
+  lastVisitedAt: string;
+  visitCount: number;
+}
+
 export interface Settings {
   spellCheck: boolean;
   showSpellCheckInTopbar: boolean;
@@ -30,6 +49,8 @@ export interface Settings {
   customDictionary: string[];
   startupTabUrls: string[];
   pinnedDownloadIds: string[];
+  favoriteTickets: FavoriteTicket[];
+  visitHistory: VisitHistoryEntry[];
   lastWrikeSession: WrikeSession | null;
 }
 

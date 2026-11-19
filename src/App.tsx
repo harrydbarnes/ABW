@@ -46,8 +46,10 @@ import {
 import type {
   AppUpdateState,
   DownloadRecord,
+  FavoriteTicket,
   FileFilter,
   Settings,
+  VisitHistoryEntry,
   WrikeSession,
 } from "./types";
 
@@ -57,7 +59,44 @@ const SettingsPanel = lazy(() =>
     default: module.SettingsPanel,
   })),
 );
+const TicketDrawerModal = lazy(() => import("./features/tickets/TicketDrawerModal"));
 const WRIKE_HOME = "https://www.wrike.com/workspace.htm";
+
+function extractWrikeTicketMetadata(title: string, url: string): { client?: string; details?: string } {
+  const detailsParts: string[] = [];
+  try {
+    const parsed = new URL(url);
+    const queryId = parsed.searchParams.get("id");
+    if (queryId) {
+      detailsParts.push(`ID ${queryId}`);
+    }
+    const hashId = parsed.hash.match(/id=(\d+)/i)?.[1];
+    if (hashId && hashId !== queryId) {
+      detailsParts.push(`ID ${hashId}`);
+    }
+    const pathMatch = parsed.hash.match(/path=([^&]+)/i)?.[1];
+    if (pathMatch) {
+      detailsParts.push(decodeURIComponent(pathMatch).replace(/^[a-z]+/i, (m) => m.toUpperCase()));
+    }
+  } catch {
+    // Ignore URL parse issues
+  }
+  const cleanTitle = title.trim();
+  let client: string | undefined;
+  const underscorePrefix = cleanTitle.match(/^([A-Za-z0-9 &'-]{2,24})_/);
+  if (underscorePrefix) {
+    client = underscorePrefix[1].trim();
+  } else {
+    const dashPrefix = cleanTitle.match(/^([A-Za-z0-9 &'-]{2,24})\s+-\s+/);
+    if (dashPrefix) {
+      client = dashPrefix[1].trim();
+    }
+  }
+  return {
+    client,
+    details: detailsParts.length ? detailsParts.join(" · ") : undefined,
+  };
+}
 const READ_ONLY_URL = "https://login.wrike.com/login/?forceLogin=false&read";
 const APP_VERSION = import.meta.env.VITE_APP_VERSION;
 const LAUNCH_SPLASH_DURATION_MS = 2800;
@@ -143,8 +182,11 @@ export function App() {
     customDictionary: [],
     startupTabUrls: [WRIKE_HOME],
     pinnedDownloadIds: [],
+    favoriteTickets: [],
+    visitHistory: [],
     lastWrikeSession: null,
   });
+  const [ticketModal, setTicketModal] = useState<"favorites" | "history" | null>(null);
   const [appUpdate, setAppUpdate] = useState<AppUpdateState>({
     phase: "idle",
     latestVersion: null,
@@ -164,6 +206,9 @@ export function App() {
   const wrikeTabsRef = useRef(wrikeTabs);
   const activeWrikeTabIdRef = useRef(activeWrikeTabId);
   const wrikeSplitRef = useRef(wrikeSplit);
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const lastRecordedVisitRef = useRef<Map<string, string>>(new Map());
   const canPersistSessionRef = useRef(false);
   const updateRequestInFlightRef = useRef(false);
   const appUpdatePhaseRef = useRef(appUpdate.phase);
@@ -475,6 +520,60 @@ export function App() {
           tab.id === update.tabId ? applyWrikeTabUpdate(tab, update) : tab,
         ),
       );
+      const cleanTitle = update.title.trim();
+      const targetUrl = update.url?.trim() ?? "";
+      if (
+        targetUrl &&
+        targetUrl !== "about:blank" &&
+        !update.isTitleLoading &&
+        cleanTitle &&
+        cleanTitle !== "Wrike" &&
+        cleanTitle !== "Read Only Mode"
+      ) {
+        const signature = `${targetUrl}::${cleanTitle}`;
+        if (lastRecordedVisitRef.current.get(update.tabId) !== signature) {
+          lastRecordedVisitRef.current.set(update.tabId, signature);
+          const currentSettings = settingsRef.current;
+          const now = new Date().toISOString();
+          const { client, details } = extractWrikeTicketMetadata(cleanTitle, targetUrl);
+          const existingIndex = currentSettings.visitHistory.findIndex(
+            (entry) => entry.url === targetUrl,
+          );
+          let nextHistory: VisitHistoryEntry[];
+          if (existingIndex >= 0) {
+            const existing = currentSettings.visitHistory[existingIndex];
+            const updated: VisitHistoryEntry = {
+              ...existing,
+              title: cleanTitle,
+              client: client ?? existing.client,
+              details: details ?? existing.details,
+              lastVisitedAt: now,
+              visitCount: existing.visitCount + 1,
+            };
+            nextHistory = [
+              updated,
+              ...currentSettings.visitHistory.filter((_, idx) => idx !== existingIndex),
+            ];
+          } else {
+            nextHistory = [
+              {
+                id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+                title: cleanTitle,
+                url: targetUrl,
+                client,
+                details,
+                lastVisitedAt: now,
+                visitCount: 1,
+              },
+              ...currentSettings.visitHistory,
+            ].slice(0, 250);
+          }
+          const nextSettings = { ...currentSettings, visitHistory: nextHistory };
+          settingsRef.current = nextSettings;
+          setSettings(nextSettings);
+          void saveSettings(nextSettings).catch(() => undefined);
+        }
+      }
     }).then((unsubscribe) => {
       disposeTabUpdates = unsubscribe;
     });
@@ -813,6 +912,110 @@ export function App() {
     await showWrike(activeWrikeTabIdRef.current);
   }
 
+  function isTabFavorited(tab: WrikeTab): boolean {
+    const targetUrl = tab.url ?? "";
+    if (!targetUrl) {
+      return false;
+    }
+    return settings.favoriteTickets.some((item) => item.url === targetUrl);
+  }
+
+  function toggleFavoriteTab(tab: WrikeTab) {
+    const targetUrl = tab.url ?? normalizedStartupUrls()[0];
+    if (!targetUrl) {
+      return;
+    }
+    const exists = settings.favoriteTickets.some((item) => item.url === targetUrl);
+    let nextFavorites: FavoriteTicket[];
+    if (exists) {
+      nextFavorites = settings.favoriteTickets.filter((item) => item.url !== targetUrl);
+    } else {
+      const cleanTitle = tab.title.trim() || "Wrike";
+      const { client, details } = extractWrikeTicketMetadata(cleanTitle, targetUrl);
+      nextFavorites = [
+        {
+          id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+          title: cleanTitle,
+          url: targetUrl,
+          client,
+          details,
+          addedAt: new Date().toISOString(),
+        },
+        ...settings.favoriteTickets,
+      ];
+    }
+    void updateSettings({ ...settings, favoriteTickets: nextFavorites });
+  }
+
+  async function openTicketModal(mode: "favorites" | "history") {
+    setIsTopbarActionsMenuOpen(false);
+    setTabMenu(null);
+    if (ticketModal === mode) {
+      await closeTicketModal();
+      return;
+    }
+    if (screen === "wrike") {
+      await hideWrike(wrikeTabsRef.current.map((tab) => tab.id));
+    }
+    setTicketModal(mode);
+  }
+
+  async function closeTicketModal() {
+    setTicketModal(null);
+    if (screen === "wrike") {
+      await restoreWrikeView();
+    }
+  }
+
+  async function openTicketUrl(url: string, title?: string) {
+    setTicketModal(null);
+    const tabs = wrikeTabsRef.current;
+    const currentActive = tabs.find((tab) => tab.id === activeWrikeTabIdRef.current);
+    const targetTab =
+      (currentActive && currentActive.mode === "standard" ? currentActive : null) ??
+      tabs.find((tab) => tab.id === "home" && tab.mode === "standard") ??
+      tabs.find((tab) => tab.mode === "standard") ??
+      tabs[0] ??
+      INITIAL_WRIKE_TAB;
+    syncWrikeSplitRef(null);
+    syncActiveWrikeTabId(targetTab.id);
+    setScreen("wrike");
+    setWrikeTabs((current) =>
+      current.map((tab) =>
+        tab.id === targetTab.id
+          ? {
+              ...tab,
+              title: title?.trim() || tab.title,
+              url,
+              isTitleLoading: true,
+              mode: "standard",
+            }
+          : tab,
+      ),
+    );
+    await resizeWrikeTabs(
+      currentWrikeLayouts(null, targetTab.id),
+      topBannerInsetRef.current,
+    ).catch(() => undefined);
+    await launchWrike(targetTab.id, url);
+    await hideWrike(tabs.filter((tab) => tab.id !== targetTab.id).map((tab) => tab.id));
+  }
+
+  function removeFavoriteUrl(url: string) {
+    void updateSettings({
+      ...settings,
+      favoriteTickets: settings.favoriteTickets.filter((item) => item.url !== url),
+    });
+  }
+
+  function clearVisitHistory() {
+    lastRecordedVisitRef.current.clear();
+    void updateSettings({
+      ...settings,
+      visitHistory: [],
+    });
+  }
+
   async function splitWrikeTab(tabId: string, side: WrikePaneSide) {
     const otherTabId = companionTabId(tabId, activeWrikeTabIdRef.current);
     if (!otherTabId) {
@@ -881,6 +1084,7 @@ export function App() {
 
   async function showLocalScreen(next: Exclude<Screen, "wrike">) {
     setIsTopbarActionsMenuOpen(false);
+    setTicketModal(null);
     await hideWrike(wrikeTabs.map((tab) => tab.id));
     setScreen(next);
   }
@@ -1405,6 +1609,20 @@ export function App() {
                 {index === 0 ? <span className="external-dot" /> : null}
                 <span className="tab-actions" aria-label={`${tab.title} controls`}>
                   <button
+                    aria-label={isTabFavorited(tab) ? `Remove ${tab.title} from favourites` : `Add ${tab.title} to favourites`}
+                    aria-pressed={isTabFavorited(tab)}
+                    className={`tab-star ${isTabFavorited(tab) ? "favorited" : ""}`}
+                    draggable={false}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleFavoriteTab(tab);
+                    }}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    title={isTabFavorited(tab) ? "Remove from favourites" : "Add to favourites"}
+                  >
+                    <MaterialIcon kind={isTabFavorited(tab) ? "star" : "star_outline"} />
+                  </button>
+                  <button
                     aria-label={`Close ${tab.title}`}
                     disabled={wrikeTabs.length <= 1}
                     draggable={false}
@@ -1495,14 +1713,30 @@ export function App() {
           ) : null}
           <nav className="task-navigation" aria-label="ABW navigation">
             <button
-              className={`nav-item ${screen === "files" ? "selected" : ""}`}
+              className={`nav-item ${ticketModal === "favorites" ? "selected" : ""}`}
+              onClick={() => void openTicketModal("favorites")}
+              title="Favourited tickets"
+            >
+              <MaterialIcon kind="star" />
+              Favourites
+            </button>
+            <button
+              className={`nav-item ${ticketModal === "history" ? "selected" : ""}`}
+              onClick={() => void openTicketModal("history")}
+              title="Ticket visit history"
+            >
+              <MaterialIcon kind="history" />
+              History
+            </button>
+            <button
+              className={`nav-item ${!ticketModal && screen === "files" ? "selected" : ""}`}
               onClick={() => void showLocalScreen("files")}
             >
               <MaterialIcon kind="description" />
               Files
             </button>
             <button
-              className={`nav-item ${screen === "settings" ? "selected" : ""}`}
+              className={`nav-item ${!ticketModal && screen === "settings" ? "selected" : ""}`}
               onClick={() => void showLocalScreen("settings")}
               title={
                 appUpdate.phase === "available" && appUpdate.latestVersion
@@ -1548,14 +1782,28 @@ export function App() {
               </button>
             ) : null}
             <button
-              className={`topbar-menu-item ${screen === "files" ? "selected" : ""}`}
+              className={`topbar-menu-item ${ticketModal === "favorites" ? "selected" : ""}`}
+              onClick={() => void openTicketModal("favorites")}
+            >
+              <MaterialIcon kind="star" />
+              <span>Favourites</span>
+            </button>
+            <button
+              className={`topbar-menu-item ${ticketModal === "history" ? "selected" : ""}`}
+              onClick={() => void openTicketModal("history")}
+            >
+              <MaterialIcon kind="history" />
+              <span>History</span>
+            </button>
+            <button
+              className={`topbar-menu-item ${!ticketModal && screen === "files" ? "selected" : ""}`}
               onClick={() => void showLocalScreen("files")}
             >
               <MaterialIcon kind="description" />
               <span>Files</span>
             </button>
             <button
-              className={`topbar-menu-item ${screen === "settings" ? "selected" : ""}`}
+              className={`topbar-menu-item ${!ticketModal && screen === "settings" ? "selected" : ""}`}
               onClick={() => void showLocalScreen("settings")}
             >
               <MaterialIcon kind="settings" />
@@ -1777,6 +2025,19 @@ export function App() {
           </div>
         )}
       </main>
+      {ticketModal ? (
+        <Suspense fallback={null}>
+          <TicketDrawerModal
+            favorites={settings.favoriteTickets}
+            history={settings.visitHistory}
+            mode={ticketModal}
+            onClearHistory={clearVisitHistory}
+            onClose={() => void closeTicketModal()}
+            onOpenUrl={(url, title) => void openTicketUrl(url, title)}
+            onRemoveFavorite={removeFavoriteUrl}
+          />
+        </Suspense>
+      ) : null}
     </div>
     {isLaunchSplashVisible ? (
       <div className="launch-splash" aria-label="Opening ABW" role="status">
@@ -1798,6 +2059,7 @@ function MaterialIcon({
     | "arrow_forward"
     | "close"
     | "description"
+    | "history"
     | "home"
     | "keyboard_arrow_left"
     | "keyboard_arrow_right"
@@ -1805,6 +2067,8 @@ function MaterialIcon({
     | "refresh"
     | "settings"
     | "share"
+    | "star"
+    | "star_outline"
     | "tab"
     | "view_column"
     | "window_maximize"
@@ -1820,6 +2084,9 @@ function MaterialIcon({
     description: (
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Zm1 7V3.5L20.5 9ZM16 18H8v-2h8Zm0-4H8v-2h8Z" />
     ),
+    history: (
+      <path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18Zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8Z" />
+    ),
     keyboard_arrow_left: <path d="m15.41 16.59-4.58-4.59 4.58-4.59L14 6l-6 6 6 6Z" />,
     keyboard_arrow_right: <path d="m8.59 16.59 4.58-4.59-4.58-4.59L10 6l6 6-6 6Z" />,
     link: (
@@ -1833,6 +2100,10 @@ function MaterialIcon({
     ),
     share: (
       <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11A2.99 2.99 0 1 0 15 5c0 .24.04.47.09.7L8.04 9.81A3 3 0 1 0 8.04 14l7.12 4.18c-.05.21-.08.43-.08.65a2.92 2.92 0 1 0 2.92-2.75Z" />
+    ),
+    star: <path d="m12 17.27 6.18 3.73-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21Z" />,
+    star_outline: (
+      <path d="m22 9.24-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03ZM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.04 4.38.38-3.32 2.88 1 4.28Z" />
     ),
     tab: <path d="M4 6a2 2 0 0 1 2-2h5.8a2 2 0 0 1 1.42.59L16.63 8H20v10a2 2 0 0 1-2 2H4Z" />,
     view_column: <path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Zm2 0v14h5V5Zm7 0v14h5V5Z" />,

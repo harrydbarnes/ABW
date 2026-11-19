@@ -63,6 +63,33 @@ struct DownloadRecord {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FavoriteTicket {
+    id: String,
+    title: String,
+    url: String,
+    #[serde(default)]
+    client: Option<String>,
+    #[serde(default)]
+    details: Option<String>,
+    added_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VisitHistoryEntry {
+    id: String,
+    title: String,
+    url: String,
+    #[serde(default)]
+    client: Option<String>,
+    #[serde(default)]
+    details: Option<String>,
+    last_visited_at: String,
+    visit_count: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct Settings {
     spell_check: bool,
@@ -87,6 +114,10 @@ struct Settings {
     startup_tab_urls: Vec<String>,
     #[serde(default)]
     pinned_download_ids: Vec<String>,
+    #[serde(default)]
+    favorite_tickets: Vec<FavoriteTicket>,
+    #[serde(default)]
+    visit_history: Vec<VisitHistoryEntry>,
     #[serde(default)]
     last_wrike_session: Option<WrikeSession>,
 }
@@ -159,6 +190,8 @@ impl Default for Settings {
             custom_dictionary: Vec::new(),
             startup_tab_urls: default_startup_tab_urls(),
             pinned_download_ids: Vec::new(),
+            favorite_tickets: Vec::new(),
+            visit_history: Vec::new(),
             last_wrike_session: None,
         }
     }
