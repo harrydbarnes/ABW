@@ -28,6 +28,7 @@ import {
   loadStorageHealth,
   notifyUpdateAvailable,
   openSourceTask,
+  resetApp,
   resizeWrikeTabs,
   saveSettings,
   saveWrikeSession,
@@ -1037,6 +1038,31 @@ export function App() {
     });
   }
 
+  async function handleResetApp() {
+    try {
+      const defaults = await resetApp();
+      settingsRef.current = defaults;
+      setSettings(defaults);
+      setSessionPrompt(null);
+      setTicketModal(null);
+      lastRecordedVisitRef.current.clear();
+      setSearch("");
+      setFilter("all");
+      for (const tab of wrikeTabsRef.current) {
+        if (tab.id !== INITIAL_WRIKE_TAB.id) {
+          await closeWrikeTab(tab.id).catch(() => undefined);
+        }
+      }
+      syncWrikeSplitRef(null);
+      wrikeTabsRef.current = [INITIAL_WRIKE_TAB];
+      setWrikeTabs([INITIAL_WRIKE_TAB]);
+      syncActiveWrikeTabId(INITIAL_WRIKE_TAB.id);
+      setNotice("ABW has been reset to default settings.");
+    } catch (error) {
+      setStorageWarning(`Unable to reset ABW: ${String(error)}`);
+    }
+  }
+
   async function splitWrikeTab(tabId: string, side: WrikePaneSide) {
     const otherTabId = companionTabId(tabId, activeWrikeTabIdRef.current);
     if (!otherTabId) {
@@ -2044,6 +2070,7 @@ export function App() {
                 onChange={(next) => void updateSettings(next)}
                 onCheckForUpdates={() => void runUpdateCheck(true)}
                 onInstallUpdate={() => void startUpdateInstall()}
+                onResetApp={() => void handleResetApp()}
                 onTestNotification={() => void testNotification()}
               />
             </Suspense>

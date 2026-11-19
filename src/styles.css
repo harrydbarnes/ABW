@@ -2556,10 +2556,96 @@ input:focus-visible {
 }
 
 .settings-footer {
+  position: relative;
   padding: 22px 0 0;
   color: #8a96a9;
   font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-footer-meta {
   text-align: center;
+}
+
+.settings-reset-btn {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #8a96a9;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+
+.settings-reset-btn:hover {
+  background: #fee2e2;
+  border-color: #ef4444;
+  color: #b91c1c;
+}
+
+.reset-confirm-backdrop {
+  position: fixed;
+  inset: 50px 0 0 0;
+  z-index: 50;
+  background: rgba(16, 29, 62, 0.36);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.reset-confirm-modal {
+  width: min(420px, 100%);
+  padding: 24px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #ffffff;
+  color: #192943;
+  box-shadow: 0 22px 54px rgba(16, 29, 62, 0.24);
+}
+
+.reset-confirm-modal h2 {
+  margin: 0 0 8px;
+  font-size: 17px;
+}
+
+.reset-confirm-modal p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.reset-confirm-actions {
+  margin-top: 20px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.reset-confirm-danger {
+  min-width: 110px;
+  height: 40px;
+  padding: 0 16px;
+  border: 1px solid #dc2626;
+  border-radius: 7px;
+  background: #dc2626;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.reset-confirm-danger:hover {
+  background: #b91c1c;
+  border-color: #b91c1c;
 }
 
 @media (max-width: 1120px) {

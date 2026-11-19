@@ -62,6 +62,13 @@ export async function saveSettings(settings: Settings): Promise<Settings> {
   return invokeDesktop<Settings>("update_settings", { settings });
 }
 
+export async function resetApp(): Promise<Settings> {
+  if (!desktopRuntime) {
+    return DEFAULT_SETTINGS;
+  }
+  return invokeDesktop<Settings>("reset_app");
+}
+
 export async function saveWrikeSession(session: WrikeSession): Promise<void> {
   if (desktopRuntime) {
     await invokeDesktop("update_last_wrike_session", { session });

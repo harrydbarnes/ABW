@@ -8,6 +8,7 @@ interface Props {
   onChange: (next: Settings) => void;
   onCheckForUpdates: () => void;
   onInstallUpdate: () => void;
+  onResetApp: () => void;
   onTestNotification: () => void;
 }
 
@@ -67,9 +68,11 @@ export function SettingsPanel({
   onChange,
   onCheckForUpdates,
   onInstallUpdate,
+  onResetApp,
   onTestNotification,
 }: Props) {
   const [searchQuery, setSearchQuery] = useState("");
+  const [confirmResetOpen, setConfirmResetOpen] = useState(false);
   const query = searchQuery.trim();
 
   const showUpdatesHeader = matchesSearch(query, "App updates", "version", "GitHub Releases", "install");
@@ -402,8 +405,55 @@ export function SettingsPanel({
       </AnimatedSettingItem>
 
       <footer className="settings-footer">
-        ABW v{appVersion} · Questions or support: Harry Barnes
+        <span className="settings-footer-meta">
+          ABW v{appVersion} · Questions or support: Harry Barnes
+        </span>
+        <button
+          className="settings-reset-btn"
+          onClick={() => setConfirmResetOpen(true)}
+          title="Reset ABW to default settings"
+          type="button"
+        >
+          Reset
+        </button>
       </footer>
+      {confirmResetOpen ? (
+        <div
+          className="reset-confirm-backdrop"
+          onClick={() => setConfirmResetOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirm app reset"
+        >
+          <div className="reset-confirm-modal" onClick={(event) => event.stopPropagation()}>
+            <h2>Reset ABW?</h2>
+            <p>
+              This will restore all settings to their defaults and clear your custom dictionary,
+              startup tabs, favourites, and ticket history. Your downloaded files will not be
+              deleted.
+            </p>
+            <div className="reset-confirm-actions">
+              <button
+                className="secondary-action"
+                onClick={() => setConfirmResetOpen(false)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="reset-confirm-danger"
+                onClick={() => {
+                  setConfirmResetOpen(false);
+                  onResetApp();
+                }}
+                type="button"
+              >
+                Reset app
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

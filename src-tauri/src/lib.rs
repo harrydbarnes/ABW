@@ -548,6 +548,40 @@ fn update_last_wrike_session(app: AppHandle, session: WrikeSession) -> Result<()
 }
 
 #[tauri::command]
+fn reset_app(app: AppHandle, state: State<'_, AppState>) -> Result<Settings, String> {
+    let (defaults, previous) =
+        persistence::update::<Settings, _>(&settings_path(&app)?, |stored| {
+            let previous = stored.clone();
+            let defaults = Settings::default();
+            if startup::enabled()? != defaults.open_abw_at_system_startup {
+                let _ = startup::set_enabled(defaults.open_abw_at_system_startup);
+            }
+            *stored = defaults;
+            Ok(previous)
+        })?;
+    state
+        .open_external_links_in_browser
+        .store(defaults.open_external_links_in_browser, Ordering::Relaxed);
+    if !previous.custom_dictionary.is_empty() {
+        sync_windows_spelling_dictionary(&previous.custom_dictionary, &defaults.custom_dictionary);
+    }
+    let script = apply_spell_check_script(defaults.spell_check, false);
+    let tab_ids = state
+        .wrike_tabs
+        .lock()
+        .map(|tabs| tabs.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    for tab_id in tab_ids {
+        if let Some(webview) = app.get_webview(&wrike_tab_label(&tab_id)?) {
+            let _ = webview.eval(&script);
+        }
+    }
+    app.emit("settings-updated", defaults.clone())
+        .map_err(|error| format!("Unable to refresh settings: {error}"))?;
+    Ok(defaults)
+}
+
+#[tauri::command]
 fn send_test_notification(app: AppHandle) -> Result<(), String> {
     app.notification()
         .builder()
@@ -2552,6 +2586,7 @@ pub fn run() {
             open_source_task,
             preview_spreadsheet,
             read_download,
+            reset_app,
             resize_wrike_tabs,
             send_test_notification,
             set_update_badge,
