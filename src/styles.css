@@ -1804,6 +1804,7 @@ input:focus-visible {
 .setting-group-header {
   padding: 20px 22px 16px;
   border-bottom: 1px solid var(--border);
+  background: var(--surface-soft);
 }
 
 .setting-group-header h2 {
@@ -1818,6 +1819,10 @@ input:focus-visible {
   line-height: 1.5;
 }
 
+.setting-group > .setting {
+  padding-left: 38px;
+}
+
 .setting-group > .startup-tabs-panel,
 .setting-group > .notification-note,
 .setting-group > .dictionary-panel {
@@ -1825,7 +1830,7 @@ input:focus-visible {
   border: 0;
   border-radius: 0;
   border-top: 1px solid var(--border);
-  padding: 20px 22px;
+  padding: 20px 22px 20px 38px;
 }
 
 .notification-note h3 {
@@ -1836,7 +1841,7 @@ input:focus-visible {
 .update-panel .setting {
   min-height: 0;
   margin: 18px -24px -24px;
-  padding: 18px 24px;
+  padding: 18px 24px 18px 40px;
   border-top: 1px solid var(--border);
 }
 
