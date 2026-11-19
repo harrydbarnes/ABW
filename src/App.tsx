@@ -128,6 +128,7 @@ export function App() {
   const [filter, setFilter] = useState<FileFilter>("all");
   const [settings, setSettings] = useState<Settings>({
     spellCheck: true,
+    showSpellCheckInTopbar: false,
     launchWrikeOnStart: true,
     downloadNotifications: true,
     openAbwAtSystemStartup: false,
@@ -1444,18 +1445,20 @@ export function App() {
           ) : null}
         </div>
         <div className="topbar-actions">
-          <button
-            aria-label={`Turn spell check ${settings.spellCheck ? "off" : "on"}`}
-            aria-pressed={settings.spellCheck}
-            className={`spell-state ${settings.spellCheck ? "enabled" : ""}`}
-            onClick={() => void toggleSpellCheck()}
-            title={`Turn spell check ${settings.spellCheck ? "off" : "on"}`}
-          >
-            <span className="icon-wrap">
-              <NavIcon kind="spell" />
-            </span>
-            Spell check {settings.spellCheck ? "on" : "off"}
-          </button>
+          {settings.showSpellCheckInTopbar ? (
+            <button
+              aria-label={`Turn spell check ${settings.spellCheck ? "off" : "on"}`}
+              aria-pressed={settings.spellCheck}
+              className={`spell-state ${settings.spellCheck ? "enabled" : ""}`}
+              onClick={() => void toggleSpellCheck()}
+              title={`Turn spell check ${settings.spellCheck ? "off" : "on"}`}
+            >
+              <span className="icon-wrap">
+                <NavIcon kind="spell" />
+              </span>
+              Spell check {settings.spellCheck ? "on" : "off"}
+            </button>
+          ) : null}
           <nav className="task-navigation" aria-label="ABW navigation">
             <button
               className={`nav-item ${screen === "files" ? "selected" : ""}`}
@@ -1500,14 +1503,16 @@ export function App() {
             className={`topbar-actions-menu ${isTopbarActionsMenuOpen ? "open" : ""}`}
             id="topbar-actions-menu"
           >
-            <button
-              aria-pressed={settings.spellCheck}
-              className="topbar-menu-item"
-              onClick={() => void toggleSpellCheck()}
-            >
-              <NavIcon kind="spell" />
-              <span>Spell check {settings.spellCheck ? "on" : "off"}</span>
-            </button>
+            {settings.showSpellCheckInTopbar ? (
+              <button
+                aria-pressed={settings.spellCheck}
+                className="topbar-menu-item"
+                onClick={() => void toggleSpellCheck()}
+              >
+                <NavIcon kind="spell" />
+                <span>Spell check {settings.spellCheck ? "on" : "off"}</span>
+              </button>
+            ) : null}
             <button
               className={`topbar-menu-item ${screen === "files" ? "selected" : ""}`}
               onClick={() => void showLocalScreen("files")}

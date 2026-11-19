@@ -16,6 +16,7 @@ export interface DownloadRecord {
 
 export interface Settings {
   spellCheck: boolean;
+  showSpellCheckInTopbar: boolean;
   launchWrikeOnStart: boolean;
   downloadNotifications: boolean;
   openAbwAtSystemStartup: boolean;

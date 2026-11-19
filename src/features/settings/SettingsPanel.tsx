@@ -26,13 +26,19 @@ export function SettingsPanel({
         <h1>Settings</h1>
         <p>Preferences apply to ABW and the live Wrike workspace tab.</p>
       </header>
+      <AppUpdateSettings
+        appVersion={appVersion}
+        autoCheckForUpdates={settings.autoCheckForUpdates}
+        onAutoCheckChange={(autoCheckForUpdates) => onChange({ ...settings, autoCheckForUpdates })}
+        onCheckForUpdates={onCheckForUpdates}
+        onInstallUpdate={onInstallUpdate}
+        updateState={updateState}
+      />
       <div className="setting-group">
-        <SettingToggle
-          checked={settings.spellCheck}
-          description="Mark misspellings in Wrike editors and ABW search fields using WebView2 spell checking."
-          label="Spell check"
-          onChange={(spellCheck) => onChange({ ...settings, spellCheck })}
-        />
+        <div className="setting-group-header">
+          <h2>ABW preferences</h2>
+          <p>Control how ABW launches, behaves in the background, and opens tabs.</p>
+        </div>
         <SettingToggle
           checked={settings.launchWrikeOnStart}
           description="Open your startup tabs whenever ABW starts. You can still reopen the previous session from the launch toast."
@@ -57,6 +63,19 @@ export function SettingsPanel({
           label="Confirm before closing with multiple tabs open"
           onChange={(confirmBeforeClosingTabs) => onChange({ ...settings, confirmBeforeClosingTabs })}
         />
+        <StartupTabsSettings
+          urls={settings.startupTabUrls}
+          onChange={(startupTabUrls) => onChange({ ...settings, startupTabUrls })}
+        />
+      </div>
+      <div className="setting-group">
+        <div className="setting-group-header">
+          <h2>File management</h2>
+          <p>
+            ABW stores intercepted downloads in its per-user application data directory. Files can
+            always be opened in Windows from the preview pane.
+          </p>
+        </div>
         <SettingToggle
           checked={settings.downloadNotifications}
           description="Show a Windows notification when a file from Wrike has been saved into ABW Files."
@@ -67,25 +86,23 @@ export function SettingsPanel({
           checked={settings.openDownloadedFilesAutomatically}
           description="Automatically open each downloaded file in its default Windows application as soon as it is saved into ABW Files."
           label="Open downloaded files automatically"
-          onChange={(openDownloadedFilesAutomatically) => onChange({ ...settings, openDownloadedFilesAutomatically })}
+          onChange={(openDownloadedFilesAutomatically) =>
+            onChange({ ...settings, openDownloadedFilesAutomatically })
+          }
         />
-        <SettingToggle
-          checked={settings.autoCheckForUpdates}
-          description="Check GitHub Releases quietly when ABW opens and show a prompt in the title bar when a newer version is ready."
-          label="Check for updates automatically"
-          onChange={(autoCheckForUpdates) => onChange({ ...settings, autoCheckForUpdates })}
-        />
+        <div className="notification-note">
+          <div>
+            <h3>Wrike notifications</h3>
+            <p>
+              Comments, mentions and assignments use Wrike notifications in the live workspace tab.
+              Keep it open and enable notifications when Wrike prompts you.
+            </p>
+          </div>
+          <button className="secondary-action" onClick={onTestNotification}>
+            Send test notification
+          </button>
+        </div>
       </div>
-      <AppUpdateSettings
-        appVersion={appVersion}
-        onCheckForUpdates={onCheckForUpdates}
-        onInstallUpdate={onInstallUpdate}
-        updateState={updateState}
-      />
-      <StartupTabsSettings
-        urls={settings.startupTabUrls}
-        onChange={(startupTabUrls) => onChange({ ...settings, startupTabUrls })}
-      />
       <ThemeSettings
         autoMatch={settings.autoMatchWrikeTheme}
         selected={settings.theme}
@@ -96,28 +113,27 @@ export function SettingsPanel({
           onChange({ ...settings, theme, autoMatchWrikeTheme: false })
         }
       />
-      <div className="notification-note">
-        <div>
-          <h2>Wrike notifications</h2>
-          <p>
-            Comments, mentions and assignments use Wrike notifications in the live workspace tab.
-            Keep it open and enable notifications when Wrike prompts you.
-          </p>
+      <div className="setting-group">
+        <div className="setting-group-header">
+          <h2>Spell check</h2>
+          <p>Manage spell checking in Wrike editors and your custom dictionary.</p>
         </div>
-        <button className="secondary-action" onClick={onTestNotification}>
-          Send test notification
-        </button>
-      </div>
-      <DictionarySettings
-        words={settings.customDictionary}
-        onChange={(customDictionary) => onChange({ ...settings, customDictionary })}
-      />
-      <div className="storage-note">
-        <h2>Downloads</h2>
-        <p>
-          ABW stores intercepted downloads in its per-user application data directory. Files can
-          always be opened in Windows from the preview pane.
-        </p>
+        <SettingToggle
+          checked={settings.spellCheck}
+          description="Mark misspellings in Wrike editors and ABW search fields using WebView2 spell checking."
+          label="Spell check"
+          onChange={(spellCheck) => onChange({ ...settings, spellCheck })}
+        />
+        <SettingToggle
+          checked={settings.showSpellCheckInTopbar}
+          description="Show a quick spell check toggle button in the top window bar."
+          label="Show in topbar"
+          onChange={(showSpellCheckInTopbar) => onChange({ ...settings, showSpellCheckInTopbar })}
+        />
+        <DictionarySettings
+          words={settings.customDictionary}
+          onChange={(customDictionary) => onChange({ ...settings, customDictionary })}
+        />
       </div>
       <footer className="settings-footer">
         ABW v{appVersion} · Questions or support: Harry Barnes
@@ -150,12 +166,16 @@ function formatUpdateDate(value: string | null): string | null {
 
 function AppUpdateSettings({
   appVersion,
+  autoCheckForUpdates,
   updateState,
+  onAutoCheckChange,
   onCheckForUpdates,
   onInstallUpdate,
 }: {
   appVersion: string;
+  autoCheckForUpdates: boolean;
   updateState: AppUpdateState;
+  onAutoCheckChange: (checked: boolean) => void;
   onCheckForUpdates: () => void;
   onInstallUpdate: () => void;
 }) {
@@ -231,6 +251,12 @@ function AppUpdateSettings({
       {notes && (phase === "available" || phase === "downloading" || phase === "installing") ? (
         <pre className="update-notes">{notes}</pre>
       ) : null}
+      <SettingToggle
+        checked={autoCheckForUpdates}
+        description="Check GitHub Releases quietly when ABW opens and periodically in the background."
+        label="Check for updates automatically"
+        onChange={onAutoCheckChange}
+      />
     </div>
   );
 }

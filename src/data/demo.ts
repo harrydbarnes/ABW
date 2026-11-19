@@ -49,6 +49,7 @@ export const DEMO_DOWNLOADS: DownloadRecord[] = [
 
 export const DEFAULT_SETTINGS: Settings = {
   spellCheck: true,
+  showSpellCheckInTopbar: false,
   launchWrikeOnStart: true,
   downloadNotifications: true,
   openAbwAtSystemStartup: false,

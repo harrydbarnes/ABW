@@ -66,6 +66,8 @@ struct DownloadRecord {
 #[serde(rename_all = "camelCase", default)]
 struct Settings {
     spell_check: bool,
+    #[serde(default)]
+    show_spell_check_in_topbar: bool,
     launch_wrike_on_start: bool,
     download_notifications: bool,
     open_abw_at_system_startup: bool,
@@ -141,6 +143,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             spell_check: true,
+            show_spell_check_in_topbar: false,
             launch_wrike_on_start: true,
             download_notifications: true,
             open_abw_at_system_startup: false,
