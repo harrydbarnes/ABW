@@ -1712,14 +1712,16 @@ export function App() {
             </button>
           ) : null}
           <nav className="task-navigation" aria-label="ABW navigation">
-            <button
-              className={`nav-item ${ticketModal === "favorites" ? "selected" : ""}`}
-              onClick={() => void openTicketModal("favorites")}
-              title="Favourited tickets"
-            >
-              <MaterialIcon kind="star" />
-              Favourites
-            </button>
+            {settings.favoriteTickets.length > 0 ? (
+              <button
+                className={`nav-item ${ticketModal === "favorites" ? "selected" : ""}`}
+                onClick={() => void openTicketModal("favorites")}
+                title="Favourited tickets"
+              >
+                <MaterialIcon kind="star" />
+                Favourites
+              </button>
+            ) : null}
             <button
               className={`nav-item ${ticketModal === "history" ? "selected" : ""}`}
               onClick={() => void openTicketModal("history")}
@@ -1781,13 +1783,15 @@ export function App() {
                 <span>Spell check {settings.spellCheck ? "on" : "off"}</span>
               </button>
             ) : null}
-            <button
-              className={`topbar-menu-item ${ticketModal === "favorites" ? "selected" : ""}`}
-              onClick={() => void openTicketModal("favorites")}
-            >
-              <MaterialIcon kind="star" />
-              <span>Favourites</span>
-            </button>
+            {settings.favoriteTickets.length > 0 ? (
+              <button
+                className={`topbar-menu-item ${ticketModal === "favorites" ? "selected" : ""}`}
+                onClick={() => void openTicketModal("favorites")}
+              >
+                <MaterialIcon kind="star" />
+                <span>Favourites</span>
+              </button>
+            ) : null}
             <button
               className={`topbar-menu-item ${ticketModal === "history" ? "selected" : ""}`}
               onClick={() => void openTicketModal("history")}
