@@ -1,11 +1,15 @@
 use chrono::DateTime;
 use serde::Serialize;
-use std::{sync::Mutex, time::Duration};
+use std::{
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 use tauri::{ipc::Channel, AppHandle, State};
 use tauri_plugin_updater::{Error as UpdaterError, Update, UpdaterExt};
 
 const UPDATE_CHECK_TIMEOUT: Duration = Duration::from_secs(20);
 const UPDATE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(180);
+const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Default)]
 pub struct PendingUpdateState(pub Mutex<Option<Update>>);
@@ -134,6 +138,7 @@ pub async fn install_update(
 
     let mut downloaded: u64 = 0;
     let mut started = false;
+    let mut last_progress = Instant::now();
     let chunk_channel = on_event.clone();
     let finish_channel = on_event;
 
@@ -145,11 +150,15 @@ pub async fn install_update(
                     let _ = chunk_channel.send(UpdateDownloadEvent::Started { content_length });
                 }
                 downloaded = downloaded.saturating_add(chunk_length as u64);
-                let _ = chunk_channel.send(UpdateDownloadEvent::Progress {
-                    chunk_length,
-                    downloaded,
-                    content_length,
-                });
+                let finished = content_length.is_some_and(|total| downloaded >= total);
+                if finished || last_progress.elapsed() >= PROGRESS_EMIT_INTERVAL {
+                    last_progress = Instant::now();
+                    let _ = chunk_channel.send(UpdateDownloadEvent::Progress {
+                        chunk_length,
+                        downloaded,
+                        content_length,
+                    });
+                }
             },
             move || {
                 let _ = finish_channel.send(UpdateDownloadEvent::Finished);

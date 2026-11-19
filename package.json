@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
-    "test:smoke": "node --test scripts/dependency-smoke.test.mjs scripts/desktop-regressions.test.mjs",
+    "test:smoke": "node --test scripts/dependency-smoke.test.mjs scripts/desktop-regressions.test.mjs scripts/frontend-logic.test.mjs",
     "dependencies:report": "node scripts/dependency-report.mjs",
     "release:prepare": "node scripts/release-version.mjs",
     "release:check": "node scripts/release-version.mjs --check",
@@ -16,16 +16,12 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",
-    "exceljs": "^4.4.0",
     "pdfjs-dist": "^6.5.438",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
   "overrides": {
-    "minimatch": "11.0.1",
-    "exceljs": {
-      "uuid": "11.1.1"
-    }
+    "minimatch": "11.0.1"
   },
   "devDependencies": {
     "@napi-rs/canvas": "^1.1.1",

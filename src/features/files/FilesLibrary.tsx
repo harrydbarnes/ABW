@@ -1,3 +1,4 @@
+import { memo, useMemo } from "react";
 import type { DownloadRecord, FileFilter } from "../../types";
 
 interface Props {
@@ -20,7 +21,14 @@ const filters: Array<{ id: FileFilter; label: string }> = [
   { id: "document", label: "Documents" },
 ];
 
-export function FilesLibrary({
+const TIME_FORMATTER = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
+const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+});
+
+export const FilesLibrary = memo(function FilesLibrary({
   downloads,
   filter,
   onFilterChange,
@@ -32,7 +40,8 @@ export function FilesLibrary({
   search,
   selectedId,
 }: Props) {
-  const pinned = new Set(pinnedIds);
+  const pinned = useMemo(() => new Set(pinnedIds), [pinnedIds]);
+  const todayString = useMemo(() => new Date().toDateString(), [downloads]);
   return (
     <section className="files-library" aria-label="Downloaded files">
       <header className="library-header">
@@ -75,44 +84,47 @@ export function FilesLibrary({
         {downloads.length === 0 ? (
           <div className="empty-list">No downloaded files match this view.</div>
         ) : (
-          downloads.map((file) => (
-            <div
-              className={[
-                "file-row",
-                selectedId === file.id ? "selected" : "",
-                pinned.has(file.id) ? "pinned" : "",
-              ].join(" ")}
-              key={file.id}
-              role="listitem"
-            >
-              <button className="file-select" onClick={() => onSelect(file.id)}>
-                <FileGlyph kind={file.kind} />
-                <strong>{file.fileName}</strong>
-              </button>
-              <button
-                className="row-task-link"
-                onClick={() => onOpenSourceTask(file)}
-                title={`Open ${file.sourceLabel} in Wrike`}
+          downloads.map((file) => {
+            const isPinned = pinned.has(file.id);
+            return (
+              <div
+                className={[
+                  "file-row",
+                  selectedId === file.id ? "selected" : "",
+                  isPinned ? "pinned" : "",
+                ].join(" ")}
+                key={file.id}
+                role="listitem"
               >
-                {file.sourceLabel}
-              </button>
-              <time>{formatDate(file.downloadedAt)}</time>
-              <button
-                aria-label={`${pinned.has(file.id) ? "Unpin" : "Pin"} ${file.fileName}`}
-                aria-pressed={pinned.has(file.id)}
-                className={`pin-file ${pinned.has(file.id) ? "active" : ""}`}
-                onClick={() => onTogglePin(file.id)}
-                title={pinned.has(file.id) ? "Unpin" : "Pin to top"}
-              >
-                <PinIcon filled={pinned.has(file.id)} />
-              </button>
-            </div>
-          ))
+                <button className="file-select" onClick={() => onSelect(file.id)}>
+                  <FileGlyph kind={file.kind} />
+                  <strong>{file.fileName}</strong>
+                </button>
+                <button
+                  className="row-task-link"
+                  onClick={() => onOpenSourceTask(file)}
+                  title={`Open ${file.sourceLabel} in Wrike`}
+                >
+                  {file.sourceLabel}
+                </button>
+                <time>{formatDate(file.downloadedAt, todayString)}</time>
+                <button
+                  aria-label={`${isPinned ? "Unpin" : "Pin"} ${file.fileName}`}
+                  aria-pressed={isPinned}
+                  className={`pin-file ${isPinned ? "active" : ""}`}
+                  onClick={() => onTogglePin(file.id)}
+                  title={isPinned ? "Unpin" : "Pin to top"}
+                >
+                  <PinIcon filled={isPinned} />
+                </button>
+              </div>
+            );
+          })
         )}
       </div>
     </section>
   );
-}
+});
 
 function PinIcon({ filled }: { filled: boolean }) {
   return (
@@ -134,12 +146,9 @@ function FileGlyph({ kind }: Pick<DownloadRecord, "kind">) {
   );
 }
 
-function formatDate(value: string) {
+function formatDate(value: string, todayString: string) {
   const date = new Date(value);
-  const today = new Date();
-  const sameDay = date.toDateString() === today.toDateString();
-  const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return sameDay
-    ? `Today, ${time}`
-    : date.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" }) + `, ${time}`;
+  const sameDay = date.toDateString() === todayString;
+  const time = TIME_FORMATTER.format(date);
+  return sameDay ? `Today, ${time}` : `${DATE_FORMATTER.format(date)}, ${time}`;
 }

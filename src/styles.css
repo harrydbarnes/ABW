@@ -3057,6 +3057,124 @@ input:focus-visible {
   cursor: default;
 }
 
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolbar-find-btn {
+  height: 27px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: #536177;
+  background: #fff;
+  cursor: pointer;
+}
+
+.toolbar-find-btn:hover {
+  border-color: #c8d2e6;
+  color: #162238;
+}
+
+.sheet-find-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+  background: #fafbfe;
+}
+
+.sheet-find-bar input {
+  width: 180px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.sheet-find-count {
+  min-width: 64px;
+  font-size: 11px;
+  color: #6b788e;
+}
+
+.sheet-find-bar button {
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #fff;
+  color: #43536b;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sheet-find-bar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.sheet td.sheet-match {
+  background-color: #fff3bf !important;
+}
+
+.sheet td.sheet-match.active {
+  background-color: #ffe066 !important;
+  outline: 2px solid #d97706;
+  outline-offset: -2px;
+}
+
+.pdf-view:focus,
+.spreadsheet-view:focus {
+  outline: none;
+}
+
+.pdf-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pdf-nav button,
+.pdf-fit-btn {
+  height: 27px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #fff;
+  color: #43536b;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pdf-fit-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.pdf-page-input {
+  width: 44px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  text-align: center;
+  font-size: 12px;
+}
+
+.file-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 72px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

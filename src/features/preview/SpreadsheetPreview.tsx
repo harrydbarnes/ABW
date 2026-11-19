@@ -1,4 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import type {
   DownloadRecord,
   WorkbookCell,
@@ -19,6 +29,11 @@ type CellSelection = {
   anchor: CellCoord;
   focus: CellCoord;
 };
+
+interface CellMatch {
+  row: number;
+  col: number;
+}
 
 function parseSpreadsheetNumber(raw: string): number | null {
   const trimmed = raw.trim();
@@ -73,7 +88,74 @@ const DEMO_PREVIEW: WorkbookPreview = {
   ],
 };
 
-export default function SpreadsheetPreview({
+const SheetRow = memo(function SheetRow({
+  row,
+  rowIndex,
+  columns,
+  stylesPalette,
+  matchCols,
+  activeMatchCol,
+  selMinCol,
+  selMaxCol,
+  onStartSelection,
+  onExtendSelection,
+}: {
+  row: WorkbookSheet["rows"][number];
+  rowIndex: number;
+  columns: WorkbookSheet["columns"];
+  stylesPalette: CSSProperties[];
+  matchCols: Set<number> | undefined;
+  activeMatchCol: number;
+  selMinCol: number;
+  selMaxCol: number;
+  onStartSelection: (rowIndex: number, cellIndex: number, shiftKey: boolean) => void;
+  onExtendSelection: (rowIndex: number, cellIndex: number) => void;
+}) {
+  return (
+    <tr style={{ height: row.heightPx }}>
+      <th className="row-number">{row.index}</th>
+      {row.cells.map((cell, cellIndex) => {
+        if (cell.coveredByMerge) {
+          return null;
+        }
+        const isActiveMatch = cellIndex === activeMatchCol;
+        const isMatch = !isActiveMatch && Boolean(matchCols?.has(cellIndex));
+        const isSelected = selMinCol >= 0 && cellIndex >= selMinCol && cellIndex <= selMaxCol;
+        const className = [
+          isActiveMatch ? "sheet-match active" : isMatch ? "sheet-match" : "",
+          isSelected ? "cell-selected" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        return (
+          <td
+            className={className || undefined}
+            colSpan={cell.colSpan}
+            data-cell-key={isMatch || isActiveMatch ? `${rowIndex}:${cellIndex}` : undefined}
+            key={columns[cellIndex]?.index ?? cellIndex}
+            onMouseDown={(event) => {
+              if (event.button !== 0) {
+                return;
+              }
+              onStartSelection(rowIndex, cellIndex, event.shiftKey);
+            }}
+            onMouseEnter={() => onExtendSelection(rowIndex, cellIndex)}
+            rowSpan={cell.rowSpan}
+            style={
+              cell.styleIndex !== undefined
+                ? stylesPalette[cell.styleIndex]
+                : cell.style
+            }
+          >
+            {cell.value}
+          </td>
+        );
+      })}
+    </tr>
+  );
+});
+
+export default memo(function SpreadsheetPreview({
   record,
   demo,
 }: {
@@ -81,6 +163,9 @@ export default function SpreadsheetPreview({
   demo: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const sheetScrollRef = useRef<Map<number, { top: number; left: number }>>(new Map());
   const isSelectingRef = useRef(false);
   const [preview, setPreview] = useState<WorkbookPreview | null>(demo ? DEMO_PREVIEW : null);
   const [active, setActive] = useState(demo ? DEMO_PREVIEW.activeSheet : 0);
@@ -89,6 +174,10 @@ export default function SpreadsheetPreview({
   const [problem, setProblem] = useState<string | null>(null);
   const [selection, setSelection] = useState<CellSelection | null>(null);
   const [copiedNotice, setCopiedNotice] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const deferredQuery = useDeferredValue(findQuery);
+  const [matchCursor, setMatchCursor] = useState(0);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -131,6 +220,9 @@ export default function SpreadsheetPreview({
   useEffect(() => {
     let live = true;
     setProblem(null);
+    setFindQuery("");
+    setMatchCursor(0);
+    sheetScrollRef.current.clear();
     if (demo) {
       setPreview(DEMO_PREVIEW);
       setActive(DEMO_PREVIEW.activeSheet);
@@ -146,9 +238,15 @@ export default function SpreadsheetPreview({
           setLoading(false);
         }
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (live) {
-          setProblem("Spreadsheet preview could not be rendered.");
+          const message =
+            error instanceof Error
+              ? error.message
+              : typeof error === "string"
+                ? error
+                : "Spreadsheet preview could not be rendered.";
+          setProblem(message);
           setLoading(false);
         }
       });
@@ -159,6 +257,51 @@ export default function SpreadsheetPreview({
 
   const sheets = preview?.sheets ?? [];
   const sheet = sheets[Math.min(active, Math.max(sheets.length - 1, 0))];
+  const stylesPalette = preview?.styles ?? [];
+
+  const { matches, matchesByRow } = useMemo(() => {
+    const trimmed = deferredQuery.trim().toLowerCase();
+    const byRow = new Map<number, Set<number>>();
+    if (!sheet || !trimmed) {
+      return { matches: [] as CellMatch[], matchesByRow: byRow };
+    }
+    const found: CellMatch[] = [];
+    for (let rowIndex = 0; rowIndex < sheet.rows.length; rowIndex += 1) {
+      const cells = sheet.rows[rowIndex].cells;
+      for (let cellIndex = 0; cellIndex < cells.length; cellIndex += 1) {
+        const cell = cells[cellIndex];
+        if (!cell.coveredByMerge && cell.value && cell.value.toLowerCase().includes(trimmed)) {
+          found.push({ row: rowIndex, col: cellIndex });
+          let cols = byRow.get(rowIndex);
+          if (!cols) {
+            cols = new Set<number>();
+            byRow.set(rowIndex, cols);
+          }
+          cols.add(cellIndex);
+        }
+      }
+    }
+    return { matches: found, matchesByRow: byRow };
+  }, [deferredQuery, sheet]);
+
+  const activeMatch = matches.length
+    ? matches[Math.min(matchCursor, matches.length - 1)] ?? null
+    : null;
+  const activeMatchKey = activeMatch ? `${activeMatch.row}:${activeMatch.col}` : null;
+
+  useEffect(() => {
+    setMatchCursor(0);
+  }, [deferredQuery, active]);
+
+  useEffect(() => {
+    if (!activeMatchKey || !scrollerRef.current) {
+      return;
+    }
+    const target = scrollerRef.current.querySelector<HTMLElement>(
+      `td[data-cell-key="${activeMatchKey}"]`,
+    );
+    target?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [activeMatchKey]);
 
   const normalizedBounds = useMemo(() => {
     if (!selection) {
@@ -231,25 +374,93 @@ export default function SpreadsheetPreview({
     }
   }, [selectionSummary]);
 
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) {
+  const startSelection = useCallback((rowIndex: number, cellIndex: number, shiftKey: boolean) => {
+    isSelectingRef.current = true;
+    const coord = { row: rowIndex, col: cellIndex };
+    setSelection((current) =>
+      shiftKey && current ? { anchor: current.anchor, focus: coord } : { anchor: coord, focus: coord },
+    );
+  }, []);
+
+  const extendSelection = useCallback((rowIndex: number, cellIndex: number) => {
+    if (!isSelectingRef.current) {
       return;
     }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
-        const nativeSelection = window.getSelection()?.toString() ?? "";
-        if (!nativeSelection && selectionSummary) {
-          event.preventDefault();
-          void copySelection();
-        }
-      } else if (event.key === "Escape") {
+    setSelection((current) =>
+      current
+        ? {
+            anchor: current.anchor,
+            focus: { row: rowIndex, col: cellIndex },
+          }
+        : null,
+    );
+  }, []);
+
+  function openFindBar() {
+    setFindOpen(true);
+    window.requestAnimationFrame(() => {
+      findInputRef.current?.focus();
+      findInputRef.current?.select();
+    });
+  }
+
+  function stepMatch(delta: number) {
+    if (!matches.length) {
+      return;
+    }
+    setMatchCursor((current) => (current + delta + matches.length) % matches.length);
+  }
+
+  function switchSheet(nextIndex: number) {
+    if (nextIndex === active) {
+      return;
+    }
+    if (scrollerRef.current) {
+      sheetScrollRef.current.set(active, {
+        top: scrollerRef.current.scrollTop,
+        left: scrollerRef.current.scrollLeft,
+      });
+    }
+    setActive(nextIndex);
+    window.requestAnimationFrame(() => {
+      const saved = sheetScrollRef.current.get(nextIndex);
+      if (scrollerRef.current) {
+        scrollerRef.current.scrollTop = saved?.top ?? 0;
+        scrollerRef.current.scrollLeft = saved?.left ?? 0;
+      }
+    });
+  }
+
+  function handleViewKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const key = event.key.toLowerCase();
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && key === "f") {
+      event.preventDefault();
+      openFindBar();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && key === "c") {
+      const target = event.target;
+      const isTextInput =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement;
+      const nativeSelection = window.getSelection()?.toString() ?? "";
+      if (!isTextInput && !nativeSelection && selectionSummary) {
+        event.preventDefault();
+        void copySelection();
+      }
+      return;
+    }
+    if (event.key === "Escape") {
+      if (findOpen) {
+        event.preventDefault();
+        setFindOpen(false);
+        setFindQuery("");
+      } else if (selection) {
         setSelection(null);
       }
-    };
-    container.addEventListener("keydown", handleKeyDown);
-    return () => container.removeEventListener("keydown", handleKeyDown);
-  }, [copySelection, selectionSummary]);
+    }
+  }
 
   if (problem) {
     return (
@@ -280,27 +491,95 @@ export default function SpreadsheetPreview({
     ROW_HEADER_WIDTH_PX + sheet.columns.reduce((sum, column) => sum + column.widthPx, 0);
 
   return (
-    <div className="spreadsheet-view" ref={containerRef} tabIndex={0}>
+    <div
+      className="spreadsheet-view"
+      onKeyDown={handleViewKeyDown}
+      ref={containerRef}
+      tabIndex={0}
+    >
       <div className="document-toolbar">
         <span>
-          {sheet.rows.length} visible rows · {sheet.columns.length} visible columns
+          {sheet.rows.length} visible rows{sheet.truncatedRows ? " (preview limit)" : ""} ·{" "}
+          {sheet.columns.length} visible columns{sheet.truncatedColumns ? " (preview limit)" : ""}
         </span>
-        <div className="zoom-control">
+        <div className="toolbar-actions">
           <button
-            className="zoom-reset"
-            disabled={zoom === 100}
-            onClick={() => setZoom(100)}
-            title="Reset zoom to 100%"
+            className="secondary toolbar-find-btn"
+            onClick={() => (findOpen ? setFindOpen(false) : openFindBar())}
+            title="Find in sheet (Ctrl+F)"
             type="button"
           >
-            Reset
+            Find
           </button>
-          <button onClick={() => setZoom((current) => Math.max(current - 10, 60))}>-</button>
-          <span>{zoom}%</span>
-          <button onClick={() => setZoom((current) => Math.min(current + 10, 160))}>+</button>
+          <div className="zoom-control">
+            <button
+              className="zoom-reset"
+              disabled={zoom === 100}
+              onClick={() => setZoom(100)}
+              title="Reset zoom to 100%"
+              type="button"
+            >
+              Reset
+            </button>
+            <button onClick={() => setZoom((current) => Math.max(current - 10, 60))}>-</button>
+            <span>{zoom}%</span>
+            <button onClick={() => setZoom((current) => Math.min(current + 10, 160))}>+</button>
+          </div>
         </div>
       </div>
-      <div className={`sheet-scroller ${isMultiCellSelection ? "sheet-range-selecting" : ""}`}>
+      {findOpen ? (
+        <div className="sheet-find-bar" role="search" aria-label="Find in worksheet">
+          <input
+            aria-label="Find text in worksheet"
+            onChange={(event) => setFindQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                stepMatch(event.shiftKey ? -1 : 1);
+              }
+            }}
+            placeholder="Find in sheet..."
+            ref={findInputRef}
+            value={findQuery}
+          />
+          <span className="sheet-find-count">
+            {findQuery.trim()
+              ? matches.length
+                ? `${Math.min(matchCursor + 1, matches.length)} of ${matches.length}`
+                : "0 matches"
+              : ""}
+          </span>
+          <button
+            disabled={!matches.length}
+            onClick={() => stepMatch(-1)}
+            title="Previous match (Shift+Enter)"
+            type="button"
+          >
+            Prev
+          </button>
+          <button
+            disabled={!matches.length}
+            onClick={() => stepMatch(1)}
+            title="Next match (Enter)"
+            type="button"
+          >
+            Next
+          </button>
+          <button
+            onClick={() => {
+              setFindOpen(false);
+              setFindQuery("");
+            }}
+            type="button"
+          >
+            Close
+          </button>
+        </div>
+      ) : null}
+      <div
+        className={`sheet-scroller ${isMultiCellSelection ? "sheet-range-selecting" : ""}`}
+        ref={scrollerRef}
+      >
         <div
           className="sheet-stage"
           style={{
@@ -324,59 +603,28 @@ export default function SpreadsheetPreview({
               </tr>
             </thead>
             <tbody>
-              {sheet.rows.map((row, rowIndex) => (
-                <tr key={row.index} style={{ height: row.heightPx }}>
-                  <th className="row-number">{row.index}</th>
-                  {row.cells.map((cell, cellIndex) => {
-                    if (cell.coveredByMerge) {
-                      return null;
-                    }
-                    const isSelected = Boolean(
-                      normalizedBounds &&
-                        rowIndex >= normalizedBounds.minRow &&
-                        rowIndex <= normalizedBounds.maxRow &&
-                        cellIndex >= normalizedBounds.minCol &&
-                        cellIndex <= normalizedBounds.maxCol,
-                    );
-                    return (
-                      <td
-                        className={isSelected ? "cell-selected" : undefined}
-                        colSpan={cell.colSpan}
-                        key={sheet.columns[cellIndex]?.index ?? cellIndex}
-                        onMouseDown={(event) => {
-                          if (event.button !== 0) {
-                            return;
-                          }
-                          isSelectingRef.current = true;
-                          const coord = { row: rowIndex, col: cellIndex };
-                          if (event.shiftKey && selection) {
-                            setSelection({ anchor: selection.anchor, focus: coord });
-                          } else {
-                            setSelection({ anchor: coord, focus: coord });
-                          }
-                        }}
-                        onMouseEnter={() => {
-                          if (!isSelectingRef.current) {
-                            return;
-                          }
-                          setSelection((current) =>
-                            current
-                              ? {
-                                  anchor: current.anchor,
-                                  focus: { row: rowIndex, col: cellIndex },
-                                }
-                              : null,
-                          );
-                        }}
-                        rowSpan={cell.rowSpan}
-                        style={cell.style}
-                      >
-                        {cell.value}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
+              {sheet.rows.map((row, rowIndex) => {
+                const inSelectedRow = Boolean(
+                  normalizedBounds &&
+                    rowIndex >= normalizedBounds.minRow &&
+                    rowIndex <= normalizedBounds.maxRow,
+                );
+                return (
+                  <SheetRow
+                    activeMatchCol={activeMatch?.row === rowIndex ? activeMatch.col : -1}
+                    columns={sheet.columns}
+                    key={row.index}
+                    matchCols={matchesByRow.get(rowIndex)}
+                    onExtendSelection={extendSelection}
+                    onStartSelection={startSelection}
+                    row={row}
+                    rowIndex={rowIndex}
+                    selMaxCol={inSelectedRow && normalizedBounds ? normalizedBounds.maxCol : -1}
+                    selMinCol={inSelectedRow && normalizedBounds ? normalizedBounds.minCol : -1}
+                    stylesPalette={stylesPalette}
+                  />
+                );
+              })}
             </tbody>
           </table>
           {sheet.images?.map((image, index) => (
@@ -427,7 +675,7 @@ export default function SpreadsheetPreview({
             aria-selected={active === index}
             className={active === index ? "active" : ""}
             key={item.name}
-            onClick={() => setActive(index)}
+            onClick={() => switchSheet(index)}
             role="tab"
           >
             {item.name}
@@ -436,7 +684,7 @@ export default function SpreadsheetPreview({
       </div>
     </div>
   );
-}
+});
 
 function createDemoSheet(name: string, values: string[][]): WorkbookSheet {
   const width = values.reduce((largest, row) => Math.max(largest, row.length), 0);
@@ -492,5 +740,3 @@ function createDemoSheet(name: string, values: string[][]): WorkbookSheet {
     })),
   };
 }
-
-

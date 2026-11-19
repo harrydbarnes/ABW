@@ -28,6 +28,27 @@ export type WrikeTabUpdate = {
   isTitleLoading: boolean;
 };
 
+export type WrikeShortcutAction =
+  | "new-tab"
+  | "close-tab"
+  | "next-tab"
+  | "prev-tab"
+  | "select-tab"
+  | "toggle-split"
+  | "open-url";
+
+export type WrikeShortcutEvent = {
+  action: WrikeShortcutAction;
+  index: number | null;
+  url?: string | null;
+};
+
+export interface PdfHeadResult {
+  totalSize: number;
+  initialChunk: Uint8Array;
+  complete: boolean;
+}
+
 export function isDesktopRuntime(): boolean {
   return desktopRuntime;
 }
@@ -81,6 +102,38 @@ export async function readDownload(id: string): Promise<Uint8Array | null> {
   }
   const bytes = await invokeDesktop<ArrayBuffer>("read_download", { id });
   return new Uint8Array(bytes);
+}
+
+export async function readDownloadHead(id: string): Promise<PdfHeadResult | null> {
+  if (!desktopRuntime) {
+    return null;
+  }
+  const buffer = await invokeDesktop<ArrayBuffer>("read_download_head", { id });
+  if (buffer.byteLength < 8) {
+    throw new Error("Invalid PDF header response.");
+  }
+  const view = new DataView(buffer);
+  const low = view.getUint32(0, true);
+  const high = view.getUint32(4, true);
+  const totalSize = high * 0x1_0000_0000 + low;
+  const initialChunk = new Uint8Array(buffer, 8);
+  return {
+    totalSize,
+    initialChunk,
+    complete: initialChunk.byteLength >= totalSize,
+  };
+}
+
+export async function readDownloadRange(
+  id: string,
+  start: number,
+  end: number,
+): Promise<Uint8Array> {
+  if (!desktopRuntime) {
+    return new Uint8Array(0);
+  }
+  const buffer = await invokeDesktop<ArrayBuffer>("read_download_range", { id, start, end });
+  return new Uint8Array(buffer);
 }
 
 export async function previewSpreadsheet(id: string): Promise<WorkbookPreview | null> {
@@ -251,6 +304,15 @@ export async function subscribeToShareUrl(notify: (url: string) => void): Promis
     return () => undefined;
   }
   return listen<string>("wrike-share-url", (event) => notify(event.payload));
+}
+
+export async function subscribeToWrikeShortcuts(
+  notify: (shortcut: WrikeShortcutEvent) => void,
+): Promise<() => void> {
+  if (!desktopRuntime) {
+    return () => undefined;
+  }
+  return listen<WrikeShortcutEvent>("wrike-shortcut", (event) => notify(event.payload));
 }
 
 function normalizeDictionary(words: string[]): string[] {

@@ -1,4 +1,3 @@
-use calamine::{open_workbook_auto, Reader};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,7 +6,7 @@ use std::{
     env, fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 use tauri::{
     ipc::Response,
@@ -26,6 +25,7 @@ use uuid::Uuid;
 
 mod close_policy;
 mod persistence;
+mod spreadsheet;
 mod startup;
 mod updater;
 
@@ -42,11 +42,9 @@ fn storage_health(app: AppHandle) -> Result<Vec<String>, String> {
 
 const WRIKE_HOME: &str = "https://www.wrike.com/workspace.htm";
 const MAX_PDF_PREVIEW_BYTES: u64 = 128 * 1024 * 1024;
-const MAX_SPREADSHEET_PREVIEW_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_SPREADSHEET_EXPANDED_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_SPREADSHEET_ARCHIVE_ENTRIES: u16 = 2_048;
-const MAX_SPREADSHEET_COMPRESSION_RATIO: u64 = 100;
-const MAX_SPREADSHEET_SHEETS: usize = 128;
+const PDF_HEAD_CHUNK_BYTES: u64 = 65_536;
+const PDF_INLINE_THRESHOLD_BYTES: u64 = 512 * 1024;
+const MAX_PDF_RANGE_BYTES: u64 = 8 * 1024 * 1024;
 const TASKBAR_HEIGHT: f64 = 50.0;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -147,13 +145,6 @@ struct WrikeSession {
     saved_at: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkbookSheet {
-    name: String,
-    rows: Vec<Vec<String>>,
-}
-
 fn default_true() -> bool {
     true
 }
@@ -164,12 +155,6 @@ fn default_theme() -> String {
 
 fn default_startup_tab_urls() -> Vec<String> {
     vec![WRIKE_HOME.to_owned()]
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkbookPreview {
-    sheets: Vec<WorkbookSheet>,
 }
 
 impl Default for Settings {
@@ -214,6 +199,14 @@ struct WrikeTabUpdate {
     is_title_loading: bool,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WrikeShortcutEvent {
+    action: String,
+    index: Option<usize>,
+    url: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WrikeTabLayout {
@@ -231,6 +224,7 @@ enum WrikePane {
 
 struct AppState {
     wrike_tabs: Mutex<HashMap<String, Arc<CaptureContext>>>,
+    tracked_paths: Mutex<HashMap<String, PathBuf>>,
     detected_wrike_theme: Mutex<Option<String>>,
     top_inset: Mutex<f64>,
     quit_prompt_open: AtomicBool,
@@ -243,6 +237,7 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             wrike_tabs: Mutex::new(HashMap::new()),
+            tracked_paths: Mutex::new(HashMap::new()),
             detected_wrike_theme: Mutex::new(None),
             top_inset: Mutex::new(0.0),
             quit_prompt_open: AtomicBool::new(false),
@@ -318,144 +313,136 @@ fn list_downloads(app: AppHandle) -> Result<Vec<DownloadRecord>, String> {
     read_records(&app)
 }
 
-#[tauri::command]
-fn read_download(app: AppHandle, id: String) -> Result<Response, String> {
-    let path = tracked_path(&app, &id)?;
-    let size = fs::metadata(&path)
-        .map_err(|error| format!("Unable to inspect download: {error}"))?
-        .len();
-    if size > MAX_PDF_PREVIEW_BYTES {
-        return Err(format!(
-            "This PDF is {} MB. In-app PDF preview currently supports files up to 128 MB; open it in Windows instead.",
-            size.div_ceil(1024 * 1024)
-        ));
+fn open_tracked_file(app: &AppHandle, id: &str) -> Result<(PathBuf, fs::File), String> {
+    let path = resolve_tracked_path(app, id)?;
+    match fs::File::open(&path) {
+        Ok(file) => Ok((path, file)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            invalidate_tracked_paths(app, Some(id));
+            let refreshed = resolve_tracked_path(app, id)?;
+            let file = fs::File::open(&refreshed)
+                .map_err(|open_err| format!("Unable to open download: {open_err}"))?;
+            Ok((refreshed, file))
+        }
+        Err(error) => Err(format!("Unable to open download: {error}")),
     }
-    let bytes = fs::read(path).map_err(|error| format!("Unable to read download: {error}"))?;
-    Ok(Response::new(bytes))
 }
 
 #[tauri::command]
-fn preview_spreadsheet(app: AppHandle, id: String) -> Result<WorkbookPreview, String> {
-    let path = tracked_path(&app, &id)?;
-    let size = fs::metadata(&path)
-        .map_err(|error| format!("Unable to inspect spreadsheet: {error}"))?
-        .len();
-    if size > MAX_SPREADSHEET_PREVIEW_BYTES {
-        return Err(format!(
-            "This spreadsheet is {} MB. In-app preview supports files up to 64 MB; open it in Windows instead.",
-            size.div_ceil(1024 * 1024)
-        ));
-    }
-    if path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "xlsx" | "xlsm" | "xlsb" | "ods"
-            )
-        })
-    {
-        validate_spreadsheet_archive(&path)?;
-    }
-    let mut workbook =
-        open_workbook_auto(path).map_err(|error| format!("Unable to open spreadsheet: {error}"))?;
-    let sheet_names = workbook.sheet_names().to_owned();
-    if sheet_names.len() > MAX_SPREADSHEET_SHEETS {
-        return Err(format!(
-            "This spreadsheet has {} sheets. In-app preview supports up to {MAX_SPREADSHEET_SHEETS}; open it in Windows instead.",
-            sheet_names.len()
-        ));
-    }
-    let sheets = sheet_names
-        .into_iter()
-        .map(|name| {
-            let rows = workbook
-                .worksheet_range(&name)
-                .map(|range| {
-                    range
-                        .rows()
-                        .take(250)
-                        .map(|row| row.iter().take(50).map(ToString::to_string).collect())
-                        .collect()
-                })
-                .unwrap_or_default();
-            WorkbookSheet { name, rows }
-        })
-        .collect();
-    Ok(WorkbookPreview { sheets })
+async fn read_download(app: AppHandle, id: String) -> Result<Response, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (_, mut file) = open_tracked_file(&app, &id)?;
+        let size = file
+            .metadata()
+            .map_err(|error| format!("Unable to inspect download: {error}"))?
+            .len();
+        if size > MAX_PDF_PREVIEW_BYTES {
+            return Err(format!(
+                "This PDF is {} MB. In-app PDF preview currently supports files up to 128 MB; open it in Windows instead.",
+                size.div_ceil(1024 * 1024)
+            ));
+        }
+        let mut bytes = Vec::with_capacity(size as usize);
+        file.read_to_end(&mut bytes)
+            .map_err(|error| format!("Unable to read download: {error}"))?;
+        Ok(Response::new(bytes))
+    })
+    .await
+    .map_err(|error| format!("Unable to read download: {error}"))?
 }
 
-fn validate_spreadsheet_archive(path: &Path) -> Result<(), String> {
-    const EOCD_SIGNATURE: u32 = 0x0605_4b50;
-    const CENTRAL_DIRECTORY_SIGNATURE: u32 = 0x0201_4b50;
-    const MAX_EOCD_SEARCH: u64 = 65_557;
+#[tauri::command]
+async fn read_download_head(app: AppHandle, id: String) -> Result<Response, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (_, mut file) = open_tracked_file(&app, &id)?;
+        let size = file
+            .metadata()
+            .map_err(|error| format!("Unable to inspect download: {error}"))?
+            .len();
+        if size > MAX_PDF_PREVIEW_BYTES {
+            return Err(format!(
+                "This PDF is {} MB. In-app PDF preview currently supports files up to 128 MB; open it in Windows instead.",
+                size.div_ceil(1024 * 1024)
+            ));
+        }
+        let head_len = if size <= PDF_INLINE_THRESHOLD_BYTES {
+            size
+        } else {
+            size.min(PDF_HEAD_CHUNK_BYTES)
+        } as usize;
+        let mut out = Vec::with_capacity(8 + head_len);
+        out.extend_from_slice(&size.to_le_bytes());
+        out.resize(8 + head_len, 0);
+        file.read_exact(&mut out[8..])
+            .map_err(|error| format!("Unable to read PDF header: {error}"))?;
+        Ok(Response::new(out))
+    })
+    .await
+    .map_err(|error| format!("Unable to read download header: {error}"))?
+}
 
-    let mut file = fs::File::open(path)
-        .map_err(|error| format!("Unable to inspect spreadsheet archive: {error}"))?;
-    let length = file
-        .metadata()
-        .map_err(|error| format!("Unable to inspect spreadsheet archive: {error}"))?
-        .len();
-    let tail_length = length.min(MAX_EOCD_SEARCH) as usize;
-    file.seek(SeekFrom::End(-(tail_length as i64)))
-        .map_err(|error| format!("Unable to inspect spreadsheet archive: {error}"))?;
-    let mut tail = vec![0; tail_length];
-    file.read_exact(&mut tail)
-        .map_err(|error| format!("Unable to inspect spreadsheet archive: {error}"))?;
-    let eocd = tail
-        .windows(4)
-        .rposition(|window| u32::from_le_bytes(window.try_into().unwrap()) == EOCD_SIGNATURE)
-        .ok_or_else(|| "This spreadsheet archive is invalid or unsupported.".to_owned())?;
-    if eocd + 22 > tail.len() {
-        return Err("This spreadsheet archive is invalid or unsupported.".into());
-    }
-    let entries = u16::from_le_bytes(tail[eocd + 10..eocd + 12].try_into().unwrap());
-    let central_size = u32::from_le_bytes(tail[eocd + 12..eocd + 16].try_into().unwrap()) as u64;
-    let central_offset = u32::from_le_bytes(tail[eocd + 16..eocd + 20].try_into().unwrap()) as u64;
-    if entries > MAX_SPREADSHEET_ARCHIVE_ENTRIES
-        || central_offset.saturating_add(central_size) > length
-    {
-        return Err("This spreadsheet is too complex for safe in-app preview.".into());
-    }
-    file.seek(SeekFrom::Start(central_offset))
-        .map_err(|error| format!("Unable to inspect spreadsheet archive: {error}"))?;
-    let mut compressed_total = 0_u64;
-    let mut expanded_total = 0_u64;
-    for _ in 0..entries {
-        let mut header = [0_u8; 46];
-        file.read_exact(&mut header)
-            .map_err(|_| "This spreadsheet archive is invalid or unsupported.".to_owned())?;
-        if u32::from_le_bytes(header[0..4].try_into().unwrap()) != CENTRAL_DIRECTORY_SIGNATURE {
-            return Err("This spreadsheet archive is invalid or unsupported.".into());
+#[tauri::command]
+async fn read_download_range(
+    app: AppHandle,
+    id: String,
+    start: u64,
+    end: u64,
+) -> Result<Response, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (_, mut file) = open_tracked_file(&app, &id)?;
+        let size = file
+            .metadata()
+            .map_err(|error| format!("Unable to inspect download: {error}"))?
+            .len();
+        if size > MAX_PDF_PREVIEW_BYTES {
+            return Err(format!(
+                "This PDF is {} MB. In-app PDF preview currently supports files up to 128 MB; open it in Windows instead.",
+                size.div_ceil(1024 * 1024)
+            ));
         }
-        let compressed = u32::from_le_bytes(header[20..24].try_into().unwrap());
-        let expanded = u32::from_le_bytes(header[24..28].try_into().unwrap());
-        if compressed == u32::MAX || expanded == u32::MAX {
-            return Err("ZIP64 spreadsheets are not supported for in-app preview.".into());
+        let clamped_start = start.min(size);
+        let clamped_end = end.min(size);
+        if clamped_end <= clamped_start {
+            return Ok(Response::new(Vec::new()));
         }
-        compressed_total = compressed_total.saturating_add(compressed as u64);
-        expanded_total = expanded_total.saturating_add(expanded as u64);
-        if expanded_total > MAX_SPREADSHEET_EXPANDED_BYTES
-            || (compressed_total > 0
-                && expanded_total / compressed_total > MAX_SPREADSHEET_COMPRESSION_RATIO)
-        {
-            return Err("This spreadsheet expands beyond the safe in-app preview limit.".into());
+        let len = clamped_end - clamped_start;
+        if len > MAX_PDF_RANGE_BYTES {
+            return Err("Requested PDF range exceeds the single-chunk transfer limit.".into());
         }
-        let name_length = u16::from_le_bytes(header[28..30].try_into().unwrap()) as i64;
-        let extra_length = u16::from_le_bytes(header[30..32].try_into().unwrap()) as i64;
-        let comment_length = u16::from_le_bytes(header[32..34].try_into().unwrap()) as i64;
-        file.seek(SeekFrom::Current(
-            name_length + extra_length + comment_length,
-        ))
-        .map_err(|_| "This spreadsheet archive is invalid or unsupported.".to_owned())?;
-    }
-    Ok(())
+        file.seek(SeekFrom::Start(clamped_start))
+            .map_err(|error| format!("Unable to seek download: {error}"))?;
+        let mut buf = vec![0_u8; len as usize];
+        file.read_exact(&mut buf)
+            .map_err(|error| format!("Unable to read PDF range: {error}"))?;
+        Ok(Response::new(buf))
+    })
+    .await
+    .map_err(|error| format!("Unable to read PDF byte range: {error}"))?
+}
+
+#[tauri::command]
+async fn preview_spreadsheet(
+    app: AppHandle,
+    id: String,
+) -> Result<spreadsheet::WorkbookPreview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = resolve_tracked_path(&app, &id)?;
+        match spreadsheet::preview_file(&path) {
+            Err(_) if !path.exists() => {
+                invalidate_tracked_paths(&app, Some(&id));
+                let refreshed = resolve_tracked_path(&app, &id)?;
+                spreadsheet::preview_file(&refreshed)
+            }
+            result => result,
+        }
+    })
+    .await
+    .map_err(|error| format!("Unable to preview spreadsheet: {error}"))?
 }
 
 #[tauri::command]
 fn open_download(app: AppHandle, id: String) -> Result<(), String> {
-    let path = tracked_path(&app, &id)?;
+    let path = resolve_tracked_path(&app, &id)?;
     open::that(path).map_err(|error| format!("Unable to open file in Windows: {error}"))
 }
 
@@ -873,7 +860,10 @@ fn open_wrike_at(
         .get_window("main")
         .ok_or_else(|| "Unable to locate the ABW application window.".to_owned())?;
     let (content_position, content_size) = wrike_content_geometry(app, WrikePane::Full)?;
-    let spell_check = read_settings(app)?.spell_check;
+    let spell_check = settings_path(app)
+        .and_then(|path| persistence::read::<Settings>(&path))
+        .map(|stored| stored.spell_check)
+        .unwrap_or(true);
     let context = Arc::new(CaptureContext::new(tab_id, destination));
     let title_context = Arc::clone(&context);
     let title_app = app.clone();
@@ -917,6 +907,10 @@ fn open_wrike_at(
             }
             if url.scheme() == "abw-dictionary" {
                 let _ = add_custom_dictionary_word(&navigation_app, url);
+                return false;
+            }
+            if url.scheme() == "abw-shortcut" {
+                handle_wrike_shortcut(&navigation_app, url);
                 return false;
             }
             if url.scheme() == "abw-theme" {
@@ -972,6 +966,10 @@ fn open_wrike_at(
             }
             if should_open_link_externally(&popup_app, &url) {
                 let _ = open::that(url.as_str());
+                return NewWindowResponse::Deny;
+            }
+            if is_wrike_workspace_destination(&url) {
+                let _ = popup_app.emit("wrike-open-in-new-tab", url.to_string());
                 return NewWindowResponse::Deny;
             }
             let parent_provenance = captured_provenance(&popup_context);
@@ -1393,6 +1391,32 @@ fn unique_download_path(app: &AppHandle, suggested_name: &str) -> Result<PathBuf
     Ok(candidate)
 }
 
+fn resolve_tracked_path(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
+    let state = app.state::<AppState>();
+    if let Ok(paths) = state.tracked_paths.lock() {
+        if let Some(cached) = paths.get(id) {
+            return Ok(cached.clone());
+        }
+    }
+    let resolved = tracked_path(app, id)?;
+    if let Ok(mut paths) = state.tracked_paths.lock() {
+        paths.insert(id.to_owned(), resolved.clone());
+    }
+    Ok(resolved)
+}
+
+fn invalidate_tracked_paths(app: &AppHandle, id: Option<&str>) {
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut paths) = state.tracked_paths.lock() {
+            if let Some(target_id) = id {
+                paths.remove(target_id);
+            } else {
+                paths.clear();
+            }
+        }
+    }
+}
+
 fn tracked_path(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
     let record = read_records(app)?
         .into_iter()
@@ -1414,7 +1438,7 @@ fn tracked_path(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
 fn file_kind(extension: &str) -> &'static str {
     match extension {
         "pdf" => "pdf",
-        "xls" | "xlsx" | "xlsm" | "xlsb" | "ods" => "spreadsheet",
+        "xls" | "xlsx" | "xlsm" | "xlsb" | "ods" | "csv" | "tsv" => "spreadsheet",
         "doc" | "docx" | "rtf" | "txt" => "document",
         _ => "other",
     }
@@ -1528,6 +1552,63 @@ fn normalize_dictionary_word(word: &str) -> Option<String> {
         return None;
     }
     Some(trimmed.to_owned())
+}
+
+fn handle_wrike_shortcut(app: &AppHandle, url: &Url) {
+    let mut action: Option<String> = None;
+    let mut index: Option<usize> = None;
+    let mut target_url: Option<String> = None;
+    for (key, value) in url.query_pairs() {
+        match key.as_ref() {
+            "action" => {
+                if matches!(
+                    value.as_ref(),
+                    "new-tab"
+                        | "close-tab"
+                        | "next-tab"
+                        | "prev-tab"
+                        | "select-tab"
+                        | "toggle-split"
+                        | "open-url"
+                ) {
+                    action = Some(value.into_owned());
+                }
+            }
+            "index" => {
+                if let Some(parsed) = value
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|parsed| (1..=9).contains(parsed))
+                {
+                    index = Some(parsed);
+                }
+            }
+            "url" => {
+                if let Ok(parsed) = Url::parse(value.as_ref()) {
+                    let is_wrike = parsed
+                        .host_str()
+                        .is_some_and(|host| host == "wrike.com" || host.ends_with(".wrike.com"));
+                    if parsed.scheme() == "https" && is_wrike {
+                        target_url = Some(parsed.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(action) = action {
+        if action == "open-url" && target_url.is_none() {
+            return;
+        }
+        let _ = app.emit(
+            "wrike-shortcut",
+            WrikeShortcutEvent {
+                action,
+                index,
+                url: target_url,
+            },
+        );
+    }
 }
 
 fn add_custom_dictionary_word(app: &AppHandle, url: &Url) -> Result<(), String> {
@@ -1837,10 +1918,19 @@ fn should_open_link_externally(app: &AppHandle, url: &Url) -> bool {
         .is_some_and(|host| !is_internal_wrike_or_auth_host(host))
 }
 
-fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
-    let enabled_literal = if enabled { "true" } else { "false" };
-    let auto_download_literal = if auto_download { "true" } else { "false" };
-    r##"
+fn apply_spell_check_script(enabled: bool, auto_download: bool) -> &'static str {
+    static SCRIPTS: [OnceLock<String>; 4] = [
+        OnceLock::new(),
+        OnceLock::new(),
+        OnceLock::new(),
+        OnceLock::new(),
+    ];
+    let slot = (usize::from(enabled) << 1) | usize::from(auto_download);
+    SCRIPTS[slot]
+        .get_or_init(|| {
+            let enabled_literal = if enabled { "true" } else { "false" };
+            let auto_download_literal = if auto_download { "true" } else { "false" };
+            r##"
         (() => {
           __ABW_TASK_PO__
           window.__abwSpellCleanup?.();
@@ -2502,7 +2592,7 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
               showLinkContextMenu(linkUrl, event);
             }
           };
-          const abwSupportedFileName = /[^\\r\\n]{1,180}[.](pdf|doc|docx|xls|xlsx|xlsm|xlsb|ods|rtf|txt)/i;
+          const abwSupportedFileName = /[^\\r\\n]{1,180}[.](pdf|doc|docx|xls|xlsx|xlsm|xlsb|ods|csv|tsv|rtf|txt)/i;
           const abwDownloadWord = /download/i;
           const abwIsVisible = (element) => {
             if (!(element instanceof Element)) return false;
@@ -2629,13 +2719,42 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
               return window.__abwNativeOpen(url, target, features);
             };
           };
+          const abwSendShortcut = (action, index = null) => {
+            const query = index !== null ? `&index=${index}` : "";
+            window.location.href = `abw-shortcut://trigger?action=${encodeURIComponent(action)}${query}`;
+          };
+          const abwHandleKeyboardShortcuts = (event) => {
+            if (event.isComposing || event.metaKey || event.altKey || !event.ctrlKey) {
+              return;
+            }
+            const key = event.key.toLowerCase();
+            if (key === "t" && !event.shiftKey) {
+              event.preventDefault();
+              abwSendShortcut("new-tab");
+            } else if (key === "w" && !event.shiftKey) {
+              event.preventDefault();
+              abwSendShortcut("close-tab");
+            } else if (event.key === "Tab") {
+              event.preventDefault();
+              abwSendShortcut(event.shiftKey ? "prev-tab" : "next-tab");
+            } else if (event.key === "\\" && !event.shiftKey) {
+              event.preventDefault();
+              abwSendShortcut("toggle-split");
+            } else if (!event.shiftKey && /^[1-9]$/.test(event.key)) {
+              event.preventDefault();
+              abwSendShortcut("select-tab", Number(event.key));
+            }
+          };
           const start = () => {
             apply();
-            const observer = new MutationObserver(scheduleApply);
-            observer.observe(document.body, {
-              childList: true,
-              subtree: true
-            });
+            let observer = null;
+            if (enabled && document.body) {
+              observer = new MutationObserver(scheduleApply);
+              observer.observe(document.body, {
+                childList: true,
+                subtree: true
+              });
+            }
             const themeObserver = new MutationObserver(() => abwScheduleThemeDetect(150));
             const themeObserverOptions = {
               attributes: true,
@@ -2648,7 +2767,7 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
             window.__abwSpellCleanup = () => {
               window.clearTimeout(abwSpellApplyTimer);
               window.clearTimeout(abwThemeDetectTimer);
-              observer.disconnect();
+              observer?.disconnect();
               themeObserver.disconnect();
             };
             if (!window.__abwContextMenuGuard) {
@@ -2667,12 +2786,24 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
                 event.stopPropagation();
                 window.location.href = `abw-new-tab://open?url=${encodeURIComponent(linkUrl)}`;
               }, true);
+              document.addEventListener('click', (event) => {
+                if (event.button !== 0 || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+                const linkUrl = abwResolveLinkUrl(event.target);
+                if (!linkUrl) return;
+                event.preventDefault();
+                event.stopPropagation();
+                window.location.href = `abw-new-tab://open?url=${encodeURIComponent(linkUrl)}`;
+              }, true);
               window.__abwContextMenuGuard = true;
             }
             if (!window.__abwDownloadBridge) {
               document.addEventListener("click", abwKeepDownloadsInWebview, true);
               abwPatchWindowOpen();
               window.__abwDownloadBridge = true;
+            }
+            if (!window.__abwShortcutBridge) {
+              document.addEventListener("keydown", abwHandleKeyboardShortcuts, true);
+              window.__abwShortcutBridge = true;
             }
             window.addEventListener("load", () => abwScheduleThemeDetect(120), { once: true });
             window.addEventListener("resize", () => abwScheduleThemeDetect(80));
@@ -2691,9 +2822,11 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
           if (document.body) start(); else document.addEventListener('DOMContentLoaded', start, { once: true });
         })();
         "##
-    .replace("__ABW_TASK_PO__", if auto_download { "" } else { include_str!("task-po.js") })
-    .replace("__ABW_SPELL_CHECK_ENABLED__", enabled_literal)
-    .replace("__ABW_AUTO_DOWNLOAD__", auto_download_literal)
+            .replace("__ABW_TASK_PO__", if auto_download { "" } else { include_str!("task-po.js") })
+            .replace("__ABW_SPELL_CHECK_ENABLED__", enabled_literal)
+            .replace("__ABW_AUTO_DOWNLOAD__", auto_download_literal)
+        })
+        .as_str()
 }
 
 pub fn run() {
@@ -2751,6 +2884,8 @@ pub fn run() {
             open_source_task,
             preview_spreadsheet,
             read_download,
+            read_download_head,
+            read_download_range,
             reset_app,
             resize_wrike_tabs,
             send_test_notification,
@@ -2776,4 +2911,90 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_kind_classifies_supported_extensions() {
+        assert_eq!(file_kind("pdf"), "pdf");
+        for ext in ["xls", "xlsx", "xlsm", "xlsb", "ods", "csv", "tsv"] {
+            assert_eq!(
+                file_kind(ext),
+                "spreadsheet",
+                "expected spreadsheet for {ext}"
+            );
+        }
+        for ext in ["doc", "docx", "rtf", "txt"] {
+            assert_eq!(file_kind(ext), "document", "expected document for {ext}");
+        }
+        assert_eq!(file_kind("png"), "other");
+        assert_eq!(file_kind(""), "other");
+    }
+
+    #[test]
+    fn navigation_history_tracks_back_forward_and_truncates_on_branch() {
+        let mut history = NavigationHistory::new("https://www.wrike.com/workspace.htm");
+        assert!(!history.can_go_back());
+        assert!(!history.can_go_forward());
+
+        history.record("https://www.wrike.com/workspace.htm#a");
+        history.record("https://www.wrike.com/workspace.htm#b");
+        assert!(history.can_go_back());
+        assert!(!history.can_go_forward());
+
+        history.record("https://www.wrike.com/workspace.htm#a");
+        assert!(history.can_go_back());
+        assert!(history.can_go_forward());
+
+        history.record("https://www.wrike.com/workspace.htm#c");
+        assert!(history.can_go_back());
+        assert!(!history.can_go_forward());
+        assert_eq!(
+            history.entries,
+            vec![
+                "https://www.wrike.com/workspace.htm",
+                "https://www.wrike.com/workspace.htm#a",
+                "https://www.wrike.com/workspace.htm#c",
+            ]
+        );
+    }
+
+    #[test]
+    fn clean_wrike_title_strips_wrike_suffixes() {
+        assert_eq!(clean_wrike_title("Q3 Budget - Wrike"), "Q3 Budget");
+        assert_eq!(clean_wrike_title("Inbox | Wrike"), "Inbox");
+        assert_eq!(clean_wrike_title("  My Task  "), "My Task");
+    }
+
+    #[test]
+    fn normalize_dictionary_deduplicates_case_insensitively_and_trims() {
+        let normalized = normalize_dictionary(vec![
+            "  Wrike ".into(),
+            "wrike".into(),
+            "\"O'Neill\"".into(),
+            "follow-up!".into(),
+            "   ".into(),
+        ]);
+        assert_eq!(normalized, vec!["follow-up", "O'Neill", "Wrike"]);
+    }
+
+    #[test]
+    fn normalize_startup_tab_urls_filters_unsafe_schemes_and_falls_back() {
+        assert_eq!(
+            normalize_startup_tab_urls(vec![
+                "wrike.com".into(),
+                "https://wrike.com/".into(),
+                "javascript:alert(1)".into(),
+                "file:///C:/secret.txt".into(),
+            ]),
+            vec!["https://wrike.com/"]
+        );
+        assert_eq!(
+            normalize_startup_tab_urls(vec!["   ".into(), "javascript:void(0)".into()]),
+            vec![WRIKE_HOME]
+        );
+    }
 }

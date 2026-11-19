@@ -128,6 +128,8 @@ export interface WorkbookSheet {
   columns: WorkbookColumn[];
   rows: WorkbookRow[];
   images?: WorkbookImage[];
+  truncatedRows?: boolean;
+  truncatedColumns?: boolean;
 }
 
 export interface WorkbookColumn {
@@ -145,6 +147,7 @@ export interface WorkbookRow {
 export interface WorkbookCell {
   value: string;
   style?: CSSProperties;
+  styleIndex?: number;
   colSpan?: number;
   rowSpan?: number;
   coveredByMerge?: boolean;
@@ -152,6 +155,7 @@ export interface WorkbookCell {
 
 export interface WorkbookPreview {
   sheets: WorkbookSheet[];
+  styles?: CSSProperties[];
   activeSheet: number;
 }
 

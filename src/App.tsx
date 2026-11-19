@@ -40,12 +40,19 @@ import {
   subscribeToOpenInNewTab,
   subscribeToSettingsUpdates,
   subscribeToShareUrl,
+  subscribeToWrikeShortcuts,
   subscribeToWrikeTabUpdates,
   wrikeTabAction,
+  type WrikeShortcutEvent,
   type WrikeTabAction,
   type WrikeTabLayout,
   type WrikeTabUpdate,
 } from "./lib/desktop";
+import {
+  filterAndSortDownloads,
+  nextTabIndexForCycle,
+  tabIndexFromShortcutDigit,
+} from "./lib/workspaceUtils";
 import type {
   AppUpdateState,
   DownloadRecord,
@@ -223,6 +230,7 @@ export function App() {
   const closingTabIdsRef = useRef(new Set<string>());
   const tabIdCounterRef = useRef(0);
   const launchStartedAtRef = useRef(Date.now());
+  const shortcutHandlerRef = useRef<(shortcut: WrikeShortcutEvent) => void>(() => undefined);
 
   const showUpdateBanner =
     (appUpdate.phase === "available" ||
@@ -505,6 +513,7 @@ export function App() {
     let disposeSettingsUpdates: () => void = () => undefined;
     let disposeOpenInNewTab: () => void = () => undefined;
     let disposeShareUrl: () => void = () => undefined;
+    let disposeShortcuts: () => void = () => undefined;
     void subscribeToDownloads(refresh).then((unsubscribe) => {
       dispose = unsubscribe;
     });
@@ -603,6 +612,11 @@ export function App() {
     }).then((unsubscribe) => {
       disposeShareUrl = unsubscribe;
     });
+    void subscribeToWrikeShortcuts((shortcut) => {
+      shortcutHandlerRef.current(shortcut);
+    }).then((unsubscribe) => {
+      disposeShortcuts = unsubscribe;
+    });
     return () => {
       dispose();
       disposeCompleted();
@@ -611,6 +625,7 @@ export function App() {
       disposeSettingsUpdates();
       disposeOpenInNewTab();
       disposeShareUrl();
+      disposeShortcuts();
     };
   }, []);
 
@@ -661,25 +676,10 @@ export function App() {
     };
   }, []);
 
-  const visibleDownloads = useMemo(() => {
-    const query = deferredSearch.trim().toLowerCase();
-    const pinnedIds = new Set(settings.pinnedDownloadIds);
-    return downloads.filter((record) => {
-      const kindMatches = filter === "all" || record.kind === filter;
-      const queryMatches =
-        query.length === 0 ||
-        record.fileName.toLowerCase().includes(query) ||
-        record.sourceLabel.toLowerCase().includes(query);
-      return kindMatches && queryMatches;
-    }).sort((first, second) => {
-      const firstPinned = pinnedIds.has(first.id);
-      const secondPinned = pinnedIds.has(second.id);
-      if (firstPinned !== secondPinned) {
-        return firstPinned ? -1 : 1;
-      }
-      return new Date(second.downloadedAt).getTime() - new Date(first.downloadedAt).getTime();
-    });
-  }, [deferredSearch, downloads, filter, settings.pinnedDownloadIds]);
+  const visibleDownloads = useMemo(
+    () => filterAndSortDownloads(downloads, filter, deferredSearch, settings.pinnedDownloadIds),
+    [deferredSearch, downloads, filter, settings.pinnedDownloadIds],
+  );
 
   const selectedRecord =
     visibleDownloads.find((record) => record.id === selectedId) ?? visibleDownloads[0] ?? null;
@@ -803,9 +803,7 @@ export function App() {
   async function openWrikeTabSet(nextTabs: WrikeTab[], nextActiveTabId: string, nextSplit: WrikeSplit | null) {
     const nextIds = new Set(nextTabs.map((tab) => tab.id));
     const oldTabs = wrikeTabsRef.current.filter((tab) => !nextIds.has(tab.id));
-    for (const tab of oldTabs) {
-      await closeWrikeTab(tab.id).catch(() => undefined);
-    }
+    await Promise.all(oldTabs.map((tab) => closeWrikeTab(tab.id).catch(() => undefined)));
     wrikeTabsRef.current = nextTabs;
     syncWrikeSplitRef(nextSplit);
     syncActiveWrikeTabId(nextActiveTabId);
@@ -819,9 +817,11 @@ export function App() {
       ...nextTabs.filter((tab) => tab.id !== nextActiveTabId),
       ...nextTabs.filter((tab) => tab.id === nextActiveTabId),
     ];
-    for (const tab of launchOrder) {
-      await launchWrike(tab.id, tab.mode === "readOnly" ? READ_ONLY_URL : tab.url ?? WRIKE_HOME);
-    }
+    await Promise.all(
+      launchOrder.map((tab) =>
+        launchWrike(tab.id, tab.mode === "readOnly" ? READ_ONLY_URL : tab.url ?? WRIKE_HOME),
+      ),
+    );
     await resizeWrikeTabs(currentWrikeLayouts(nextSplit, nextActiveTabId)).catch(() => undefined);
     await hideWrike(nextTabs.filter((tab) => !visibleIds.includes(tab.id)).map((tab) => tab.id));
     if (visibleIds.includes(nextActiveTabId)) {
@@ -1598,6 +1598,57 @@ export function App() {
       await openTopbarActionsMenu();
     }
   }
+
+  shortcutHandlerRef.current = (shortcut) => {
+    const tabs = wrikeTabsRef.current;
+    if (shortcut.action === "new-tab") {
+      void addWrikeTab();
+      return;
+    }
+    if (shortcut.action === "open-url" && shortcut.url) {
+      void addWrikeTab(shortcut.url);
+      return;
+    }
+    if (shortcut.action === "close-tab") {
+      if (tabs.length > 1) {
+        void closeTab(activeWrikeTabIdRef.current);
+      }
+      return;
+    }
+    if (shortcut.action === "next-tab" || shortcut.action === "prev-tab") {
+      if (tabs.length <= 1) {
+        return;
+      }
+      const currentIndex = tabs.findIndex((tab) => tab.id === activeWrikeTabIdRef.current);
+      const nextIndex = nextTabIndexForCycle(
+        currentIndex,
+        tabs.length,
+        shortcut.action === "next-tab" ? 1 : -1,
+      );
+      const target = tabs[nextIndex];
+      if (target) {
+        void showWrike(target.id);
+      }
+      return;
+    }
+    if (shortcut.action === "select-tab" && shortcut.index !== null) {
+      const targetIndex = tabIndexFromShortcutDigit(shortcut.index, tabs.length);
+      const target = targetIndex !== null ? tabs[targetIndex] : null;
+      if (target) {
+        void showWrike(target.id);
+      }
+      return;
+    }
+    if (shortcut.action === "toggle-split") {
+      if (wrikeSplitRef.current) {
+        void exitSplitView(activeWrikeTabIdRef.current);
+      } else if (tabs.length > 1) {
+        void splitWrikeTab(activeWrikeTabIdRef.current, "left");
+      } else {
+        setNotice("Open another tab to use split view.");
+      }
+    }
+  };
 
   return (
     <>

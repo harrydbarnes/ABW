@@ -145,4 +145,71 @@ test('tauri updater config specifies valid minisign key, HTTPS GitHub endpoint, 
   assert.equal(updater.windows?.installMode, 'passive');
 });
 
+test('injected download detector recognizes supported extensions including csv and tsv', () => {
+  const fnStart = source.indexOf('const abwSupportedFileName =');
+  const fnEnd = source.indexOf('const abwFindSupportedFileName =', fnStart);
+  assert.ok(fnStart >= 0 && fnEnd > fnStart, 'Download matcher helpers must exist in the injected script');
+  const { abwSupportedFileName, abwLooksLikeDownloadUrl } = new Function(
+    `${source.slice(fnStart, fnEnd)}; return { abwSupportedFileName, abwLooksLikeDownloadUrl };`,
+  )();
+
+  for (const name of ['report.pdf', 'budget.xlsx', 'export.csv', 'data.tsv', 'notes.docx']) {
+    assert.match(name, abwSupportedFileName);
+    assert.equal(abwLooksLikeDownloadUrl(`https://www.wrike.com/files/${encodeURIComponent(name)}`), true);
+  }
+  assert.doesNotMatch('avatar.png', abwSupportedFileName);
+  assert.equal(abwLooksLikeDownloadUrl('https://www.wrike.com/workspace.htm'), false);
+});
+
+test('injected keyboard shortcut handler emits expected abw-shortcut URLs', () => {
+  const shortcutStart = source.indexOf('const abwSendShortcut =');
+  const shortcutEnd = source.indexOf('const start = () => {', shortcutStart);
+  assert.ok(shortcutStart >= 0 && shortcutEnd > shortcutStart, 'Shortcut helpers must exist in the injected script');
+
+  const navigated = [];
+  const handle = new Function(
+    'window',
+    `${source.slice(shortcutStart, shortcutEnd)}; return abwHandleKeyboardShortcuts;`,
+  )({
+    location: {
+      set href(value) {
+        navigated.push(value);
+      },
+    },
+  });
+
+  const makeEvent = (overrides) => ({
+    isComposing: false,
+    metaKey: false,
+    altKey: false,
+    ctrlKey: true,
+    shiftKey: false,
+    preventDefaultCalled: false,
+    preventDefault() {
+      this.preventDefaultCalled = true;
+    },
+    ...overrides,
+  });
+
+  const newTab = makeEvent({ key: 't' });
+  handle(newTab);
+  assert.equal(newTab.preventDefaultCalled, true);
+
+  const prevTab = makeEvent({ key: 'Tab', shiftKey: true });
+  handle(prevTab);
+
+  const tabThree = makeEvent({ key: '3' });
+  handle(tabThree);
+
+  const nonCtrl = makeEvent({ key: 't', ctrlKey: false });
+  handle(nonCtrl);
+  assert.equal(nonCtrl.preventDefaultCalled, false);
+
+  assert.deepEqual(navigated, [
+    'abw-shortcut://trigger?action=new-tab',
+    'abw-shortcut://trigger?action=prev-tab',
+    'abw-shortcut://trigger?action=select-tab&index=3',
+  ]);
+});
+
 

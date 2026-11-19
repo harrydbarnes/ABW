@@ -9,6 +9,7 @@ dependencies = [
  "calamine",
  "chrono",
  "open",
+ "quick-xml",
  "serde",
  "serde_json",
  "tauri",
@@ -21,6 +22,7 @@ dependencies = [
  "url",
  "uuid",
  "winreg",
+ "zip",
 ]
 
 [[package]]

@@ -36,6 +36,12 @@ pub fn health<T: DeserializeOwned>(path: &Path) -> Option<String> {
     })
 }
 
+enum BackupAction {
+    None,
+    WriteBackup(Vec<u8>),
+    ArchiveCorrupt(Vec<u8>),
+}
+
 pub fn update<T, R>(
     path: &Path,
     change: impl FnOnce(&mut T) -> Result<R, String>,
@@ -46,24 +52,45 @@ where
     let _guard = DATA_LOCK
         .lock()
         .map_err(|_| "Application data lock failed.")?;
-    let mut value = read(path)?;
-    let result = change(&mut value)?;
-    if let Ok(contents) = fs::read(path) {
-        if serde_json::from_slice::<T>(&contents).is_ok() {
-            write_bytes(&backup_path(path), &contents)?;
-        } else {
-            let archived = path.with_extension(format!("corrupt-{}.json", uuid::Uuid::new_v4()));
-            write_bytes(&archived, &contents)?;
+    let (mut value, backup_action) = match fs::read(path) {
+        Ok(contents) => match serde_json::from_slice::<T>(&contents) {
+            Ok(parsed) => (parsed, BackupAction::WriteBackup(contents)),
+            Err(_) => {
+                let recovered = fs::read(backup_path(path))
+                    .ok()
+                    .and_then(|backup| serde_json::from_slice::<T>(&backup).ok())
+                    .ok_or_else(|| format!("{} is corrupt and has no valid backup. Restore this file from a backup before saving; the original has not been changed.", path.display()))?;
+                (recovered, BackupAction::ArchiveCorrupt(contents))
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            (T::default(), BackupAction::None)
         }
-    }
-    write_atomic(path, &value)?;
-    Ok((value, result))
-}
-
-fn write_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
-    let contents = serde_json::to_vec_pretty(value)
+        Err(error) => {
+            return Err(format!(
+                "Unable to read {}: {error}. Check the file's permissions and restart ABW.",
+                path.display()
+            ))
+        }
+    };
+    let result = change(&mut value)?;
+    let new_contents = serde_json::to_vec_pretty(&value)
         .map_err(|error| format!("Unable to serialise application data: {error}"))?;
-    write_bytes(path, &contents)
+    match backup_action {
+        BackupAction::WriteBackup(previous_contents) => {
+            if previous_contents == new_contents {
+                return Ok((value, result));
+            }
+            write_bytes(&backup_path(path), &previous_contents)?;
+        }
+        BackupAction::ArchiveCorrupt(corrupt_contents) => {
+            let archived = path.with_extension(format!("corrupt-{}.json", uuid::Uuid::new_v4()));
+            write_bytes(&archived, &corrupt_contents)?;
+        }
+        BackupAction::None => {}
+    }
+    write_bytes(path, &new_contents)?;
+    Ok((value, result))
 }
 
 fn write_bytes(path: &Path, contents: &[u8]) -> Result<(), String> {
