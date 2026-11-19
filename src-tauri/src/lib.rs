@@ -1849,8 +1849,8 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
                 const style = window.getComputedStyle(node);
                 if (style.visibility === "hidden" || style.display === "none") continue;
                 if (isNearWhite(style.backgroundColor)) {
-                  cornerLeft = Math.round(rect.left);
-                  cornerTop = Math.max(0, Math.round(rect.top));
+                  cornerLeft = rect.left;
+                  cornerTop = Math.max(0, rect.top);
                   break;
                 }
               }
@@ -1889,8 +1889,8 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
                   if (!bg || isNearWhite(bg)) continue;
                   sidebarColor = bg;
                   if (cornerLeft === null) {
-                    cornerLeft = Math.round(rect.right);
-                    cornerTop = Math.max(0, Math.round(rect.top));
+                    cornerLeft = rect.right;
+                    cornerTop = Math.max(0, rect.top);
                   }
                   break;
                 }
@@ -1921,17 +1921,17 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
               corner.setAttribute("aria-hidden", "true");
               Object.assign(corner.style, {
                 position: "fixed",
-                width: "12px",
-                height: "12px",
+                width: "13px",
+                height: "13px",
                 pointerEvents: "none",
                 zIndex: "2147483646",
                 lineHeight: "0"
               });
-              corner.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M0 0H12A12 12 0 0 0 0 12Z" fill="currentColor"/></svg>`;
+              corner.innerHTML = `<svg width="13" height="13" viewBox="-1 -1 13 13" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M-1 -1H12V0A12 12 0 0 0 0 12H-1Z" fill="currentColor"/></svg>`;
               document.body.append(corner);
             }
-            corner.style.left = `${cornerLeft}px`;
-            corner.style.top = `${cornerTop}px`;
+            corner.style.left = `${Math.floor(cornerLeft) - 1}px`;
+            corner.style.top = `${Math.floor(cornerTop) - 1}px`;
             corner.style.color = sidebarColor;
           };
           const abwReportWrikeTheme = (force = false) => {
