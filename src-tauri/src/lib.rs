@@ -503,7 +503,7 @@ fn update_settings(
         for tab_id in tab_ids {
             if let Some(webview) = app.get_webview(&wrike_tab_label(&tab_id)?) {
                 webview
-                    .eval(&script)
+                    .eval(script)
                     .map_err(|error| format!("Unable to apply spell-check preference: {error}"))?;
             }
         }
@@ -560,7 +560,7 @@ fn reset_app(app: AppHandle, state: State<'_, AppState>) -> Result<Settings, Str
         .unwrap_or_default();
     for tab_id in tab_ids {
         if let Some(webview) = app.get_webview(&wrike_tab_label(&tab_id)?) {
-            let _ = webview.eval(&script);
+            let _ = webview.eval(script);
         }
     }
     app.emit("settings-updated", defaults.clone())
