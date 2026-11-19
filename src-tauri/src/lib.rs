@@ -907,7 +907,7 @@ fn open_wrike_at(
                     let mut target = Url::parse("https://go.mediaocean.com/robots.txt").unwrap();
                     target
                         .set_fragment(Some(&format!("abw-check-po?{}", url.query().unwrap_or(""))));
-                    if open::with_detached(target.as_str(), "chrome.exe").is_err() {
+                    if open_po_in_chrome(&target).is_err() {
                         navigation_app
                             .dialog()
                             .message("Unable to open Chrome for the PO check.")
@@ -1753,6 +1753,28 @@ fn is_safe_blob_destination(url: &Url) -> bool {
         .strip_prefix("blob:")
         .and_then(|inner| Url::parse(inner).ok())
         .is_some_and(|inner| inner.scheme() == "https")
+}
+
+fn open_po_in_chrome(url: &Url) -> std::io::Result<()> {
+    #[cfg(windows)]
+    for directory in [
+        "LOCALAPPDATA",
+        "ProgramFiles",
+        "ProgramW6432",
+        "ProgramFiles(x86)",
+    ] {
+        if let Some(root) = env::var_os(directory) {
+            let chrome = PathBuf::from(root).join(r"Google\Chrome\Application\chrome.exe");
+            if chrome.is_file() {
+                if let Some(executable) = chrome.to_str() {
+                    if open::with_detached(url.as_str(), executable).is_ok() {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+    open::with_detached(url.as_str(), "chrome.exe")
 }
 
 fn is_wrike_workspace_destination(url: &Url) -> bool {
