@@ -485,7 +485,7 @@ input:focus-visible {
   align-items: center;
   gap: 5px;
   perspective: 720px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .workspace-tab,
@@ -644,17 +644,19 @@ input:focus-visible {
   position: absolute;
   left: 39px;
   top: 0;
-  width: 128px;
-  padding: 0 9px;
+  width: auto;
+  min-width: 118px;
+  padding: 0 12px;
   gap: 8px;
   border: 1px solid var(--nav-border);
   background: var(--nav);
   color: var(--nav-text);
   font-size: 13px;
   font-weight: 550;
+  white-space: nowrap;
+  z-index: 15;
   opacity: 0;
   visibility: hidden;
-  overflow: hidden;
   pointer-events: none;
   transform: translateX(-7px) scale(.98);
   transform-origin: left center;
