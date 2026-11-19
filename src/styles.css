@@ -569,7 +569,7 @@ input:focus-visible {
   flex: 1 1 132px;
   min-width: 112px;
   max-width: 232px;
-  padding: 0 58px 0 12px;
+  padding: 0 64px 0 12px;
   gap: 8px;
   background: color-mix(in srgb, var(--nav-active) 33%, var(--nav));
   font-size: 13px;
@@ -990,6 +990,7 @@ input:focus-visible {
 .external-dot {
   width: 6px;
   height: 6px;
+  flex-shrink: 0;
   background: var(--success);
   border-radius: 50%;
 }
