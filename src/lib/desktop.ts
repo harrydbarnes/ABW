@@ -1,7 +1,9 @@
 import type {
   AppUpdateCheckResult,
   AppUpdateDownloadEvent,
+  ClearDownloadsResult,
   DownloadRecord,
+  DownloadsStorageStats,
   Settings,
   WorkbookPreview,
   WrikeSession,
@@ -28,6 +30,27 @@ export type WrikeTabUpdate = {
   isTitleLoading: boolean;
 };
 
+export type WrikeShortcutAction =
+  | "new-tab"
+  | "close-tab"
+  | "next-tab"
+  | "prev-tab"
+  | "select-tab"
+  | "toggle-split"
+  | "open-url";
+
+export type WrikeShortcutEvent = {
+  action: WrikeShortcutAction;
+  index: number | null;
+  url?: string | null;
+};
+
+export interface PdfHeadResult {
+  totalSize: number;
+  initialChunk: Uint8Array;
+  complete: boolean;
+}
+
 export function isDesktopRuntime(): boolean {
   return desktopRuntime;
 }
@@ -46,6 +69,10 @@ export async function loadSettings(): Promise<Settings> {
   return desktopRuntime
     ? invokeDesktop<Settings>("get_settings")
     : Promise.resolve(DEFAULT_SETTINGS);
+}
+
+export async function loadWrikeSession(): Promise<WrikeSession | null> {
+  return desktopRuntime ? invokeDesktop<WrikeSession | null>("get_wrike_session") : null;
 }
 
 export async function loadStorageHealth(): Promise<string[]> {
@@ -76,6 +103,36 @@ export async function readDownload(id: string): Promise<Uint8Array | null> {
   return new Uint8Array(bytes);
 }
 
+export async function readDownloadHead(id: string): Promise<PdfHeadResult | null> {
+  if (!desktopRuntime) {
+    return null;
+  }
+  const buffer = await invokeDesktop<ArrayBuffer>("read_download_head", { id });
+  if (buffer.byteLength < 8) {
+    throw new Error("Invalid PDF header response.");
+  }
+  const view = new DataView(buffer);
+  const totalSize = Number(view.getBigUint64(0, true));
+  const initialChunk = new Uint8Array(buffer, 8);
+  return {
+    totalSize,
+    initialChunk,
+    complete: initialChunk.byteLength >= totalSize,
+  };
+}
+
+export async function readDownloadRange(
+  id: string,
+  start: number,
+  end: number,
+): Promise<Uint8Array> {
+  if (!desktopRuntime) {
+    return new Uint8Array(0);
+  }
+  const buffer = await invokeDesktop<ArrayBuffer>("read_download_range", { id, start, end });
+  return new Uint8Array(buffer);
+}
+
 export async function previewSpreadsheet(id: string): Promise<WorkbookPreview | null> {
   if (!desktopRuntime) {
     return null;
@@ -87,6 +144,38 @@ export async function openDownload(id: string): Promise<void> {
   if (desktopRuntime) {
     await invokeDesktop("open_download", { id });
   }
+}
+
+export async function revealDownload(id: string): Promise<void> {
+  if (desktopRuntime) {
+    await invokeDesktop("reveal_download", { id });
+  }
+}
+
+export async function deleteDownload(id: string): Promise<void> {
+  if (desktopRuntime) {
+    await invokeDesktop("delete_download", { id });
+  }
+}
+
+export async function getDownloadsStorageStats(): Promise<DownloadsStorageStats> {
+  if (!desktopRuntime) {
+    const totalBytes = DEMO_DOWNLOADS.reduce((sum, item) => sum + item.sizeBytes, 0);
+    return {
+      totalFiles: DEMO_DOWNLOADS.length,
+      pinnedFiles: 0,
+      totalBytes,
+      unpinnedBytes: totalBytes,
+    };
+  }
+  return invokeDesktop<DownloadsStorageStats>("downloads_storage_stats");
+}
+
+export async function clearUnpinnedDownloads(): Promise<ClearDownloadsResult> {
+  if (!desktopRuntime) {
+    return { removedCount: 0, freedBytes: 0 };
+  }
+  return invokeDesktop<ClearDownloadsResult>("clear_unpinned_downloads");
 }
 
 export async function sendTestNotification(): Promise<void> {
@@ -119,20 +208,26 @@ export async function installAppUpdate(
   await invokeDesktop("install_update", { onEvent: channel });
 }
 
-export async function openSourceTask(record: DownloadRecord): Promise<void> {
+export async function openSourceTask(
+  record: DownloadRecord,
+  tabId?: string,
+): Promise<string | null> {
   if (!record.sourceUrl) {
-    return;
+    return null;
   }
   if (desktopRuntime) {
-    await invokeDesktop("open_source_task", { url: record.sourceUrl });
-  } else {
-    window.open(record.sourceUrl, "_blank", "noopener,noreferrer");
+    return invokeDesktop<string>("open_source_task", {
+      url: record.sourceUrl,
+      tabId: tabId ?? null,
+    });
   }
+  window.open(record.sourceUrl, "_blank", "noopener,noreferrer");
+  return null;
 }
 
-export async function launchWrike(tabId: string, url?: string): Promise<void> {
+export async function launchWrike(tabId: string, url?: string, pane?: WrikePane): Promise<void> {
   if (desktopRuntime) {
-    await invokeDesktop("launch_wrike", { tabId, url: url ?? null });
+    await invokeDesktop("launch_wrike", { tabId, url: url ?? null, pane: pane ?? null });
   }
 }
 
@@ -182,6 +277,15 @@ export async function subscribeToWrikeTabUpdates(
   return listen<WrikeTabUpdate>("wrike-tab-updated", (event) => notify(event.payload));
 }
 
+export async function subscribeToWrikeShortcuts(
+  notify: (shortcut: WrikeShortcutEvent) => void,
+): Promise<() => void> {
+  if (!desktopRuntime) {
+    return () => undefined;
+  }
+  return listen<WrikeShortcutEvent>("wrike-shortcut", (event) => notify(event.payload));
+}
+
 export async function subscribeToSettingsUpdates(
   notify: (settings: Settings) => void,
 ): Promise<() => void> {
@@ -205,6 +309,15 @@ export async function subscribeToDownloadCompleted(
     return () => undefined;
   }
   return listen<DownloadRecord>("download-completed", (event) => notify(event.payload));
+}
+
+export async function subscribeToDownloadDeleted(
+  notify: (id: string) => void,
+): Promise<() => void> {
+  if (!desktopRuntime) {
+    return () => undefined;
+  }
+  return listen<string>("download-deleted", (event) => notify(event.payload));
 }
 
 export async function subscribeToDownloadErrors(notify: (message: string) => void): Promise<() => void> {

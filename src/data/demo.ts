@@ -56,9 +56,9 @@ export const DEFAULT_SETTINGS: Settings = {
   confirmBeforeClosingTabs: false,
   openDownloadedFilesAutomatically: false,
   autoCheckForUpdates: true,
+  suspendInactiveTabsMinutes: 0,
   theme: "default",
   customDictionary: [],
   startupTabUrls: ["https://www.wrike.com/workspace.htm"],
   pinnedDownloadIds: [],
-  lastWrikeSession: null,
 };

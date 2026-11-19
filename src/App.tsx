@@ -1,6 +1,7 @@
 import {
   lazy,
   Suspense,
+  useCallback,
   useDeferredValue,
   useEffect,
   useRef,
@@ -14,12 +15,15 @@ import {
 import { Menu } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { FilesLibrary } from "./features/files/FilesLibrary";
+import { evictPreviewById, formatBytes } from "./features/preview/previewCache";
 import { SettingsPanel } from "./features/settings/SettingsPanel";
 import {
   checkForAppUpdate,
+  clearUnpinnedDownloads,
   closeWrikeTab,
+  deleteDownload,
   focusWrikeTab,
-  getWrikeTabState,
+  getDownloadsStorageStats,
   installAppUpdate,
   launchWrike,
   hideWrike,
@@ -27,33 +31,50 @@ import {
   loadDownloads,
   loadSettings,
   loadStorageHealth,
+  loadWrikeSession,
+  openSourceTask,
   resizeWrikeTabs,
+  revealDownload,
   saveSettings,
   saveWrikeSession,
   sendTestNotification,
   subscribeToDownloadCompleted,
+  subscribeToDownloadDeleted,
   subscribeToDownloadErrors,
   subscribeToDownloads,
   subscribeToSettingsUpdates,
+  subscribeToWrikeShortcuts,
   subscribeToWrikeTabUpdates,
   wrikeTabAction,
+  type WrikePane,
+  type WrikeShortcutEvent,
   type WrikeTabAction,
   type WrikeTabLayout,
   type WrikeTabUpdate,
 } from "./lib/desktop";
+import {
+  WRIKE_HOME,
+  filterAndSortDownloads,
+  hasRestorableSession,
+  nextTabIndexForCycle,
+  normalizeUrlInput,
+  normalizedStartupUrls,
+  tabIndexFromShortcutDigit,
+  wrikeSessionSignature,
+} from "./lib/workspaceUtils";
 import type {
   AppUpdateState,
   DownloadRecord,
+  DownloadsStorageStats,
   FileFilter,
   Settings,
   WrikeSession,
 } from "./types";
 
 const PreviewPanel = lazy(() => import("./features/preview/PreviewPanel"));
-const WRIKE_HOME = "https://www.wrike.com/workspace.htm";
 const READ_ONLY_URL = "https://login.wrike.com/login/?forceLogin=false&read";
 const APP_VERSION = import.meta.env.VITE_APP_VERSION;
-const LAUNCH_SPLASH_DURATION_MS = 2800;
+const LAUNCH_SPLASH_DURATION_MS = 450;
 
 type Screen = "wrike" | "files" | "settings";
 type WrikeTabMode = "standard" | "readOnly";
@@ -107,6 +128,7 @@ export function App() {
   const [wrikeTabs, setWrikeTabs] = useState<WrikeTab[]>([INITIAL_WRIKE_TAB]);
   const [activeWrikeTabId, setActiveWrikeTabId] = useState(INITIAL_WRIKE_TAB.id);
   const [wrikeSplit, setWrikeSplit] = useState<WrikeSplit | null>(null);
+  const [suspendedTabIds, setSuspendedTabIds] = useState<string[]>([]);
   const [newWrikeTabId, setNewWrikeTabId] = useState<string | null>(null);
   const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
@@ -126,11 +148,11 @@ export function App() {
     confirmBeforeClosingTabs: false,
     openDownloadedFilesAutomatically: false,
     autoCheckForUpdates: true,
+    suspendInactiveTabsMinutes: 0,
     theme: "default",
     customDictionary: [],
     startupTabUrls: [WRIKE_HOME],
     pinnedDownloadIds: [],
-    lastWrikeSession: null,
   });
   const [appUpdate, setAppUpdate] = useState<AppUpdateState>({
     phase: "idle",
@@ -145,13 +167,21 @@ export function App() {
   });
   const [notice, setNotice] = useState<string | null>(null);
   const [storageWarning, setStorageWarning] = useState<string | null>(null);
+  const [downloadsStats, setDownloadsStats] = useState<DownloadsStorageStats | null>(null);
+  const [clearingDownloads, setClearingDownloads] = useState(false);
   const [sessionPrompt, setSessionPrompt] = useState<WrikeSession | null>(null);
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [reloadingTabId, setReloadingTabId] = useState<string | null>(null);
+  const screenRef = useRef(screen);
   const wrikeTabsRef = useRef(wrikeTabs);
   const activeWrikeTabIdRef = useRef(activeWrikeTabId);
   const wrikeSplitRef = useRef(wrikeSplit);
+  const settingsRef = useRef(settings);
+  const launchedTabIdsRef = useRef(new Set<string>());
+  const tabLastActiveAtRef = useRef(new Map<string, number>());
   const canPersistSessionRef = useRef(false);
+  const lastPersistedSessionSigRef = useRef("");
+  const pendingSessionSigRef = useRef<string | null>(null);
   const updateRequestInFlightRef = useRef(false);
   const appUpdatePhaseRef = useRef(appUpdate.phase);
   const autoUpdateTimerRef = useRef<number | undefined>(undefined);
@@ -159,7 +189,8 @@ export function App() {
   const sessionSaveTimerRef = useRef<number | undefined>(undefined);
   const closingTabIdsRef = useRef(new Set<string>());
   const tabIdCounterRef = useRef(0);
-  const launchStartedAtRef = useRef(Date.now());
+  const shortcutHandlerRef = useRef<(shortcut: WrikeShortcutEvent) => void>(() => undefined);
+  const navActionHandlerRef = useRef<(action: WrikeTabAction) => void>(() => undefined);
 
   useEffect(() => {
     if (storageWarning) setScreen("settings");
@@ -182,8 +213,16 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    screenRef.current = screen;
+  }, [screen]);
+
+  useEffect(() => {
     appUpdatePhaseRef.current = appUpdate.phase;
   }, [appUpdate.phase]);
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
 
   useEffect(() => {
     wrikeTabsRef.current = wrikeTabs;
@@ -197,18 +236,54 @@ export function App() {
     wrikeSplitRef.current = wrikeSplit;
   }, [wrikeSplit]);
 
+  const flushPendingSessionSave = useCallback(() => {
+    const pendingSig = pendingSessionSigRef.current;
+    if (!pendingSig) {
+      return;
+    }
+    window.clearTimeout(sessionSaveTimerRef.current);
+    sessionSaveTimerRef.current = undefined;
+    pendingSessionSigRef.current = null;
+    lastPersistedSessionSigRef.current = pendingSig;
+    void saveWrikeSession(currentWrikeSession()).catch((error) =>
+      setStorageWarning(`Unable to save your tab session: ${String(error)}`),
+    );
+  }, []);
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        flushPendingSessionSave();
+      }
+    };
+    window.addEventListener("pagehide", flushPendingSessionSave);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("pagehide", flushPendingSessionSave);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [flushPendingSessionSave]);
+
   useEffect(() => {
     if (!canPersistSessionRef.current) {
       return;
     }
+    const nextSig = wrikeSessionSignature(
+      wrikeTabs,
+      activeWrikeTabId,
+      wrikeSplit,
+      normalizedStartupUrls(settings.startupTabUrls)[0],
+    );
+    if (nextSig === lastPersistedSessionSigRef.current) {
+      return;
+    }
+    pendingSessionSigRef.current = nextSig;
     window.clearTimeout(sessionSaveTimerRef.current);
     sessionSaveTimerRef.current = window.setTimeout(() => {
-      void saveWrikeSession(currentWrikeSession()).catch((error) =>
-        setStorageWarning(`Unable to save your tab session: ${String(error)}`),
-      );
-    }, 450);
+      flushPendingSessionSave();
+    }, 1000);
     return () => window.clearTimeout(sessionSaveTimerRef.current);
-  }, [activeWrikeTabId, wrikeSplit, wrikeTabs]);
+  }, [activeWrikeTabId, flushPendingSessionSave, settings.startupTabUrls, wrikeSplit, wrikeTabs]);
 
   useEffect(() => {
     if (!notice) {
@@ -218,7 +293,40 @@ export function App() {
     return () => window.clearTimeout(noticeTimer);
   }, [notice]);
 
-  async function runUpdateCheck(manual: boolean) {
+  useEffect(() => {
+    if (!isDesktopRuntime() || settings.suspendInactiveTabsMinutes <= 0) {
+      return;
+    }
+    const thresholdMs = settings.suspendInactiveTabsMinutes * 60_000;
+    const intervalMs = Math.min(30_000, Math.max(5_000, Math.floor(thresholdMs / 4)));
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      const activeIds = new Set(
+        screenRef.current === "wrike" ? visibleWrikeTabIds() : [activeWrikeTabIdRef.current],
+      );
+      const toSuspend: string[] = [];
+      for (const tab of wrikeTabsRef.current) {
+        if (!launchedTabIdsRef.current.has(tab.id) || activeIds.has(tab.id)) {
+          continue;
+        }
+        const lastActiveAt = tabLastActiveAtRef.current.get(tab.id) ?? now;
+        if (now - lastActiveAt >= thresholdMs) {
+          toSuspend.push(tab.id);
+        }
+      }
+      if (!toSuspend.length) {
+        return;
+      }
+      for (const tabId of toSuspend) {
+        launchedTabIdsRef.current.delete(tabId);
+        void closeWrikeTab(tabId).catch(() => undefined);
+      }
+      setSuspendedTabIds((current) => [...new Set([...current, ...toSuspend])]);
+    }, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [settings.suspendInactiveTabsMinutes]);
+
+  const runUpdateCheck = useCallback(async (manual: boolean) => {
     if (
       updateRequestInFlightRef.current ||
       appUpdatePhaseRef.current === "downloading" ||
@@ -288,9 +396,9 @@ export function App() {
     } finally {
       updateRequestInFlightRef.current = false;
     }
-  }
+  }, []);
 
-  async function startUpdateInstall() {
+  const startUpdateInstall = useCallback(async () => {
     if (
       updateRequestInFlightRef.current ||
       appUpdatePhaseRef.current === "downloading" ||
@@ -340,7 +448,7 @@ export function App() {
     } finally {
       updateRequestInFlightRef.current = false;
     }
-  }
+  }, []);
 
   function dismissUpdatePrompt() {
     setAppUpdate((current) => ({
@@ -357,48 +465,65 @@ export function App() {
       }).catch((error) => setStorageWarning(`Unable to load your files: ${String(error)}`));
     };
     refresh();
-    void Promise.all([loadSettings(), loadStorageHealth()]).then(async ([next, warnings]) => {
-      setSettings(next);
-      if (warnings.length) {
-        setStorageWarning(warnings.join(" "));
-        setScreen("settings");
-        return;
-      }
-      if (isDesktopRuntime() && next.autoCheckForUpdates) {
-        window.clearTimeout(autoUpdateTimerRef.current);
-        autoUpdateTimerRef.current = window.setTimeout(() => {
-          void runUpdateCheck(false);
-        }, 3500);
-      }
-      if (hasRestorableSession(next.lastWrikeSession)) {
-        setSessionPrompt(next.lastWrikeSession);
-      }
-      if (next.launchWrikeOnStart) {
-        await waitForLaunchSplash();
-        await openStartupTabs(next.startupTabUrls);
-        if (!hasRestorableSession(next.lastWrikeSession)) {
-          canPersistSessionRef.current = true;
+    void Promise.all([loadSettings(), loadWrikeSession(), loadStorageHealth()])
+      .then(async ([next, savedSession, warnings]) => {
+        settingsRef.current = next;
+        setSettings(next);
+        if (warnings.length) {
+          setStorageWarning(warnings.join(" "));
+          setScreen("settings");
+          return;
         }
-      } else {
-        setScreen("files");
-        if (!hasRestorableSession(next.lastWrikeSession)) {
-          canPersistSessionRef.current = true;
+        if (isDesktopRuntime() && next.autoCheckForUpdates) {
+          window.clearTimeout(autoUpdateTimerRef.current);
+          autoUpdateTimerRef.current = window.setTimeout(() => {
+            void runUpdateCheck(false);
+          }, 3500);
         }
-      }
-    }).catch((error) => setStorageWarning(`Unable to load preferences: ${String(error)}`));
+        if (hasRestorableSession(savedSession)) {
+          setSessionPrompt(savedSession);
+        }
+        if (next.launchWrikeOnStart) {
+          await openStartupTabs(next.startupTabUrls);
+          if (!hasRestorableSession(savedSession)) {
+            canPersistSessionRef.current = true;
+          }
+        } else {
+          setScreen("files");
+          if (!hasRestorableSession(savedSession)) {
+            canPersistSessionRef.current = true;
+          }
+        }
+      })
+      .catch((error) => setStorageWarning(`Unable to load preferences: ${String(error)}`));
     let dispose: () => void = () => undefined;
     let disposeCompleted: () => void = () => undefined;
+    let disposeDeleted: () => void = () => undefined;
     let disposeErrors: () => void = () => undefined;
     let disposeTabUpdates: () => void = () => undefined;
     let disposeSettingsUpdates: () => void = () => undefined;
+    let disposeShortcuts: () => void = () => undefined;
     void subscribeToDownloads(refresh).then((unsubscribe) => {
       dispose = unsubscribe;
     });
     void subscribeToDownloadCompleted((record) => {
+      setDownloads((current) =>
+        current.some((existing) => existing.id === record.id) ? current : [record, ...current],
+      );
       setSelectedId(record.id);
       setNotice(`${record.fileName} is ready in Files.`);
     }).then((unsubscribe) => {
       disposeCompleted = unsubscribe;
+    });
+    void subscribeToDownloadDeleted((deletedId) => {
+      evictPreviewById(deletedId);
+      setDownloads((current) => {
+        const next = current.filter((item) => item.id !== deletedId);
+        setSelectedId((selected) => (selected === deletedId ? next[0]?.id ?? null : selected));
+        return next;
+      });
+    }).then((unsubscribe) => {
+      disposeDeleted = unsubscribe;
     });
     void subscribeToDownloadErrors((message) => {
       setNotice(`Download was not added to Files: ${message}`);
@@ -415,36 +540,114 @@ export function App() {
       disposeTabUpdates = unsubscribe;
     });
     void subscribeToSettingsUpdates((next) => {
+      settingsRef.current = next;
       setSettings(next);
     }).then((unsubscribe) => {
       disposeSettingsUpdates = unsubscribe;
     });
+    void subscribeToWrikeShortcuts((shortcut) => {
+      shortcutHandlerRef.current(shortcut);
+    }).then((unsubscribe) => {
+      disposeShortcuts = unsubscribe;
+    });
     return () => {
       dispose();
       disposeCompleted();
+      disposeDeleted();
       disposeErrors();
       disposeTabUpdates();
       disposeSettingsUpdates();
+      disposeShortcuts();
     };
-  }, []);
+  }, [runUpdateCheck]);
 
   useEffect(() => {
     const closeMenu = () => {
       setTabMenu(null);
       void closeTopbarActionsMenu();
     };
-    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
         closeMenu();
+        return;
+      }
+      if (event.isComposing) {
+        return;
+      }
+      if (event.ctrlKey && !event.metaKey && !event.altKey) {
+        const lower = event.key.toLowerCase();
+        if (lower === "t" && !event.shiftKey) {
+          event.preventDefault();
+          shortcutHandlerRef.current({ action: "new-tab", index: null });
+          return;
+        }
+        if (lower === "w" && !event.shiftKey) {
+          event.preventDefault();
+          shortcutHandlerRef.current({ action: "close-tab", index: null });
+          return;
+        }
+        if (event.key === "Tab") {
+          event.preventDefault();
+          shortcutHandlerRef.current({
+            action: event.shiftKey ? "prev-tab" : "next-tab",
+            index: null,
+          });
+          return;
+        }
+        if (event.key === "\\" && !event.shiftKey) {
+          event.preventDefault();
+          shortcutHandlerRef.current({ action: "toggle-split", index: null });
+          return;
+        }
+        if (!event.shiftKey && /^[1-9]$/.test(event.key)) {
+          event.preventDefault();
+          shortcutHandlerRef.current({ action: "select-tab", index: Number(event.key) });
+          return;
+        }
+        if (lower === "r" && !event.shiftKey && screenRef.current === "wrike") {
+          event.preventDefault();
+          navActionHandlerRef.current("reload");
+          return;
+        }
+      }
+      if (
+        event.key === "F5" &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey &&
+        screenRef.current === "wrike"
+      ) {
+        event.preventDefault();
+        navActionHandlerRef.current("reload");
+        return;
+      }
+      if (
+        event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey &&
+        screenRef.current === "wrike" &&
+        (event.key === "ArrowLeft" || event.key === "ArrowRight")
+      ) {
+        const target = event.target instanceof HTMLElement ? event.target : null;
+        if (
+          target &&
+          (target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA")
+        ) {
+          return;
+        }
+        event.preventDefault();
+        navActionHandlerRef.current(event.key === "ArrowLeft" ? "back" : "forward");
       }
     };
     window.addEventListener("click", closeMenu);
     window.addEventListener("resize", closeMenu);
-    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("click", closeMenu);
       window.removeEventListener("resize", closeMenu);
-      window.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("keydown", onKeyDown);
     };
   }, []);
 
@@ -475,55 +678,24 @@ export function App() {
     };
   }, []);
 
-  const visibleDownloads = useMemo(() => {
-    const query = deferredSearch.trim().toLowerCase();
-    const pinnedIds = new Set(settings.pinnedDownloadIds);
-    return downloads.filter((record) => {
-      const kindMatches = filter === "all" || record.kind === filter;
-      const queryMatches =
-        query.length === 0 ||
-        record.fileName.toLowerCase().includes(query) ||
-        record.sourceLabel.toLowerCase().includes(query);
-      return kindMatches && queryMatches;
-    }).sort((first, second) => {
-      const firstPinned = pinnedIds.has(first.id);
-      const secondPinned = pinnedIds.has(second.id);
-      if (firstPinned !== secondPinned) {
-        return firstPinned ? -1 : 1;
-      }
-      return new Date(second.downloadedAt).getTime() - new Date(first.downloadedAt).getTime();
-    });
-  }, [deferredSearch, downloads, filter, settings.pinnedDownloadIds]);
+  const visibleDownloads = useMemo(
+    () => filterAndSortDownloads(downloads, filter, deferredSearch, settings.pinnedDownloadIds),
+    [deferredSearch, downloads, filter, settings.pinnedDownloadIds],
+  );
 
   const selectedRecord =
     visibleDownloads.find((record) => record.id === selectedId) ?? visibleDownloads[0] ?? null;
 
-  function normalizeUrlInput(value: string): string | null {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return null;
+  function markTabsActive(tabIds: string[]) {
+    const now = Date.now();
+    for (const tabId of tabIds) {
+      tabLastActiveAtRef.current.set(tabId, now);
     }
-    const candidate =
-      trimmed.includes("://") || trimmed === "about:blank" ? trimmed : `https://${trimmed}`;
-    try {
-      const url = new URL(candidate);
-      return url.protocol === "http:" || url.protocol === "https:" || url.href === "about:blank"
-        ? url.href
-        : null;
-    } catch {
-      return null;
-    }
-  }
-
-  function normalizedStartupUrls(urls = settings.startupTabUrls) {
-    const normalized = urls
-      .map(normalizeUrlInput)
-      .filter((url): url is string => Boolean(url));
-    return normalized.length ? [...new Set(normalized)] : [WRIKE_HOME];
-  }
-
-  function hasRestorableSession(session: WrikeSession | null): session is WrikeSession {
-    return Boolean(session?.tabs.some((tab) => normalizeUrlInput(tab.url ?? "")));
+    setSuspendedTabIds((current) =>
+      current.some((id) => tabIds.includes(id))
+        ? current.filter((id) => !tabIds.includes(id))
+        : current,
+    );
   }
 
   function wrikeModeForUrl(url: string): WrikeTabMode {
@@ -547,20 +719,13 @@ export function App() {
     return `${prefix}-${Date.now().toString(36)}-${tabIdCounterRef.current.toString(36)}`;
   }
 
-  async function waitForLaunchSplash() {
-    const elapsed = Date.now() - launchStartedAtRef.current;
-    const remaining = LAUNCH_SPLASH_DURATION_MS - elapsed;
-    if (remaining > 0) {
-      await new Promise<void>((resolve) => window.setTimeout(resolve, remaining));
-    }
-  }
-
   function currentWrikeSession(): WrikeSession {
+    const fallbackUrl = normalizedStartupUrls(settingsRef.current.startupTabUrls)[0];
     return {
       tabs: wrikeTabsRef.current.map((tab) => ({
         id: tab.id,
         title: tab.title,
-        url: tab.url ?? normalizedStartupUrls()[0],
+        url: tab.url ?? fallbackUrl,
         mode: tab.mode,
       })),
       activeTabId: activeWrikeTabIdRef.current,
@@ -572,33 +737,75 @@ export function App() {
   async function openWrikeTabSet(nextTabs: WrikeTab[], nextActiveTabId: string, nextSplit: WrikeSplit | null) {
     const nextIds = new Set(nextTabs.map((tab) => tab.id));
     const oldTabs = wrikeTabsRef.current.filter((tab) => !nextIds.has(tab.id));
-    for (const tab of oldTabs) {
-      await closeWrikeTab(tab.id).catch(() => undefined);
+    await Promise.all(
+      oldTabs.map((tab) => {
+        tabLastActiveAtRef.current.delete(tab.id);
+        if (launchedTabIdsRef.current.delete(tab.id)) {
+          return closeWrikeTab(tab.id).catch(() => undefined);
+        }
+        return Promise.resolve();
+      }),
+    );
+    if (oldTabs.length) {
+      setSuspendedTabIds((current) => current.filter((id) => nextIds.has(id)));
     }
-    wrikeTabsRef.current = nextTabs;
-    syncWrikeSplitRef(nextSplit);
+    const splitIsValid = Boolean(
+      nextSplit &&
+        nextIds.has(nextSplit.leftTabId) &&
+        nextIds.has(nextSplit.rightTabId) &&
+        nextSplit.leftTabId !== nextSplit.rightTabId,
+    );
+    const resolvedSplit = splitIsValid ? nextSplit : null;
+    const visibleIds = resolvedSplit
+      ? [resolvedSplit.leftTabId, resolvedSplit.rightTabId]
+      : [nextActiveTabId];
+    const normalizedTabs = nextTabs.map((tab) =>
+      visibleIds.includes(tab.id) || launchedTabIdsRef.current.has(tab.id)
+        ? tab
+        : { ...tab, isTitleLoading: false },
+    );
+    wrikeTabsRef.current = normalizedTabs;
+    syncWrikeSplitRef(resolvedSplit);
     syncActiveWrikeTabId(nextActiveTabId);
-    setWrikeTabs(nextTabs);
+    setWrikeTabs(normalizedTabs);
     setScreen("wrike");
-    const visibleIds =
-      nextSplit && nextIds.has(nextSplit.leftTabId) && nextIds.has(nextSplit.rightTabId)
-        ? [nextSplit.leftTabId, nextSplit.rightTabId]
-        : [nextActiveTabId];
+    markTabsActive(visibleIds);
+    const paneForTab = (tabId: string): WrikePane =>
+      resolvedSplit
+        ? tabId === resolvedSplit.leftTabId
+          ? "left"
+          : "right"
+        : "full";
     const launchOrder = [
-      ...nextTabs.filter((tab) => tab.id !== nextActiveTabId),
-      ...nextTabs.filter((tab) => tab.id === nextActiveTabId),
+      ...visibleIds.filter((id) => id !== nextActiveTabId),
+      ...visibleIds.filter((id) => id === nextActiveTabId),
     ];
-    for (const tab of launchOrder) {
-      await launchWrike(tab.id, tab.mode === "readOnly" ? READ_ONLY_URL : tab.url ?? WRIKE_HOME);
+    await Promise.all(
+      launchOrder.map((tabId) => {
+        const tab = normalizedTabs.find((candidate) => candidate.id === tabId);
+        if (!tab) {
+          return Promise.resolve();
+        }
+        launchedTabIdsRef.current.add(tab.id);
+        return launchWrike(
+          tab.id,
+          tab.mode === "readOnly" ? READ_ONLY_URL : tab.url ?? WRIKE_HOME,
+          paneForTab(tab.id),
+        );
+      }),
+    );
+    const hiddenLaunched = normalizedTabs
+      .filter((tab) => !visibleIds.includes(tab.id) && launchedTabIdsRef.current.has(tab.id))
+      .map((tab) => tab.id);
+    if (hiddenLaunched.length) {
+      await hideWrike(hiddenLaunched);
     }
-    await resizeWrikeTabs(currentWrikeLayouts(nextSplit, nextActiveTabId)).catch(() => undefined);
-    await hideWrike(nextTabs.filter((tab) => !visibleIds.includes(tab.id)).map((tab) => tab.id));
     if (visibleIds.includes(nextActiveTabId)) {
       await focusWrikeTab(nextActiveTabId).catch(() => undefined);
     }
   }
 
-  async function openStartupTabs(urls = settings.startupTabUrls) {
+  async function openStartupTabs(urls = settingsRef.current.startupTabUrls) {
     const nextTabs = normalizedStartupUrls(urls).map((url, index) =>
       createWrikeTab(index === 0 ? "home" : `startup-${Date.now().toString(36)}-${index}`, index === 0 ? "Wrike" : `Startup tab ${index + 1}`, url),
     );
@@ -635,12 +842,26 @@ export function App() {
     canPersistSessionRef.current = false;
     await openWrikeTabSet(nextTabs, nextActiveTabId, nextSplit);
     canPersistSessionRef.current = true;
+    pendingSessionSigRef.current = null;
+    lastPersistedSessionSigRef.current = wrikeSessionSignature(
+      wrikeTabsRef.current,
+      activeWrikeTabIdRef.current,
+      wrikeSplitRef.current,
+      normalizedStartupUrls(settingsRef.current.startupTabUrls)[0],
+    );
     await saveWrikeSession(currentWrikeSession()).catch(() => undefined);
   }
 
   function dismissSessionPrompt() {
     setSessionPrompt(null);
     canPersistSessionRef.current = true;
+    pendingSessionSigRef.current = null;
+    lastPersistedSessionSigRef.current = wrikeSessionSignature(
+      wrikeTabsRef.current,
+      activeWrikeTabIdRef.current,
+      wrikeSplitRef.current,
+      normalizedStartupUrls(settingsRef.current.startupTabUrls)[0],
+    );
     void saveWrikeSession(currentWrikeSession()).catch(() => undefined);
   }
 
@@ -679,7 +900,12 @@ export function App() {
   }
 
   async function resizeCurrentWrikeTabs() {
-    await resizeWrikeTabs(currentWrikeLayouts());
+    const launchedLayouts = currentWrikeLayouts().filter((layout) =>
+      launchedTabIdsRef.current.has(layout.tabId),
+    );
+    if (launchedLayouts.length) {
+      await resizeWrikeTabs(launchedLayouts);
+    }
   }
 
   function companionTabId(tabId: string, preferred?: string | null) {
@@ -699,21 +925,50 @@ export function App() {
     return wrikeTabsRef.current.find((tab) => tab.id !== tabId)?.id ?? null;
   }
 
+  function markTabLaunchingIfNeeded(tabId: string) {
+    if (launchedTabIdsRef.current.has(tabId)) {
+      return;
+    }
+    setWrikeTabs((current) =>
+      current.map((tab) =>
+        tab.id === tabId && tab.mode === "standard" && !tab.isTitleLoading
+          ? { ...tab, isTitleLoading: true }
+          : tab,
+      ),
+    );
+  }
+
+  async function hideLaunchedTabsExcept(keepIds: string[]) {
+    const toHide = wrikeTabsRef.current
+      .filter((tab) => !keepIds.includes(tab.id) && launchedTabIdsRef.current.has(tab.id))
+      .map((tab) => tab.id);
+    if (toHide.length) {
+      await hideWrike(toHide);
+    }
+  }
+
   async function showWrikeSplit(nextSplit: WrikeSplit, focusTabId: string) {
     syncWrikeSplitRef(nextSplit);
     syncActiveWrikeTabId(focusTabId);
     setScreen("wrike");
     const visibleIds = [nextSplit.leftTabId, nextSplit.rightTabId];
+    markTabsActive(visibleIds);
     const launchOrder =
       focusTabId === nextSplit.leftTabId
         ? [nextSplit.rightTabId, nextSplit.leftTabId]
         : [nextSplit.leftTabId, nextSplit.rightTabId];
     for (const tabId of launchOrder) {
       const tab = wrikeTabsRef.current.find((candidate) => candidate.id === tabId);
-      await launchWrike(tabId, tab?.mode === "readOnly" ? READ_ONLY_URL : undefined);
+      markTabLaunchingIfNeeded(tabId);
+      launchedTabIdsRef.current.add(tabId);
+      const pane: WrikePane = tabId === nextSplit.leftTabId ? "left" : "right";
+      await launchWrike(
+        tabId,
+        tab?.mode === "readOnly" ? READ_ONLY_URL : tab?.url ?? WRIKE_HOME,
+        pane,
+      );
     }
-    await resizeWrikeTabs(currentWrikeLayouts(nextSplit, focusTabId)).catch(() => undefined);
-    await hideWrike(wrikeTabsRef.current.filter((tab) => !visibleIds.includes(tab.id)).map((tab) => tab.id));
+    await hideLaunchedTabsExcept(visibleIds);
   }
 
   async function restoreWrikeView() {
@@ -745,62 +1000,71 @@ export function App() {
     await showWrike(focusTabId);
   }
 
-  async function showWrike(tabId = activeWrikeTabId) {
+  async function showWrike(tabId = activeWrikeTabIdRef.current) {
     const tabs = wrikeTabsRef.current;
     const tab = tabs.find((candidate) => candidate.id === tabId);
     const split = wrikeSplitRef.current;
     if (split && (split.leftTabId === tabId || split.rightTabId === tabId)) {
+      if (
+        screenRef.current !== "wrike" ||
+        !launchedTabIdsRef.current.has(split.leftTabId) ||
+        !launchedTabIdsRef.current.has(split.rightTabId)
+      ) {
+        await showWrikeSplit(split, tabId);
+        return;
+      }
       syncActiveWrikeTabId(tabId);
-      await resizeWrikeTabs(currentWrikeLayouts(split, tabId)).catch(() => undefined);
+      markTabsActive([split.leftTabId, split.rightTabId]);
       await focusWrikeTab(tabId);
-      await hideWrike(tabs.filter((tab) => tab.id !== split.leftTabId && tab.id !== split.rightTabId).map((tab) => tab.id));
+      await hideLaunchedTabsExcept([split.leftTabId, split.rightTabId]);
       setScreen("wrike");
       return;
     }
     syncWrikeSplitRef(null);
     syncActiveWrikeTabId(tabId);
-    await resizeWrikeTabs(currentWrikeLayouts(null, tabId)).catch(() => undefined);
-    await launchWrike(tabId, tab?.mode === "readOnly" ? READ_ONLY_URL : undefined);
-    await hideWrike(tabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
-    const update = await getWrikeTabState(tabId);
-    if (update) {
-      setWrikeTabs((current) =>
-        current.map((tab) => (tab.id === tabId ? applyWrikeTabUpdate(tab, update) : tab)),
-      );
-    }
+    markTabLaunchingIfNeeded(tabId);
+    markTabsActive([tabId]);
+    launchedTabIdsRef.current.add(tabId);
+    await launchWrike(
+      tabId,
+      tab?.mode === "readOnly" ? READ_ONLY_URL : tab?.url ?? WRIKE_HOME,
+      "full",
+    );
+    await hideLaunchedTabsExcept([tabId]);
     setScreen("wrike");
   }
 
   async function showWrikeHome() {
-    const tabId = activeWrikeTabId;
+    const tabId = activeWrikeTabIdRef.current;
     setIsTopbarActionsMenuOpen(false);
     syncWrikeSplitRef(null);
     syncActiveWrikeTabId(tabId);
     setWrikeTabs((current) =>
       current.map((tab) => (tab.id === tabId ? { ...tab, mode: "standard" } : tab)),
     );
-    await resizeWrikeTabs(currentWrikeLayouts(null, tabId)).catch(() => undefined);
-    await launchWrike(tabId, WRIKE_HOME);
-    await hideWrike(wrikeTabsRef.current.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
-    const update = await getWrikeTabState(tabId);
-    if (update) {
-      setWrikeTabs((current) =>
-        current.map((tab) => (tab.id === tabId ? applyWrikeTabUpdate(tab, update) : tab)),
-      );
-    }
+    markTabsActive([tabId]);
+    launchedTabIdsRef.current.add(tabId);
+    await launchWrike(tabId, WRIKE_HOME, "full");
+    await hideLaunchedTabsExcept([tabId]);
     setScreen("wrike");
   }
 
   async function showLocalScreen(next: Exclude<Screen, "wrike">) {
     setIsTopbarActionsMenuOpen(false);
-    await hideWrike(wrikeTabs.map((tab) => tab.id));
+    markTabsActive(visibleWrikeTabIds());
+    const toHide = wrikeTabsRef.current
+      .filter((tab) => launchedTabIdsRef.current.has(tab.id))
+      .map((tab) => tab.id);
+    if (toHide.length) {
+      await hideWrike(toHide);
+    }
     setScreen(next);
   }
 
-  async function addWrikeTab() {
+  async function addWrikeTab(targetUrl?: string) {
     const tabs = wrikeTabsRef.current;
     const nextTabNumber = tabs.length + 1;
-    const url = normalizedStartupUrls()[0];
+    const url = targetUrl ?? normalizedStartupUrls(settingsRef.current.startupTabUrls)[0];
     const next: WrikeTab = {
       id: createTabId("tab"),
       title: nextTabNumber === 1 ? "Wrike" : `New tab ${nextTabNumber}`,
@@ -818,8 +1082,15 @@ export function App() {
     setScreen("wrike");
     setNewWrikeTabId(next.id);
     window.setTimeout(() => setNewWrikeTabId(null), 520);
-    await launchWrike(next.id, next.mode === "readOnly" ? READ_ONLY_URL : url);
-    await hideWrike(tabs.map((tab) => tab.id));
+    markTabsActive([next.id]);
+    launchedTabIdsRef.current.add(next.id);
+    await launchWrike(next.id, next.mode === "readOnly" ? READ_ONLY_URL : url, "full");
+    const toHide = tabs
+      .filter((tab) => launchedTabIdsRef.current.has(tab.id))
+      .map((tab) => tab.id);
+    if (toHide.length) {
+      await hideWrike(toHide);
+    }
   }
 
   async function addReadOnlyTab() {
@@ -841,8 +1112,15 @@ export function App() {
     setScreen("wrike");
     setNewWrikeTabId(next.id);
     window.setTimeout(() => setNewWrikeTabId(null), 520);
-    await launchWrike(next.id, READ_ONLY_URL);
-    await hideWrike(tabs.map((tab) => tab.id));
+    markTabsActive([next.id]);
+    launchedTabIdsRef.current.add(next.id);
+    await launchWrike(next.id, READ_ONLY_URL, "full");
+    const toHide = tabs
+      .filter((tab) => launchedTabIdsRef.current.has(tab.id))
+      .map((tab) => tab.id);
+    if (toHide.length) {
+      await hideWrike(toHide);
+    }
   }
 
   async function runWrikeTabAction(tabId: string, action: WrikeTabAction) {
@@ -876,6 +1154,8 @@ export function App() {
           ? split.leftTabId
           : null;
     setTabMenu(null);
+    tabLastActiveAtRef.current.delete(tabId);
+    setSuspendedTabIds((current) => current.filter((id) => id !== tabId));
     wrikeTabsRef.current = remaining;
     setWrikeTabs(remaining);
     const nextActiveTabId =
@@ -888,7 +1168,9 @@ export function App() {
       syncWrikeSplitRef(null);
     }
     try {
-      await closeWrikeTab(tabId).catch(() => undefined);
+      if (launchedTabIdsRef.current.delete(tabId)) {
+        await closeWrikeTab(tabId).catch(() => undefined);
+      }
       if (
         survivingSplitTabId &&
         activeWrikeTabIdRef.current === survivingSplitTabId &&
@@ -1025,7 +1307,10 @@ export function App() {
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", tabId);
     if (screen === "wrike") {
-      void hideWrike(visibleWrikeTabIds());
+      const toHide = visibleWrikeTabIds().filter((id) => launchedTabIdsRef.current.has(id));
+      if (toHide.length) {
+        void hideWrike(toHide);
+      }
     }
   }
 
@@ -1146,31 +1431,113 @@ export function App() {
   const activeWrikeTab =
     wrikeTabs.find((tab) => tab.id === activeWrikeTabId) ?? wrikeTabs[0] ?? null;
 
-  async function updateSettings(next: Settings) {
+  const updateSettings = useCallback(async (next: Settings) => {
     try {
       const persisted = await saveSettings(next);
+      settingsRef.current = persisted;
       setSettings(persisted);
       setNotice("Preferences saved.");
     } catch (error) {
       setStorageWarning(`Unable to save preferences: ${String(error)}`);
     }
-  }
+  }, []);
 
-  function togglePinnedDownload(id: string) {
-    const pinned = new Set(settings.pinnedDownloadIds);
-    if (pinned.has(id)) {
-      pinned.delete(id);
-    } else {
-      pinned.add(id);
+  const handleSettingsChange = useCallback(
+    (next: Settings) => {
+      void updateSettings(next);
+    },
+    [updateSettings],
+  );
+
+  const handleCheckForUpdates = useCallback(() => {
+    void runUpdateCheck(true);
+  }, [runUpdateCheck]);
+
+  const handleInstallUpdate = useCallback(() => {
+    void startUpdateInstall();
+  }, [startUpdateInstall]);
+
+  const handleOpenSourceTask = useCallback((record: DownloadRecord) => {
+    void (async () => {
+      const tabs = wrikeTabsRef.current;
+      const activeTab = tabs.find((tab) => tab.id === activeWrikeTabIdRef.current);
+      const preferredTabId =
+        activeTab?.mode === "standard"
+          ? activeTab.id
+          : tabs.find((tab) => tab.mode === "standard")?.id ?? "home";
+      try {
+        const targetTabId = (await openSourceTask(record, preferredTabId)) ?? preferredTabId;
+        if (!wrikeTabsRef.current.some((tab) => tab.id === targetTabId)) {
+          const created = createWrikeTab(
+            targetTabId,
+            record.sourceLabel || "Wrike",
+            record.sourceUrl ?? WRIKE_HOME,
+            "standard",
+          );
+          const nextTabs = [...wrikeTabsRef.current, created];
+          wrikeTabsRef.current = nextTabs;
+          setWrikeTabs(nextTabs);
+        }
+        launchedTabIdsRef.current.add(targetTabId);
+        markTabsActive([targetTabId]);
+        syncWrikeSplitRef(null);
+        syncActiveWrikeTabId(targetTabId);
+        await hideLaunchedTabsExcept([targetTabId]);
+        setScreen("wrike");
+      } catch (error) {
+        setNotice(`Unable to open Wrike task: ${String(error)}`);
+      }
+    })();
+  }, []);
+
+  const handleRevealDownload = useCallback((id: string) => {
+    void revealDownload(id).catch((error) =>
+      setNotice(`Unable to open folder: ${String(error)}`),
+    );
+  }, []);
+
+  const handleDeleteDownload = useCallback((record: DownloadRecord) => {
+    if (
+      !window.confirm(
+        `Remove "${record.fileName}" from ABW Files and delete it from your computer?`,
+      )
+    ) {
+      return;
     }
-    void updateSettings({ ...settings, pinnedDownloadIds: [...pinned] });
-  }
+    void deleteDownload(record.id)
+      .then(() => {
+        evictPreviewById(record.id);
+        setDownloads((current) => {
+          const next = current.filter((item) => item.id !== record.id);
+          setSelectedId((selected) => (selected === record.id ? next[0]?.id ?? null : selected));
+          return next;
+        });
+        setNotice(`Removed ${record.fileName}.`);
+      })
+      .catch((error) => setNotice(`Unable to remove file: ${String(error)}`));
+  }, []);
+
+  const togglePinnedDownload = useCallback(
+    (id: string) => {
+      const current = settingsRef.current;
+      const pinned = new Set(current.pinnedDownloadIds);
+      if (pinned.has(id)) {
+        pinned.delete(id);
+      } else {
+        pinned.add(id);
+      }
+      void updateSettings({ ...current, pinnedDownloadIds: [...pinned] });
+    },
+    [updateSettings],
+  );
 
   async function toggleSpellCheck() {
     await closeTopbarActionsMenu();
-    const spellCheck = !settings.spellCheck;
+    const current = settingsRef.current;
+    const spellCheck = !current.spellCheck;
     try {
-      const persisted = await saveSettings({ ...settings, spellCheck });
+      const persisted = await saveSettings({ ...current, spellCheck });
+      settingsRef.current = persisted;
       setSettings(persisted);
       setNotice(`Spell check ${persisted.spellCheck ? "enabled" : "disabled"}.`);
     } catch (error) {
@@ -1178,14 +1545,58 @@ export function App() {
     }
   }
 
-  async function testNotification() {
+  const testNotification = useCallback(async () => {
     try {
       await sendTestNotification();
       setNotice("Test notification sent.");
     } catch {
       setNotice("Unable to send a notification. Check Windows notification permissions.");
     }
-  }
+  }, []);
+
+  const handleTestNotification = useCallback(() => {
+    void testNotification();
+  }, [testNotification]);
+
+  const refreshDownloadsStats = useCallback(() => {
+    void getDownloadsStorageStats()
+      .then(setDownloadsStats)
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (screen === "settings") {
+      refreshDownloadsStats();
+    }
+  }, [downloads, refreshDownloadsStats, screen, settings.pinnedDownloadIds]);
+
+  const handleClearUnpinnedDownloads = useCallback(() => {
+    if (
+      !window.confirm(
+        "Remove all unpinned downloaded files from ABW Files and delete them from your computer? Pinned files will be kept.",
+      )
+    ) {
+      return;
+    }
+    setClearingDownloads(true);
+    void clearUnpinnedDownloads()
+      .then(async (result) => {
+        const nextRecords = await loadDownloads().catch(() => null);
+        if (nextRecords) {
+          setDownloads(nextRecords);
+          const remaining = new Set(nextRecords.map((item) => item.id));
+          setSelectedId((current) => (current && remaining.has(current) ? current : nextRecords[0]?.id ?? null));
+        }
+        refreshDownloadsStats();
+        setNotice(
+          result.removedCount > 0
+            ? `Removed ${result.removedCount} unpinned ${result.removedCount === 1 ? "file" : "files"} (${formatBytes(result.freedBytes)}).`
+            : "No unpinned downloads to remove.",
+        );
+      })
+      .catch((error) => setNotice(`Unable to clean up downloads: ${String(error)}`))
+      .finally(() => setClearingDownloads(false));
+  }, [refreshDownloadsStats]);
 
   async function openTopbarActionsMenu() {
     setIsTopbarActionsMenuOpen(true);
@@ -1202,6 +1613,61 @@ export function App() {
       await openTopbarActionsMenu();
     }
   }
+
+  shortcutHandlerRef.current = (shortcut) => {
+    const tabs = wrikeTabsRef.current;
+    if (shortcut.action === "new-tab") {
+      void addWrikeTab();
+      return;
+    }
+    if (shortcut.action === "open-url" && shortcut.url) {
+      void addWrikeTab(shortcut.url);
+      return;
+    }
+    if (shortcut.action === "close-tab") {
+      if (tabs.length > 1) {
+        void closeTab(activeWrikeTabIdRef.current);
+      }
+      return;
+    }
+    if (shortcut.action === "next-tab" || shortcut.action === "prev-tab") {
+      if (tabs.length <= 1) {
+        return;
+      }
+      const currentIndex = tabs.findIndex((tab) => tab.id === activeWrikeTabIdRef.current);
+      const nextIndex = nextTabIndexForCycle(
+        currentIndex,
+        tabs.length,
+        shortcut.action === "next-tab" ? 1 : -1,
+      );
+      const target = tabs[nextIndex];
+      if (target) {
+        void showWrike(target.id);
+      }
+      return;
+    }
+    if (shortcut.action === "select-tab" && shortcut.index !== null) {
+      const targetIndex = tabIndexFromShortcutDigit(shortcut.index, tabs.length);
+      const target = targetIndex !== null ? tabs[targetIndex] : null;
+      if (target) {
+        void showWrike(target.id);
+      }
+      return;
+    }
+    if (shortcut.action === "toggle-split") {
+      if (wrikeSplitRef.current) {
+        void exitSplitView(activeWrikeTabIdRef.current);
+      } else if (tabs.length > 1) {
+        void splitWrikeTab(activeWrikeTabIdRef.current, "left");
+      } else {
+        setNotice("Open another tab to use split view.");
+      }
+    }
+  };
+
+  navActionHandlerRef.current = (action) => {
+    void runWrikeTabAction(activeWrikeTabIdRef.current, action);
+  };
 
   return (
     <>
@@ -1250,6 +1716,7 @@ export function App() {
         <div className="workspace-tabs" role="tablist" aria-label="Wrike tabs">
           {wrikeTabs.map((tab, index) => {
             const selected = screen === "wrike" && activeWrikeTabId === tab.id;
+            const suspended = suspendedTabIds.includes(tab.id);
             return (
               <div
                 aria-selected={selected}
@@ -1257,6 +1724,7 @@ export function App() {
                   "workspace-tab",
                   selected ? "selected" : "",
                   tab.mode === "readOnly" ? "read-only" : "",
+                  suspended ? "suspended" : "",
                   wrikeSplit?.leftTabId === tab.id ? "split-left" : "",
                   wrikeSplit?.rightTabId === tab.id ? "split-right" : "",
                   newWrikeTabId === tab.id ? "entering" : "",
@@ -1276,7 +1744,7 @@ export function App() {
                 onKeyDown={(event) => handleTabKeyDown(event, tab.id)}
                 role="tab"
                 tabIndex={0}
-                title={tab.title}
+                title={suspended ? `${tab.title} (suspended to save memory)` : tab.title}
               >
                 <span className={`tab-title ${tab.isTitleLoading ? "loading" : ""}`}>{tab.title}</span>
                 {index === 0 ? <span className="external-dot" /> : null}
@@ -1568,8 +2036,10 @@ export function App() {
             <FilesLibrary
               downloads={visibleDownloads}
               filter={filter}
+              onDelete={handleDeleteDownload}
               onFilterChange={setFilter}
-              onOpenSourceTask={() => setScreen("wrike")}
+              onOpenSourceTask={handleOpenSourceTask}
+              onReveal={handleRevealDownload}
               onSearchChange={setSearch}
               onSelect={setSelectedId}
               onTogglePin={togglePinnedDownload}
@@ -1578,19 +2048,27 @@ export function App() {
               selectedId={selectedRecord?.id ?? null}
             />
             <Suspense fallback={<div className="preview-panel loading">Loading preview...</div>}>
-              <PreviewPanel record={selectedRecord} />
+              <PreviewPanel
+                onDeleteDownload={handleDeleteDownload}
+                onOpenSourceTask={handleOpenSourceTask}
+                onRevealDownload={handleRevealDownload}
+                record={selectedRecord}
+              />
             </Suspense>
           </div>
         ) : (
           <div className="settings-screen">
             <SettingsPanel
               appVersion={APP_VERSION}
+              clearingDownloads={clearingDownloads}
+              downloadsStats={downloadsStats}
               settings={settings}
               updateState={appUpdate}
-              onChange={(next) => void updateSettings(next)}
-              onCheckForUpdates={() => void runUpdateCheck(true)}
-              onInstallUpdate={() => void startUpdateInstall()}
-              onTestNotification={() => void testNotification()}
+              onChange={handleSettingsChange}
+              onCheckForUpdates={handleCheckForUpdates}
+              onClearUnpinnedDownloads={handleClearUnpinnedDownloads}
+              onInstallUpdate={handleInstallUpdate}
+              onTestNotification={handleTestNotification}
             />
           </div>
         )}
@@ -1607,60 +2085,63 @@ export function App() {
   );
 }
 
-function MaterialIcon({
-  kind,
-}: {
-  kind:
-    | "add"
-    | "arrow_back"
-    | "arrow_forward"
-    | "close"
-    | "description"
-    | "home"
-    | "keyboard_arrow_left"
-    | "keyboard_arrow_right"
-    | "link"
-    | "refresh"
-    | "settings"
-    | "share"
-    | "tab"
-    | "view_column"
-    | "window_maximize"
-    | "window_minimize"
-    | "window_restore";
-}) {
-  const paths: Record<typeof kind, ReactElement> = {
-    home: <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8Z" />,
-    add: <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6Z" />,
-    arrow_back: <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20Z" />,
-    arrow_forward: <path d="m12 4-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8Z" />,
-    close: <path d="M18.3 5.71 16.89 4.3 12 9.17 7.11 4.3 5.7 5.71 10.59 10.6 5.7 15.49l1.41 1.41L12 12.01l4.89 4.89 1.41-1.41-4.89-4.89Z" />,
-    description: (
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Zm1 7V3.5L20.5 9ZM16 18H8v-2h8Zm0-4H8v-2h8Z" />
-    ),
-    keyboard_arrow_left: <path d="m15.41 16.59-4.58-4.59 4.58-4.59L14 6l-6 6 6 6Z" />,
-    keyboard_arrow_right: <path d="m8.59 16.59 4.58-4.59-4.58-4.59L10 6l6 6-6 6Z" />,
-    link: (
-      <path d="M3.9 12a5 5 0 0 1 5-5h4v2h-4a3 3 0 0 0 0 6h4v2h-4a5 5 0 0 1-5-5Zm5.5 1v-2h5.2v2Zm1.7 4v-2h4a3 3 0 0 0 0-6h-4V7h4a5 5 0 0 1 0 10Z" />
-    ),
-    refresh: (
-      <path d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.75 10h-2.1A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4Z" />
-    ),
-    settings: (
-      <path d="M19.43 12.98c.04-.32.07-.65.07-.98s-.02-.66-.07-.98l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.6-.22l-2.49 1a7.42 7.42 0 0 0-1.69-.98L14.5 2.42A.49.49 0 0 0 14 2h-4a.49.49 0 0 0-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1a.5.5 0 0 0-.6.22l-2 3.46a.5.5 0 0 0 .12.64l2.11 1.65c-.05.32-.08.65-.08.98s.03.66.08.98l-2.11 1.65a.5.5 0 0 0-.12.64l2 3.46a.5.5 0 0 0 .6.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65a.49.49 0 0 0 .49.42h4a.49.49 0 0 0 .49-.42l.38-2.65c.61-.25 1.17-.58 1.69-.98l2.49 1a.5.5 0 0 0 .6-.22l2-3.46a.5.5 0 0 0-.12-.64ZM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5" />
-    ),
-    share: (
-      <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11A2.99 2.99 0 1 0 15 5c0 .24.04.47.09.7L8.04 9.81A3 3 0 1 0 8.04 14l7.12 4.18c-.05.21-.08.43-.08.65a2.92 2.92 0 1 0 2.92-2.75Z" />
-    ),
-    tab: <path d="M4 6a2 2 0 0 1 2-2h5.8a2 2 0 0 1 1.42.59L16.63 8H20v10a2 2 0 0 1-2 2H4Z" />,
-    view_column: <path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Zm2 0v14h5V5Zm7 0v14h5V5Z" />,
-    window_maximize: <path d="M6 6h12v12H6Zm2 2v8h8V8Z" />,
-    window_minimize: <path d="M6 12h12v2H6Z" />,
-    window_restore: <path d="M8 4h12v12h-4v4H4V8h4Zm2 4h6v6h2V6h-8Zm4 2H6v8h8Z" />,
-  };
+type MaterialIconKind =
+  | "add"
+  | "arrow_back"
+  | "arrow_forward"
+  | "close"
+  | "description"
+  | "home"
+  | "keyboard_arrow_left"
+  | "keyboard_arrow_right"
+  | "link"
+  | "refresh"
+  | "settings"
+  | "share"
+  | "tab"
+  | "view_column"
+  | "window_maximize"
+  | "window_minimize"
+  | "window_restore";
+
+const MATERIAL_ICON_PATHS: Record<MaterialIconKind, ReactElement> = {
+  home: <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8Z" />,
+  add: <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6Z" />,
+  arrow_back: <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20Z" />,
+  arrow_forward: <path d="m12 4-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8Z" />,
+  close: (
+    <path d="M18.3 5.71 16.89 4.3 12 9.17 7.11 4.3 5.7 5.71 10.59 10.6 5.7 15.49l1.41 1.41L12 12.01l4.89 4.89 1.41-1.41-4.89-4.89Z" />
+  ),
+  description: (
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Zm1 7V3.5L20.5 9ZM16 18H8v-2h8Zm0-4H8v-2h8Z" />
+  ),
+  keyboard_arrow_left: <path d="m15.41 16.59-4.58-4.59 4.58-4.59L14 6l-6 6 6 6Z" />,
+  keyboard_arrow_right: <path d="m8.59 16.59 4.58-4.59-4.58-4.59L10 6l6 6-6 6Z" />,
+  link: (
+    <path d="M3.9 12a5 5 0 0 1 5-5h4v2h-4a3 3 0 0 0 0 6h4v2h-4a5 5 0 0 1-5-5Zm5.5 1v-2h5.2v2Zm1.7 4v-2h4a3 3 0 0 0 0-6h-4V7h4a5 5 0 0 1 0 10Z" />
+  ),
+  refresh: (
+    <path d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.75 10h-2.1A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4Z" />
+  ),
+  settings: (
+    <path d="M19.43 12.98c.04-.32.07-.65.07-.98s-.02-.66-.07-.98l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.6-.22l-2.49 1a7.42 7.42 0 0 0-1.69-.98L14.5 2.42A.49.49 0 0 0 14 2h-4a.49.49 0 0 0-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1a.5.5 0 0 0-.6.22l-2 3.46a.5.5 0 0 0 .12.64l2.11 1.65c-.05.32-.08.65-.08.98s.03.66.08.98l-2.11 1.65a.5.5 0 0 0-.12.64l2 3.46a.5.5 0 0 0 .6.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65a.49.49 0 0 0 .49.42h4a.49.49 0 0 0 .49-.42l.38-2.65c.61-.25 1.17-.58 1.69-.98l2.49 1a.5.5 0 0 0 .6-.22l2-3.46a.5.5 0 0 0-.12-.64ZM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5" />
+  ),
+  share: (
+    <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11A2.99 2.99 0 1 0 15 5c0 .24.04.47.09.7L8.04 9.81A3 3 0 1 0 8.04 14l7.12 4.18c-.05.21-.08.43-.08.65a2.92 2.92 0 1 0 2.92-2.75Z" />
+  ),
+  tab: <path d="M4 6a2 2 0 0 1 2-2h5.8a2 2 0 0 1 1.42.59L16.63 8H20v10a2 2 0 0 1-2 2H4Z" />,
+  view_column: (
+    <path d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Zm2 0v14h5V5Zm7 0v14h5V5Z" />
+  ),
+  window_maximize: <path d="M6 6h12v12H6Zm2 2v8h8V8Z" />,
+  window_minimize: <path d="M6 12h12v2H6Z" />,
+  window_restore: <path d="M8 4h12v12h-4v4H4V8h4Zm2 4h6v6h2V6h-8Zm4 2H6v8h8Z" />,
+};
+
+function MaterialIcon({ kind }: { kind: MaterialIconKind }) {
   return (
     <svg className="material-icon" viewBox="0 0 24 24" aria-hidden="true">
-      {paths[kind]}
+      {MATERIAL_ICON_PATHS[kind]}
     </svg>
   );
 }
@@ -1696,19 +2177,20 @@ function WindowControls({
   );
 }
 
+const NAV_ICON_PATHS: Record<string, ReactElement> = {
+  home: <path d="M3.5 9.3 12 3l8.5 6.3V20H14v-5h-4v5H3.5Z" />,
+  file: <path d="M6 3.5h8l4 4V21H6Zm8 0v5h4M9 13h6M9 17h6" />,
+  gear: (
+    <path d="M12 8.4a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2Zm0-5 1.4 2.4 2.8-.1.2 2.8 2.5 1.3-1.3 2.5 1.3 2.5-2.5 1.3-.2 2.8-2.8-.1-1.4 2.4-1.4-2.4-2.8.1-.2-2.8-2.5-1.3 1.3-2.5-1.3-2.5 2.5-1.3.2-2.8 2.8.1Z" />
+  ),
+  spell: <path d="M5 19 10.2 5h3.6L19 19m-12-5h10M4 21h16" />,
+  close: <path d="m6 6 12 12M18 6 6 18" />,
+};
+
 function NavIcon({ kind }: { kind: string }) {
-  const paths: Record<string, ReactElement> = {
-    home: <path d="M3.5 9.3 12 3l8.5 6.3V20H14v-5h-4v5H3.5Z" />,
-    file: <path d="M6 3.5h8l4 4V21H6Zm8 0v5h4M9 13h6M9 17h6" />,
-    gear: (
-      <path d="M12 8.4a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2Zm0-5 1.4 2.4 2.8-.1.2 2.8 2.5 1.3-1.3 2.5 1.3 2.5-2.5 1.3-.2 2.8-2.8-.1-1.4 2.4-1.4-2.4-2.8.1-.2-2.8-2.5-1.3 1.3-2.5-1.3-2.5 2.5-1.3.2-2.8 2.8.1Z" />
-    ),
-    spell: <path d="M5 19 10.2 5h3.6L19 19m-12-5h10M4 21h16" />,
-    close: <path d="m6 6 12 12M18 6 6 18" />,
-  };
   return (
     <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
-      {paths[kind]}
+      {NAV_ICON_PATHS[kind]}
     </svg>
   );
 }

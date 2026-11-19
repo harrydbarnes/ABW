@@ -23,11 +23,11 @@ export interface Settings {
   confirmBeforeClosingTabs: boolean;
   openDownloadedFilesAutomatically: boolean;
   autoCheckForUpdates: boolean;
+  suspendInactiveTabsMinutes: number;
   theme: AppThemeId;
   customDictionary: string[];
   startupTabUrls: string[];
   pinnedDownloadIds: string[];
-  lastWrikeSession: WrikeSession | null;
 }
 
 export type AppUpdateCheckStatus = "available" | "up-to-date" | "no-release";
@@ -95,6 +95,8 @@ export interface WorkbookSheet {
   name: string;
   columns: WorkbookColumn[];
   rows: WorkbookRow[];
+  truncatedRows?: boolean;
+  truncatedColumns?: boolean;
 }
 
 export interface WorkbookColumn {
@@ -111,7 +113,7 @@ export interface WorkbookRow {
 
 export interface WorkbookCell {
   value: string;
-  style?: CSSProperties;
+  styleIndex?: number;
   colSpan?: number;
   rowSpan?: number;
   coveredByMerge?: boolean;
@@ -120,6 +122,19 @@ export interface WorkbookCell {
 export interface WorkbookPreview {
   sheets: WorkbookSheet[];
   activeSheet: number;
+  styles: CSSProperties[];
+}
+
+export interface DownloadsStorageStats {
+  totalFiles: number;
+  pinnedFiles: number;
+  totalBytes: number;
+  unpinnedBytes: number;
+}
+
+export interface ClearDownloadsResult {
+  removedCount: number;
+  freedBytes: number;
 }
 
 export type FileFilter = "all" | FileKind;

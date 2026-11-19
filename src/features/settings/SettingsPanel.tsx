@@ -1,22 +1,34 @@
-import { useState } from "react";
-import { APP_THEMES, type AppThemeId, type AppUpdateState, type Settings } from "../../types";
+import { memo, useState } from "react";
+import {
+  APP_THEMES,
+  type AppThemeId,
+  type AppUpdateState,
+  type DownloadsStorageStats,
+  type Settings,
+} from "../../types";
 
 interface Props {
   appVersion: string;
+  clearingDownloads: boolean;
+  downloadsStats: DownloadsStorageStats | null;
   settings: Settings;
   updateState: AppUpdateState;
   onChange: (next: Settings) => void;
   onCheckForUpdates: () => void;
+  onClearUnpinnedDownloads: () => void;
   onInstallUpdate: () => void;
   onTestNotification: () => void;
 }
 
-export function SettingsPanel({
+export const SettingsPanel = memo(function SettingsPanel({
   appVersion,
+  clearingDownloads,
+  downloadsStats,
   settings,
   updateState,
   onChange,
   onCheckForUpdates,
+  onClearUnpinnedDownloads,
   onInstallUpdate,
   onTestNotification,
 }: Props) {
@@ -75,6 +87,31 @@ export function SettingsPanel({
           label="Check for updates automatically"
           onChange={(autoCheckForUpdates) => onChange({ ...settings, autoCheckForUpdates })}
         />
+        <label className="setting">
+          <span>
+            <strong>Suspend inactive background tabs</strong>
+            <small>
+              Close hidden Wrike tabs after inactivity to reclaim WebView2 memory. Clicking a suspended tab reloads it where you left off.
+            </small>
+          </span>
+          <select
+            aria-label="Suspend inactive background tabs"
+            className="setting-select"
+            onChange={(event) =>
+              onChange({
+                ...settings,
+                suspendInactiveTabsMinutes: Number(event.target.value),
+              })
+            }
+            value={settings.suspendInactiveTabsMinutes}
+          >
+            <option value={0}>Off</option>
+            <option value={5}>5 minutes</option>
+            <option value={15}>15 minutes</option>
+            <option value={30}>30 minutes</option>
+            <option value={60}>60 minutes</option>
+          </select>
+        </label>
       </div>
       <AppUpdateSettings
         appVersion={appVersion}
@@ -107,18 +144,32 @@ export function SettingsPanel({
         onChange={(customDictionary) => onChange({ ...settings, customDictionary })}
       />
       <div className="storage-note">
-        <h2>Downloads</h2>
-        <p>
-          ABW stores intercepted downloads in its per-user application data directory. Files can
-          always be opened in Windows from the preview pane.
-        </p>
+        <div>
+          <h2>Downloads</h2>
+          <p>
+            {downloadsStats
+              ? `${downloadsStats.totalFiles} downloaded ${downloadsStats.totalFiles === 1 ? "file" : "files"} (${formatBytes(downloadsStats.totalBytes)}) · ${downloadsStats.pinnedFiles} pinned · ${formatBytes(downloadsStats.unpinnedBytes)} unpinned.`
+              : "ABW stores intercepted downloads in its per-user application data directory. Pinned files are kept during cleanup."}
+          </p>
+        </div>
+        <button
+          className="secondary-action"
+          disabled={
+            clearingDownloads ||
+            !downloadsStats ||
+            downloadsStats.totalFiles <= downloadsStats.pinnedFiles
+          }
+          onClick={onClearUnpinnedDownloads}
+        >
+          {clearingDownloads ? "Cleaning up..." : "Clean up unpinned downloads"}
+        </button>
       </div>
       <footer className="settings-footer">
         ABW v{appVersion} · Questions or support: Harry Barnes
       </footer>
     </section>
   );
-}
+});
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) {

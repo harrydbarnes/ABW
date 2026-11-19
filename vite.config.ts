@@ -21,7 +21,7 @@ export default defineConfig({
   },
   envPrefix: ["VITE_", "TAURI_"],
   build: {
-    target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "es2021",
+    target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome120" : "es2021",
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
   },
 });

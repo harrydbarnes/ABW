@@ -212,7 +212,7 @@ input:focus-visible {
   grid-template-rows: 50px minmax(0, 1fr);
   background: var(--surface-soft);
   opacity: 0;
-  animation: app-view-reveal 720ms ease 2100ms forwards;
+  animation: app-view-reveal 260ms ease 640ms forwards;
 }
 
 .launch-splash {
@@ -225,7 +225,7 @@ input:focus-visible {
   background:
     radial-gradient(circle at 50% 40%, rgb(19 201 112 / 13%), transparent 34%),
     linear-gradient(135deg, #091426 0%, #122348 48%, #071221 100%);
-  animation: launch-splash-away 760ms ease 2080ms forwards;
+  animation: launch-splash-away 280ms ease 620ms forwards;
 }
 
 .launch-splash::before {
@@ -246,7 +246,7 @@ input:focus-visible {
   box-shadow:
     0 26px 70px rgb(0 0 0 / 38%),
     0 0 0 1px rgb(255 255 255 / 14%);
-  animation: launch-mark-intro 2100ms cubic-bezier(.18, .88, .24, 1) both;
+  animation: launch-mark-intro 640ms cubic-bezier(.18, .88, .24, 1) both;
 }
 
 .launch-splash-mark img {
@@ -259,12 +259,10 @@ input:focus-visible {
   0% {
     opacity: 0;
     transform: translateY(10px) scale(.78);
-    filter: blur(8px);
   }
   28% {
     opacity: 1;
     transform: translateY(0) scale(1.04);
-    filter: blur(0);
   }
   70% {
     transform: translateY(0) scale(1);
@@ -510,7 +508,6 @@ input:focus-visible {
   font-weight: 550;
   outline: 0;
   transform-origin: left center;
-  will-change: transform, opacity, filter;
 }
 
 .workspace-tab .tab-title {
@@ -560,6 +557,11 @@ input:focus-visible {
   background: var(--nav-active);
 }
 
+.workspace-tab.suspended .tab-title {
+  opacity: 0.68;
+  font-style: italic;
+}
+
 .workspace-tab.split-left,
 .workspace-tab.split-right {
   box-shadow: inset 0 0 0 1px rgb(101 135 246 / 34%);
@@ -589,6 +591,7 @@ input:focus-visible {
 }
 
 .workspace-tab.entering {
+  will-change: transform, opacity, filter;
   animation: draw-tab-forward 520ms cubic-bezier(.18, .88, .24, 1) both;
 }
 
@@ -1271,7 +1274,7 @@ input:focus-visible {
 .list-labels {
   padding: 0 30px 12px;
   display: grid;
-  grid-template-columns: minmax(154px, 1fr) minmax(110px, 148px) auto 30px;
+  grid-template-columns: minmax(154px, 1fr) minmax(110px, 148px) auto 94px;
   gap: 12px;
   color: #8794a9;
   font-size: 11px;
@@ -1289,13 +1292,15 @@ input:focus-visible {
 .file-row {
   display: grid;
   align-items: center;
-  grid-template-columns: minmax(154px, 1fr) minmax(110px, 148px) auto 30px;
+  grid-template-columns: minmax(154px, 1fr) minmax(110px, 148px) auto 94px;
   gap: 12px;
   width: 100%;
   min-height: 72px;
   border-radius: 9px;
   padding: 9px 13px;
   margin: 2px 0;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 72px;
 }
 
 .file-row:hover {
@@ -1385,7 +1390,15 @@ input:focus-visible {
   white-space: nowrap;
 }
 
-.pin-file {
+.file-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.pin-file,
+.row-action-button {
   width: 30px;
   height: 30px;
   border-radius: 6px;
@@ -1400,7 +1413,23 @@ input:focus-visible {
   background: #e6f8f3;
 }
 
-.pin-file .icon {
+.row-action-button:hover:not(:disabled) {
+  color: #24334c;
+  background: #eef2f9;
+}
+
+.row-action-button.danger:hover:not(:disabled) {
+  color: #b4232c;
+  background: #fff1f2;
+}
+
+.row-action-button:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.pin-file .icon,
+.row-action-button .icon {
   width: 16px;
   height: 16px;
 }
@@ -1490,8 +1519,19 @@ input:focus-visible {
   font-weight: 550;
 }
 
+.preview-actions button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 .preview-actions .secondary {
   border: 1px solid var(--border);
+}
+
+.preview-actions .secondary.danger:hover:not(:disabled) {
+  border-color: #f3c6cb;
+  color: #b4232c;
+  background: #fff1f2;
 }
 
 .preview-actions .primary {
@@ -1515,9 +1555,82 @@ input:focus-visible {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
   border-bottom: 1px solid var(--border);
   color: var(--muted);
   background: #fff;
+  font-size: 12px;
+}
+
+.spreadsheet-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.spreadsheet-toolbar-actions > button {
+  height: 27px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: #536177;
+  background: #fff;
+}
+
+.sheet-find-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 29px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fafbfe;
+}
+
+.sheet-find-bar input {
+  width: 132px;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #192943;
+  font-size: 12px;
+}
+
+.sheet-find-count {
+  min-width: 34px;
+  text-align: center;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.sheet-find-bar button {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  color: #536177;
+}
+
+.sheet-find-bar button:hover:not(:disabled) {
+  background: #e9eff8;
+}
+
+.sheet-find-bar button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.sheet-truncation-banner {
+  flex: none;
+  padding: 8px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #f0dfc2;
+  background: #fff9ec;
+  color: #6b4e16;
   font-size: 12px;
 }
 
@@ -1526,6 +1639,35 @@ input:focus-visible {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.page-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.page-jump-input {
+  width: 44px;
+  height: 25px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  text-align: center;
+  color: #192943;
+  background: #fff;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.page-jump-input:focus {
+  outline: 0;
+  border-color: var(--accent);
+}
+
+.pdf-meta-note {
+  color: #7c8aa1;
+  font-size: 11px;
 }
 
 .zoom-control button,
@@ -1539,7 +1681,15 @@ input:focus-visible {
   background: #fff;
 }
 
-.pagination button:disabled {
+.zoom-control button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.pagination button:disabled,
+.zoom-control button:disabled {
   cursor: default;
   opacity: 0.46;
 }
@@ -1561,6 +1711,11 @@ input:focus-visible {
   white-space: nowrap;
 }
 
+.sheet tbody tr {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 31px;
+}
+
 .sheet th,
 .sheet td {
   min-width: 0;
@@ -1572,6 +1727,34 @@ input:focus-visible {
   font-weight: 400;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.sheet td.sheet-match {
+  box-shadow: inset 0 0 0 2px #f2b705;
+}
+
+.sheet td.sheet-selected {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.sheet td.sheet-match.active {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.spreadsheet-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sheet-cell-badge {
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
 }
 
 .sheet .row-number-column {
@@ -1586,11 +1769,24 @@ input:focus-visible {
   font-weight: 550;
 }
 
+.sheet thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
 .sheet .row-number {
+  position: sticky;
+  left: 0;
+  z-index: 1;
   min-width: 38px;
   width: 38px;
   max-width: 38px;
   padding: 0;
+}
+
+.sheet thead th.row-number {
+  z-index: 3;
 }
 
 .sheet-tabs {
@@ -1854,6 +2050,26 @@ input:focus-visible {
   outline-offset: 2px;
 }
 
+.setting-select {
+  min-width: 138px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: #192943;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  flex: none;
+  cursor: pointer;
+}
+
+.setting-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .storage-note,
 .notification-note,
 .update-panel,
@@ -2031,14 +2247,16 @@ input:focus-visible {
 .theme-choice[data-theme-preview="cool-confetti"] .theme-swatch span:first-child { background: #3f0d4f; }
 .theme-choice[data-theme-preview="woodland-grass"] .theme-swatch span:first-child { background: #032600; }
 
-.notification-note {
+.notification-note,
+.storage-note {
   display: flex;
   gap: 28px;
   align-items: center;
   justify-content: space-between;
 }
 
-.notification-note p {
+.notification-note p,
+.storage-note p {
   max-width: 470px;
 }
 
