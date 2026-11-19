@@ -937,6 +937,24 @@ fn open_wrike_at(
                 }
                 return false;
             }
+            if url.scheme() == "abw-new-tab" {
+                if let Some(target_url) = url
+                    .query_pairs()
+                    .find_map(|(key, value)| (key == "url").then(|| value.into_owned()))
+                {
+                    let _ = navigation_app.emit("wrike-open-in-new-tab", target_url);
+                }
+                return false;
+            }
+            if url.scheme() == "abw-share" {
+                if let Some(target_url) = url
+                    .query_pairs()
+                    .find_map(|(key, value)| (key == "url").then(|| value.into_owned()))
+                {
+                    let _ = navigation_app.emit("wrike-share-url", target_url);
+                }
+                return false;
+            }
             let allowed = is_safe_remote_destination(url);
             if allowed {
                 if should_open_link_externally(&navigation_app, url) {
@@ -2333,7 +2351,100 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
             const text = range.startContainer.textContent || "";
             return wordFromText(text, range.startOffset) || nearestTextWord(editable || event.target, event);
           };
-          const closeDictionaryMenu = () => document.getElementById("abw-dictionary-menu")?.remove();
+          const closeDictionaryMenu = () => {
+            document.getElementById("abw-dictionary-menu")?.remove();
+            document.getElementById("abw-link-menu")?.remove();
+          };
+          const abwResolveLinkUrl = (target) => {
+            if (!(target instanceof Element)) return null;
+            const link = target.closest("a[href], [data-href], [data-url]");
+            if (link) {
+              const raw =
+                link.getAttribute("href") ||
+                link.getAttribute("data-href") ||
+                link.getAttribute("data-url") ||
+                "";
+              if (raw && !raw.startsWith("javascript:") && !raw.startsWith("#")) {
+                try {
+                  const resolved = new URL(raw, window.location.href);
+                  if (resolved.protocol === "https:" || resolved.protocol === "http:") {
+                    return resolved.href;
+                  }
+                } catch {}
+              }
+            }
+            const item = target.closest("[data-task-id], [data-id], [data-item-id]");
+            if (item) {
+              const id =
+                item.getAttribute("data-task-id") ||
+                item.getAttribute("data-item-id") ||
+                item.getAttribute("data-id") ||
+                "";
+              if (/^\d{5,}$/.test(id.trim())) {
+                return `https://www.wrike.com/open.htm?id=${id.trim()}`;
+              }
+            }
+            return null;
+          };
+          const showLinkContextMenu = (url, event) => {
+            closeDictionaryMenu();
+            const menu = document.createElement("div");
+            menu.id = "abw-link-menu";
+            menu.setAttribute("role", "menu");
+            Object.assign(menu.style, {
+              position: "fixed",
+              left: `${Math.min(window.innerWidth - 200, Math.max(8, event.clientX))}px`,
+              top: `${Math.min(window.innerHeight - 150, Math.max(8, event.clientY))}px`,
+              zIndex: "2147483647",
+              minWidth: "184px",
+              padding: "6px",
+              border: "1px solid #d6dce8",
+              borderRadius: "8px",
+              background: "#fff",
+              color: "#17233a",
+              boxShadow: "0 12px 32px rgba(17, 29, 59, .18)",
+              font: "13px Segoe UI, sans-serif",
+              display: "flex",
+              flexDirection: "column",
+              gap: "2px"
+            });
+            const addMenuItem = (label, onClick) => {
+              const btn = document.createElement("button");
+              btn.type = "button";
+              btn.textContent = label;
+              Object.assign(btn.style, {
+                textAlign: "left",
+                padding: "7px 10px",
+                border: "0",
+                borderRadius: "6px",
+                background: "transparent",
+                color: "#17233a",
+                font: "13px Segoe UI, sans-serif",
+                cursor: "pointer"
+              });
+              btn.addEventListener("mouseenter", () => { btn.style.background = "#f1f5fb"; });
+              btn.addEventListener("mouseleave", () => { btn.style.background = "transparent"; });
+              btn.addEventListener("click", () => {
+                closeDictionaryMenu();
+                onClick();
+              });
+              menu.append(btn);
+            };
+            addMenuItem("Open in new tab", () => {
+              window.location.href = `abw-new-tab://open?url=${encodeURIComponent(url)}`;
+            });
+            addMenuItem("Copy link", () => {
+              navigator.clipboard?.writeText(url).catch(() => undefined);
+            });
+            const sep = document.createElement("div");
+            Object.assign(sep.style, { height: "1px", background: "#e5ebf4", margin: "4px 6px" });
+            menu.append(sep);
+            addMenuItem("Share", () => {
+              window.location.href = `abw-share://open?url=${encodeURIComponent(url)}`;
+            });
+            document.body.append(menu);
+            window.setTimeout(() => document.addEventListener("click", closeDictionaryMenu, { once: true, capture: true }), 0);
+          };
           const showDictionaryMenu = (word, event) => {
             closeDictionaryMenu();
             const menu = document.createElement("button");
@@ -2364,6 +2475,12 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
           const keepWrikeEditorToolsVisible = (event) => {
             const editable = findEditable(event.target);
             if (!editable) {
+              const linkUrl = abwResolveLinkUrl(event.target);
+              if (linkUrl) {
+                event.preventDefault();
+                showLinkContextMenu(linkUrl, event);
+                return;
+              }
               closeDictionaryMenu();
               return;
             }
@@ -2524,6 +2641,19 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
             };
             if (!window.__abwContextMenuGuard) {
               document.addEventListener('contextmenu', keepWrikeEditorToolsVisible, true);
+              document.addEventListener('mousedown', (event) => {
+                if (event.button === 1 && abwResolveLinkUrl(event.target)) {
+                  event.preventDefault();
+                }
+              }, true);
+              document.addEventListener('auxclick', (event) => {
+                if (event.button !== 1) return;
+                const linkUrl = abwResolveLinkUrl(event.target);
+                if (!linkUrl) return;
+                event.preventDefault();
+                event.stopPropagation();
+                window.location.href = `abw-new-tab://open?url=${encodeURIComponent(linkUrl)}`;
+              }, true);
               window.__abwContextMenuGuard = true;
             }
             if (!window.__abwDownloadBridge) {

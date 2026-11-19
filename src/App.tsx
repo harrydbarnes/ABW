@@ -37,7 +37,9 @@ import {
   subscribeToDownloadCompleted,
   subscribeToDownloadErrors,
   subscribeToDownloads,
+  subscribeToOpenInNewTab,
   subscribeToSettingsUpdates,
+  subscribeToShareUrl,
   subscribeToWrikeTabUpdates,
   wrikeTabAction,
   type WrikeTabAction,
@@ -501,6 +503,8 @@ export function App() {
     let disposeErrors: () => void = () => undefined;
     let disposeTabUpdates: () => void = () => undefined;
     let disposeSettingsUpdates: () => void = () => undefined;
+    let disposeOpenInNewTab: () => void = () => undefined;
+    let disposeShareUrl: () => void = () => undefined;
     void subscribeToDownloads(refresh).then((unsubscribe) => {
       dispose = unsubscribe;
     });
@@ -583,12 +587,30 @@ export function App() {
     }).then((unsubscribe) => {
       disposeSettingsUpdates = unsubscribe;
     });
+    void subscribeToOpenInNewTab((url) => {
+      void addWrikeTab(url);
+    }).then((unsubscribe) => {
+      disposeOpenInNewTab = unsubscribe;
+    });
+    void subscribeToShareUrl((url) => {
+      if (navigator.share) {
+        void navigator.share({ title: "Wrike", url }).catch(() => undefined);
+      } else {
+        void navigator.clipboard?.writeText(url).then(() => {
+          setNotice("Link copied to clipboard for sharing.");
+        }).catch(() => undefined);
+      }
+    }).then((unsubscribe) => {
+      disposeShareUrl = unsubscribe;
+    });
     return () => {
       dispose();
       disposeCompleted();
       disposeErrors();
       disposeTabUpdates();
       disposeSettingsUpdates();
+      disposeOpenInNewTab();
+      disposeShareUrl();
     };
   }, []);
 
@@ -1171,10 +1193,10 @@ export function App() {
     await showWrike(targetTab.id);
   }
 
-  async function addWrikeTab() {
+  async function addWrikeTab(initialUrl?: string) {
     const tabs = wrikeTabsRef.current;
     const nextTabNumber = tabs.length + 1;
-    const url = normalizedStartupUrls()[0];
+    const url = initialUrl || normalizedStartupUrls()[0];
     const next: WrikeTab = {
       id: createTabId("tab"),
       title: nextTabNumber === 1 ? "Wrike" : `New tab ${nextTabNumber}`,
@@ -1995,10 +2017,6 @@ export function App() {
             <MaterialIcon kind="link" />
             Copy link
           </button>
-          <button onClick={() => void shareTab(menuTab)} role="menuitem">
-            <MaterialIcon kind="share" />
-            Share
-          </button>
           <span className="menu-separator" />
           <button
             disabled={wrikeTabs.length <= 1}
@@ -2007,6 +2025,11 @@ export function App() {
           >
             <MaterialIcon kind="close" />
             Close tab
+          </button>
+          <span className="menu-separator" />
+          <button onClick={() => void shareTab(menuTab)} role="menuitem">
+            <MaterialIcon kind="share" />
+            Share
           </button>
         </div>
       ) : null}

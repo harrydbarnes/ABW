@@ -239,6 +239,20 @@ export async function subscribeToDownloadErrors(notify: (message: string) => voi
   return listen<string>("download-capture-error", (event) => notify(event.payload));
 }
 
+export async function subscribeToOpenInNewTab(notify: (url: string) => void): Promise<() => void> {
+  if (!desktopRuntime) {
+    return () => undefined;
+  }
+  return listen<string>("wrike-open-in-new-tab", (event) => notify(event.payload));
+}
+
+export async function subscribeToShareUrl(notify: (url: string) => void): Promise<() => void> {
+  if (!desktopRuntime) {
+    return () => undefined;
+  }
+  return listen<string>("wrike-share-url", (event) => notify(event.payload));
+}
+
 function normalizeDictionary(words: string[]): string[] {
   return [...new Set(words.map((word) => word.trim()).filter(Boolean))]
     .sort((first, second) => first.localeCompare(second, undefined, { sensitivity: "base" }));
