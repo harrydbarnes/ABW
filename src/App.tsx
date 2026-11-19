@@ -2041,8 +2041,13 @@ export function App() {
     </div>
     {isLaunchSplashVisible ? (
       <div className="launch-splash" aria-label="Opening ABW" role="status">
-        <div className="launch-splash-mark">
-          <img src="/abw.svg" alt="" />
+        <div className="launch-splash-stack">
+          <div className="launch-splash-mark">
+            <img src="/abw.svg" alt="" />
+          </div>
+          <div className="launch-splash-title-clip">
+            <span className="launch-splash-title">A Better Wrike</span>
+          </div>
         </div>
       </div>
     ) : null}
