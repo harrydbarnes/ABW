@@ -2475,12 +2475,6 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
           const keepWrikeEditorToolsVisible = (event) => {
             const editable = findEditable(event.target);
             if (!editable) {
-              const linkUrl = abwResolveLinkUrl(event.target);
-              if (linkUrl) {
-                event.preventDefault();
-                showLinkContextMenu(linkUrl, event);
-                return;
-              }
               closeDictionaryMenu();
               return;
             }
@@ -2488,6 +2482,16 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
             if (word || selectionIsActive()) {
               event.preventDefault();
               if (word) showDictionaryMenu(word, event);
+            }
+          };
+          const handleLinkContextMenu = (event) => {
+            if (event.defaultPrevented || findEditable(event.target)) {
+              return;
+            }
+            const linkUrl = abwResolveLinkUrl(event.target);
+            if (linkUrl) {
+              event.preventDefault();
+              showLinkContextMenu(linkUrl, event);
             }
           };
           const abwSupportedFileName = /[^\\r\\n]{1,180}[.](pdf|doc|docx|xls|xlsx|xlsm|xlsb|ods|rtf|txt)/i;
@@ -2641,6 +2645,7 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
             };
             if (!window.__abwContextMenuGuard) {
               document.addEventListener('contextmenu', keepWrikeEditorToolsVisible, true);
+              document.addEventListener('contextmenu', handleLinkContextMenu, false);
               document.addEventListener('mousedown', (event) => {
                 if (event.button === 1 && abwResolveLinkUrl(event.target)) {
                   event.preventDefault();
