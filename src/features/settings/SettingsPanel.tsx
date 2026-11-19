@@ -212,8 +212,8 @@ function AppUpdateSettings({
   }
 
   return (
-    <div className="update-panel">
-      <div className="update-panel-header">
+    <div className="setting-group">
+      <div className="setting-group-header update-panel-header">
         <div>
           <h2>App updates</h2>
           <p className={phase === "error" ? "update-error" : undefined}>{summary}</p>
@@ -234,18 +234,20 @@ function AppUpdateSettings({
         </div>
       </div>
       {phase === "downloading" || phase === "installing" ? (
-        <div
-          aria-label="Update download progress"
-          aria-valuemax={100}
-          aria-valuemin={0}
-          aria-valuenow={phase === "installing" ? 100 : progressPercent ?? undefined}
-          className="update-progress"
-          role="progressbar"
-        >
+        <div className="update-progress-wrap">
           <div
-            className={`update-progress-fill ${progressPercent === null && phase === "downloading" ? "indeterminate" : ""}`}
-            style={{ width: `${phase === "installing" ? 100 : progressPercent ?? 35}%` }}
-          />
+            aria-label="Update download progress"
+            aria-valuemax={100}
+            aria-valuemin={0}
+            aria-valuenow={phase === "installing" ? 100 : progressPercent ?? undefined}
+            className="update-progress"
+            role="progressbar"
+          >
+            <div
+              className={`update-progress-fill ${progressPercent === null && phase === "downloading" ? "indeterminate" : ""}`}
+              style={{ width: `${phase === "installing" ? 100 : progressPercent ?? 35}%` }}
+            />
+          </div>
         </div>
       ) : null}
       {notes && (phase === "available" || phase === "downloading" || phase === "installing") ? (

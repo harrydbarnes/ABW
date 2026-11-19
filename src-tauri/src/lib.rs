@@ -1809,7 +1809,7 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
                 }
                 const extracted = abwExtractCssColors(style.backgroundImage);
                 if (extracted.length > 0) {
-                  const [r, g, b] = extracted[0];
+                  const { r, g, b } = extracted[0];
                   return `rgb(${r}, ${g}, ${b})`;
                 }
               }

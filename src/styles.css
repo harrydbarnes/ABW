@@ -1838,11 +1838,8 @@ input:focus-visible {
   margin: 0 0 6px;
 }
 
-.update-panel .setting {
-  min-height: 0;
-  margin: 18px -24px -24px;
-  padding: 18px 24px 18px 40px;
-  border-top: 1px solid var(--border);
+.update-progress-wrap {
+  padding: 0 22px 16px 38px;
 }
 
 .setting {
