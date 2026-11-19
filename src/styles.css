@@ -1539,9 +1539,16 @@ input:focus-visible {
   background: #fff;
 }
 
+.zoom-control button:disabled,
 .pagination button:disabled {
   cursor: default;
   opacity: 0.46;
+}
+
+.zoom-control .zoom-reset {
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .sheet-scroller {
@@ -1549,6 +1556,69 @@ input:focus-visible {
   min-height: 0;
   overflow: auto;
   background: #fff;
+}
+
+.sheet-range-selecting {
+  user-select: none;
+}
+
+.sheet td.cell-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.sheet-status-bar {
+  flex: none;
+  min-height: 36px;
+  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--surface-soft);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sheet-status-metrics {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.sheet-status-metrics strong {
+  color: #192943;
+  font-weight: 650;
+}
+
+.sheet-range-pill {
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: #fff;
+  border: 1px solid var(--border);
+  color: #192943;
+  font-weight: 650;
+  font-size: 11px;
+}
+
+.sheet-copy-btn {
+  height: 25px;
+  padding: 0 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: #192943;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sheet-copy-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .sheet-stage {

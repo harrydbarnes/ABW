@@ -32,6 +32,7 @@ import {
   saveSettings,
   saveWrikeSession,
   sendTestNotification,
+  setUpdateTaskbarBadge,
   subscribeToDownloadCompleted,
   subscribeToDownloadErrors,
   subscribeToDownloads,
@@ -232,6 +233,9 @@ export function App() {
 
   useEffect(() => {
     appUpdatePhaseRef.current = appUpdate.phase;
+    if (isDesktopRuntime()) {
+      void setUpdateTaskbarBadge(appUpdate.phase === "available").catch(() => undefined);
+    }
   }, [appUpdate.phase]);
 
   useEffect(() => {

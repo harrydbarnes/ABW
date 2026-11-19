@@ -101,6 +101,12 @@ export async function notifyUpdateAvailable(version: string): Promise<void> {
   }
 }
 
+export async function setUpdateTaskbarBadge(available: boolean): Promise<void> {
+  if (desktopRuntime) {
+    await invokeDesktop("set_update_badge", { available });
+  }
+}
+
 export async function checkForAppUpdate(): Promise<AppUpdateCheckResult> {
   if (!desktopRuntime) {
     return {

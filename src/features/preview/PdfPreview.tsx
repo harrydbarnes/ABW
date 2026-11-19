@@ -28,6 +28,7 @@ export default function PdfPreview({
   demo: boolean;
   fileName: string;
 }) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
@@ -35,6 +36,23 @@ export default function PdfPreview({
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [rendering, setRendering] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) {
+        return;
+      }
+      event.preventDefault();
+      const delta = event.deltaY < 0 ? 10 : -10;
+      setZoom((current) => Math.min(260, Math.max(80, current + delta)));
+    };
+    container.addEventListener("wheel", handleWheel, { passive: false });
+    return () => container.removeEventListener("wheel", handleWheel);
+  }, []);
 
   useEffect(() => {
     setPage(1);
@@ -152,7 +170,7 @@ export default function PdfPreview({
   }, [demo, page, pdfDocument, zoom]);
 
   return (
-    <div className="pdf-view">
+    <div className="pdf-view" ref={containerRef}>
       <div className="document-toolbar">
         <div className="pagination">
           <button disabled={page === 1} onClick={() => setPage((value) => value - 1)}>
@@ -166,6 +184,15 @@ export default function PdfPreview({
           </button>
         </div>
         <div className="zoom-control">
+          <button
+            className="zoom-reset"
+            disabled={zoom === 100}
+            onClick={() => setZoom(100)}
+            title="Reset zoom to 100%"
+            type="button"
+          >
+            Reset
+          </button>
           <button onClick={() => setZoom((current) => Math.max(current - 10, 80))}>-</button>
           <span>{zoom}%</span>
           <button onClick={() => setZoom((current) => Math.min(current + 10, 260))}>+</button>

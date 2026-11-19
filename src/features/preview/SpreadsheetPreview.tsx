@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   DownloadRecord,
   WorkbookCell,
@@ -9,6 +9,40 @@ import { loadCachedSpreadsheetPreview, toColumnLabel } from "./previewCache";
 
 const ROW_HEADER_WIDTH_PX = 38;
 const COLUMN_HEADER_HEIGHT_PX = 28;
+
+type CellCoord = {
+  row: number;
+  col: number;
+};
+
+type CellSelection = {
+  anchor: CellCoord;
+  focus: CellCoord;
+};
+
+function parseSpreadsheetNumber(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const negativeParens = /^\((.+)\)$/.test(trimmed);
+  const unwrapped = negativeParens ? trimmed.slice(1, -1).trim() : trimmed;
+  const cleaned = unwrapped.replace(/[£$€¥,\s%]/g, "");
+  if (!/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(cleaned)) {
+    return null;
+  }
+  const value = Number(cleaned);
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  return negativeParens ? -Math.abs(value) : value;
+}
+
+function formatSummaryNumber(value: number): string {
+  return value.toLocaleString(undefined, {
+    maximumFractionDigits: 2,
+  });
+}
 
 const DEMO_PREVIEW: WorkbookPreview = {
   activeSheet: 0,
@@ -46,11 +80,53 @@ export default function SpreadsheetPreview({
   record: DownloadRecord;
   demo: boolean;
 }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const isSelectingRef = useRef(false);
   const [preview, setPreview] = useState<WorkbookPreview | null>(demo ? DEMO_PREVIEW : null);
   const [active, setActive] = useState(demo ? DEMO_PREVIEW.activeSheet : 0);
   const [zoom, setZoom] = useState(100);
   const [loading, setLoading] = useState(!demo);
   const [problem, setProblem] = useState<string | null>(null);
+  const [selection, setSelection] = useState<CellSelection | null>(null);
+  const [copiedNotice, setCopiedNotice] = useState(false);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) {
+        return;
+      }
+      event.preventDefault();
+      const delta = event.deltaY < 0 ? 10 : -10;
+      setZoom((current) => Math.min(160, Math.max(60, current + delta)));
+    };
+    container.addEventListener("wheel", handleWheel, { passive: false });
+    return () => container.removeEventListener("wheel", handleWheel);
+  }, []);
+
+  useEffect(() => {
+    const stopSelection = () => {
+      isSelectingRef.current = false;
+    };
+    window.addEventListener("mouseup", stopSelection);
+    return () => window.removeEventListener("mouseup", stopSelection);
+  }, []);
+
+  useEffect(() => {
+    setSelection(null);
+    setCopiedNotice(false);
+  }, [active, record.id]);
+
+  useEffect(() => {
+    if (!copiedNotice) {
+      return;
+    }
+    const timer = window.setTimeout(() => setCopiedNotice(false), 1600);
+    return () => window.clearTimeout(timer);
+  }, [copiedNotice]);
 
   useEffect(() => {
     let live = true;
@@ -84,6 +160,97 @@ export default function SpreadsheetPreview({
   const sheets = preview?.sheets ?? [];
   const sheet = sheets[Math.min(active, Math.max(sheets.length - 1, 0))];
 
+  const normalizedBounds = useMemo(() => {
+    if (!selection) {
+      return null;
+    }
+    return {
+      minRow: Math.min(selection.anchor.row, selection.focus.row),
+      maxRow: Math.max(selection.anchor.row, selection.focus.row),
+      minCol: Math.min(selection.anchor.col, selection.focus.col),
+      maxCol: Math.max(selection.anchor.col, selection.focus.col),
+    };
+  }, [selection]);
+
+  const isMultiCellSelection = Boolean(
+    normalizedBounds &&
+      (normalizedBounds.minRow !== normalizedBounds.maxRow ||
+        normalizedBounds.minCol !== normalizedBounds.maxCol),
+  );
+
+  const selectionSummary = useMemo(() => {
+    if (!sheet || !normalizedBounds) {
+      return null;
+    }
+    let nonEmptyCount = 0;
+    let numericCount = 0;
+    let sum = 0;
+    const rowsText: string[] = [];
+
+    for (let r = normalizedBounds.minRow; r <= normalizedBounds.maxRow; r += 1) {
+      const row = sheet.rows[r];
+      const rowValues: string[] = [];
+      for (let c = normalizedBounds.minCol; c <= normalizedBounds.maxCol; c += 1) {
+        const cell = row?.cells[c];
+        const value = cell && !cell.coveredByMerge ? cell.value : "";
+        rowValues.push(value);
+        if (value.trim() !== "") {
+          nonEmptyCount += 1;
+          const numeric = parseSpreadsheetNumber(value);
+          if (numeric !== null) {
+            numericCount += 1;
+            sum += numeric;
+          }
+        }
+      }
+      rowsText.push(rowValues.join("\t"));
+    }
+
+    const startLabel = `${sheet.columns[normalizedBounds.minCol]?.label ?? toColumnLabel(normalizedBounds.minCol + 1)}${sheet.rows[normalizedBounds.minRow]?.index ?? normalizedBounds.minRow + 1}`;
+    const endLabel = `${sheet.columns[normalizedBounds.maxCol]?.label ?? toColumnLabel(normalizedBounds.maxCol + 1)}${sheet.rows[normalizedBounds.maxRow]?.index ?? normalizedBounds.maxRow + 1}`;
+
+    return {
+      rangeLabel: startLabel === endLabel ? startLabel : `${startLabel}:${endLabel}`,
+      nonEmptyCount,
+      numericCount,
+      sum,
+      average: numericCount > 0 ? sum / numericCount : null,
+      tsv: rowsText.join("\n"),
+    };
+  }, [normalizedBounds, sheet]);
+
+  const copySelection = useCallback(async () => {
+    if (!selectionSummary) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(selectionSummary.tsv);
+      setCopiedNotice(true);
+    } catch {
+      // Clipboard API unavailable
+    }
+  }, [selectionSummary]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
+        const nativeSelection = window.getSelection()?.toString() ?? "";
+        if (!nativeSelection && selectionSummary) {
+          event.preventDefault();
+          void copySelection();
+        }
+      } else if (event.key === "Escape") {
+        setSelection(null);
+      }
+    };
+    container.addEventListener("keydown", handleKeyDown);
+    return () => container.removeEventListener("keydown", handleKeyDown);
+  }, [copySelection, selectionSummary]);
+
   if (problem) {
     return (
       <div className="preview-error preview-status">
@@ -113,18 +280,27 @@ export default function SpreadsheetPreview({
     ROW_HEADER_WIDTH_PX + sheet.columns.reduce((sum, column) => sum + column.widthPx, 0);
 
   return (
-    <div className="spreadsheet-view">
+    <div className="spreadsheet-view" ref={containerRef} tabIndex={0}>
       <div className="document-toolbar">
         <span>
           {sheet.rows.length} visible rows · {sheet.columns.length} visible columns
         </span>
         <div className="zoom-control">
+          <button
+            className="zoom-reset"
+            disabled={zoom === 100}
+            onClick={() => setZoom(100)}
+            title="Reset zoom to 100%"
+            type="button"
+          >
+            Reset
+          </button>
           <button onClick={() => setZoom((current) => Math.max(current - 10, 60))}>-</button>
           <span>{zoom}%</span>
           <button onClick={() => setZoom((current) => Math.min(current + 10, 160))}>+</button>
         </div>
       </div>
-      <div className="sheet-scroller">
+      <div className={`sheet-scroller ${isMultiCellSelection ? "sheet-range-selecting" : ""}`}>
         <div
           className="sheet-stage"
           style={{
@@ -148,21 +324,57 @@ export default function SpreadsheetPreview({
               </tr>
             </thead>
             <tbody>
-              {sheet.rows.map((row) => (
+              {sheet.rows.map((row, rowIndex) => (
                 <tr key={row.index} style={{ height: row.heightPx }}>
                   <th className="row-number">{row.index}</th>
-                  {row.cells.map((cell, cellIndex) =>
-                    cell.coveredByMerge ? null : (
+                  {row.cells.map((cell, cellIndex) => {
+                    if (cell.coveredByMerge) {
+                      return null;
+                    }
+                    const isSelected = Boolean(
+                      normalizedBounds &&
+                        rowIndex >= normalizedBounds.minRow &&
+                        rowIndex <= normalizedBounds.maxRow &&
+                        cellIndex >= normalizedBounds.minCol &&
+                        cellIndex <= normalizedBounds.maxCol,
+                    );
+                    return (
                       <td
+                        className={isSelected ? "cell-selected" : undefined}
                         colSpan={cell.colSpan}
                         key={sheet.columns[cellIndex]?.index ?? cellIndex}
+                        onMouseDown={(event) => {
+                          if (event.button !== 0) {
+                            return;
+                          }
+                          isSelectingRef.current = true;
+                          const coord = { row: rowIndex, col: cellIndex };
+                          if (event.shiftKey && selection) {
+                            setSelection({ anchor: selection.anchor, focus: coord });
+                          } else {
+                            setSelection({ anchor: coord, focus: coord });
+                          }
+                        }}
+                        onMouseEnter={() => {
+                          if (!isSelectingRef.current) {
+                            return;
+                          }
+                          setSelection((current) =>
+                            current
+                              ? {
+                                  anchor: current.anchor,
+                                  focus: { row: rowIndex, col: cellIndex },
+                                }
+                              : null,
+                          );
+                        }}
                         rowSpan={cell.rowSpan}
                         style={cell.style}
                       >
                         {cell.value}
                       </td>
-                    ),
-                  )}
+                    );
+                  })}
                 </tr>
               ))}
             </tbody>
@@ -183,6 +395,32 @@ export default function SpreadsheetPreview({
           ))}
         </div>
       </div>
+      {selectionSummary ? (
+        <div className="sheet-status-bar" role="status" aria-live="polite">
+          <div className="sheet-status-metrics">
+            <span className="sheet-range-pill">{selectionSummary.rangeLabel}</span>
+            <span>Count: <strong>{selectionSummary.nonEmptyCount}</strong></span>
+            {selectionSummary.numericCount > 0 ? (
+              <>
+                <span>Sum: <strong>{formatSummaryNumber(selectionSummary.sum)}</strong></span>
+                {selectionSummary.average !== null ? (
+                  <span>Average: <strong>{formatSummaryNumber(selectionSummary.average)}</strong></span>
+                ) : null}
+              </>
+            ) : null}
+          </div>
+          <div className="sheet-status-actions">
+            <button
+              className="sheet-copy-btn"
+              onClick={() => void copySelection()}
+              title="Copy selected cell(s) (Ctrl+C)"
+              type="button"
+            >
+              {copiedNotice ? "Copied!" : "Copy"}
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div className="sheet-tabs" role="tablist" aria-label="Workbook sheets">
         {sheets.map((item, index) => (
           <button

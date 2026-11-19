@@ -199,6 +199,8 @@ struct AppState {
     detected_wrike_theme: Mutex<Option<String>>,
     top_inset: Mutex<f64>,
     quit_prompt_open: AtomicBool,
+    wrike_inbox_unread: AtomicBool,
+    update_available_badge: AtomicBool,
 }
 
 #[derive(Default)]
@@ -514,6 +516,58 @@ fn notify_update_available(app: AppHandle, version: String) -> Result<(), String
         .map_err(|error| format!("Unable to display a Windows notification: {error}"))
 }
 
+#[cfg(target_os = "windows")]
+fn taskbar_badge_image() -> tauri::image::Image<'static> {
+    const SIZE: u32 = 16;
+    let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
+    let center = (SIZE as f32 - 1.0) / 2.0;
+    let outer_radius = 7.2_f32;
+    let inner_radius = 5.4_f32;
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let dist = ((x as f32 - center).powi(2) + (y as f32 - center).powi(2)).sqrt();
+            let offset = ((y * SIZE + x) * 4) as usize;
+            if dist <= inner_radius {
+                rgba[offset] = 34;
+                rgba[offset + 1] = 211;
+                rgba[offset + 2] = 238;
+                rgba[offset + 3] = 255;
+            } else if dist <= outer_radius {
+                rgba[offset] = 8;
+                rgba[offset + 1] = 47;
+                rgba[offset + 2] = 73;
+                rgba[offset + 3] = 230;
+            }
+        }
+    }
+    tauri::image::Image::new_owned(rgba, SIZE, SIZE)
+}
+
+#[cfg(target_os = "windows")]
+fn sync_taskbar_badge(app: &AppHandle, state: &AppState) {
+    let active = state.wrike_inbox_unread.load(Ordering::Relaxed)
+        || state.update_available_badge.load(Ordering::Relaxed);
+    if let Some(window) = app.get_window("main") {
+        let icon = if active {
+            Some(taskbar_badge_image())
+        } else {
+            None
+        };
+        let _ = window.set_overlay_icon(icon);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn sync_taskbar_badge(_app: &AppHandle, _state: &AppState) {}
+
+#[tauri::command]
+fn set_update_badge(app: AppHandle, state: State<'_, AppState>, available: bool) {
+    state
+        .update_available_badge
+        .store(available, Ordering::Relaxed);
+    sync_taskbar_badge(&app, state.inner());
+}
+
 #[tauri::command]
 async fn launch_wrike(
     app: AppHandle,
@@ -757,6 +811,17 @@ fn open_wrike_at(
             }
             if url.scheme() == "abw-theme" {
                 let _ = apply_detected_wrike_theme(&navigation_app, &navigation_context, url);
+                return false;
+            }
+            if url.scheme() == "abw-inbox" {
+                let has_unread = url
+                    .query_pairs()
+                    .find_map(|(key, value)| (key == "hasUnread").then(|| value == "true"))
+                    .unwrap_or(false);
+                if let Some(state) = navigation_app.try_state::<AppState>() {
+                    state.wrike_inbox_unread.store(has_unread, Ordering::Relaxed);
+                    sync_taskbar_badge(&navigation_app, state.inner());
+                }
                 return false;
             }
             let allowed = is_safe_remote_destination(url);
@@ -2337,6 +2402,7 @@ pub fn run() {
             read_download,
             resize_wrike_tabs,
             send_test_notification,
+            set_update_badge,
             storage_health,
             update_last_wrike_session,
             update_settings,
