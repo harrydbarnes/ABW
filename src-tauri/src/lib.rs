@@ -1784,8 +1784,112 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
               matchFromElements(layoutCandidates, false)
             );
           };
+          const abwSyncWrikeContentCorner = () => {
+            if (abwAutoDownload || !document.body) return;
+            const cornerId = "abw-wrike-corner";
+            const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || 0;
+            const viewportWidth = window.innerWidth || document.documentElement?.clientWidth || 0;
+            if (viewportHeight < 200 || viewportWidth < 300) return;
+
+            const resolveBackgroundColor = (element) => {
+              for (let node = element; node && node instanceof Element; node = node.parentElement) {
+                const style = window.getComputedStyle(node);
+                if (style.visibility === "hidden" || style.display === "none") continue;
+                const bg = style.backgroundColor || "";
+                if (bg && bg !== "transparent" && bg !== "rgba(0, 0, 0, 0)") {
+                  return bg;
+                }
+                const extracted = abwExtractCssColors(style.backgroundImage);
+                if (extracted.length > 0) {
+                  const [r, g, b] = extracted[0];
+                  return `rgb(${r}, ${g}, ${b})`;
+                }
+              }
+              return "";
+            };
+
+            let sidebarElement = null;
+            let sidebarRect = null;
+            let sidebarColor = "";
+
+            const probePoints = [
+              [18, 140],
+              [18, Math.round(viewportHeight * 0.45)],
+              [56, 140]
+            ];
+            for (const [px, py] of probePoints) {
+              const stack =
+                document.elementsFromPoint?.(px, py) ||
+                [document.elementFromPoint?.(px, py)].filter(Boolean);
+              for (const node of stack) {
+                for (
+                  let current = node;
+                  current && current instanceof Element && current !== document.body && current !== document.documentElement;
+                  current = current.parentElement
+                ) {
+                  if (current.id === cornerId || current.closest?.('[role="dialog"], [aria-modal="true"]')) {
+                    continue;
+                  }
+                  const rect = current.getBoundingClientRect?.();
+                  if (
+                    !rect ||
+                    rect.left > 8 ||
+                    rect.top > 60 ||
+                    rect.width < 44 ||
+                    rect.width > Math.min(380, viewportWidth * 0.48) ||
+                    rect.height < viewportHeight * 0.6
+                  ) {
+                    continue;
+                  }
+                  const style = window.getComputedStyle(current);
+                  if (style.visibility === "hidden" || style.display === "none") continue;
+                  const bg = resolveBackgroundColor(current);
+                  if (!bg) continue;
+                  if (!sidebarRect || rect.right > sidebarRect.right) {
+                    sidebarElement = current;
+                    sidebarRect = rect;
+                    sidebarColor = bg;
+                  }
+                }
+              }
+              if (sidebarElement) break;
+            }
+
+            const existing = document.getElementById(cornerId);
+            if (!sidebarElement || !sidebarRect || !sidebarColor) {
+              existing?.remove();
+              return;
+            }
+
+            const cornerLeft = Math.round(sidebarRect.right);
+            const cornerTop = Math.max(0, Math.round(sidebarRect.top));
+            if (cornerLeft <= 0 || cornerLeft >= viewportWidth - 60) {
+              existing?.remove();
+              return;
+            }
+
+            const corner = existing || document.createElement("div");
+            if (!existing) {
+              corner.id = cornerId;
+              corner.setAttribute("aria-hidden", "true");
+              Object.assign(corner.style, {
+                position: "fixed",
+                width: "12px",
+                height: "12px",
+                pointerEvents: "none",
+                zIndex: "2147483646",
+                lineHeight: "0"
+              });
+              corner.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M0 0H12A12 12 0 0 0 0 12Z" fill="currentColor"/></svg>`;
+              document.body.append(corner);
+            }
+            corner.style.left = `${cornerLeft}px`;
+            corner.style.top = `${cornerTop}px`;
+            corner.style.color = sidebarColor;
+          };
           const abwReportWrikeTheme = (force = false) => {
             if (abwAutoDownload) return null;
+            abwSyncWrikeContentCorner();
             const detected = abwDetectWrikeThemeFromDom();
             if (!detected) return null;
             if (!force && window.__abwLastDetectedWrikeTheme === detected) {
