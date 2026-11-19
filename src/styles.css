@@ -2516,6 +2516,33 @@ input:focus-visible {
   }
 }
 
+.update-notes-card {
+  margin: 14px 22px 0 38px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: #31425d;
+  font-size: 13px;
+}
+
+.update-notes-card strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: #192943;
+}
+
+.update-notes-list {
+  margin: 0;
+  padding-left: 18px;
+  line-height: 1.55;
+}
+
+.update-notes-list li + li {
+  margin-top: 4px;
+}
+
 .update-notes {
   margin: 14px 0 0;
   padding: 12px 14px;

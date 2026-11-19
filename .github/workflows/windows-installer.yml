@@ -242,13 +242,32 @@ jobs:
           fi
 
           notes=$(gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$RELEASE_TAG" -f target_commitish="$GITHUB_SHA" --jq '.body' || true)
-          if [ -z "$notes" ]; then
-            notes="Updated ABW Windows installer."
+          clean_notes=$(RELEASE_NOTES="$notes" node -e '
+            const raw = process.env.RELEASE_NOTES || "";
+            const lines = [];
+            for (const line of raw.split(/\r?\n/)) {
+              let t = line.trim();
+              if (!t || /^#{1,6}\s+what'\''?s changed/i.test(t) || /^\*\*full changelog\*\*/i.test(t) || /^---+$/.test(t)) continue;
+              t = t.replace(/^[-*•]\s+/, "")
+                   .replace(/\s+by\s+@[\w-]+\s+in\s+https?:\/\/\S+$/i, "")
+                   .replace(/\s*\(#\d+\)\s*$/, "")
+                   .replace(/^(?:feat|fix|style|chore|ci|perf|refactor|docs)(?:\([^)]+\))?:\s*/i, "")
+                   .replace(/[;,]\s*(?:and\s+)?bump to v[\d.]+$/i, "")
+                   .trim();
+              if (!t) continue;
+              t = t.charAt(0).toUpperCase() + t.slice(1);
+              if (!/[.!?]$/.test(t)) t += ".";
+              if (!lines.includes(`- ${t}`)) lines.push(`- ${t}`);
+            }
+            process.stdout.write(lines.join("\n"));
+          ')
+          if [ -z "$clean_notes" ]; then
+            clean_notes="- Performance improvements and bug fixes."
           fi
 
           INSTALLER_NAME="${installer[0]}" \
           SIG_FILE="$sig_file" \
-          RELEASE_NOTES="$notes" \
+          RELEASE_NOTES="$clean_notes" \
           node -e '
             const fs = require("node:fs");
             const signature = fs.readFileSync(process.env.SIG_FILE, "utf8").trim();

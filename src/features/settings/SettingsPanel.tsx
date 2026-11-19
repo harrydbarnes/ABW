@@ -480,6 +480,36 @@ function formatUpdateDate(value: string | null): string | null {
   });
 }
 
+function formatReleaseNotes(raw: string | null): string[] {
+  if (!raw) {
+    return [];
+  }
+  const bullets: string[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    let text = line.trim();
+    if (!text) continue;
+    if (/^#{1,6}\s+what'?s changed/i.test(text)) continue;
+    if (/^\*\*full changelog\*\*/i.test(text) || /^full changelog:/i.test(text)) continue;
+    if (/^---+$/.test(text)) continue;
+    text = text.replace(/^[-*•]\s+/, "");
+    text = text.replace(/\s+by\s+@[\w-]+\s+in\s+https?:\/\/\S+$/i, "");
+    text = text.replace(/\s*\(#\d+\)\s*$/, "");
+    text = text.replace(/^(?:feat|fix|style|chore|ci|perf|refactor|docs)(?:\([^)]+\))?:\s*/i, "");
+    text = text.replace(/;\s*bump to v[\d.]+$/i, "");
+    text = text.replace(/,?\s*and bump to v[\d.]+$/i, "");
+    text = text.trim();
+    if (!text) continue;
+    text = text.charAt(0).toUpperCase() + text.slice(1);
+    if (!/[.!?]$/.test(text)) {
+      text += ".";
+    }
+    if (!bullets.includes(text)) {
+      bullets.push(text);
+    }
+  }
+  return bullets;
+}
+
 function AppUpdateSettings({
   appVersion,
   autoCheckForUpdates,
@@ -510,6 +540,7 @@ function AppUpdateSettings({
   const checkedTime = checkedAt
     ? new Date(checkedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
     : null;
+  const releaseBullets = formatReleaseNotes(notes);
 
   let summary = `Running ABW v${appVersion}.`;
   if (phase === "checking") {
@@ -572,8 +603,16 @@ function AppUpdateSettings({
           </div>
         </div>
       ) : null}
-      {notes && (phase === "available" || phase === "downloading" || phase === "installing") ? (
-        <pre className="update-notes">{notes}</pre>
+      {releaseBullets.length > 0 &&
+      (phase === "available" || phase === "downloading" || phase === "installing") ? (
+        <div className="update-notes-card">
+          <strong>What's new</strong>
+          <ul className="update-notes-list">
+            {releaseBullets.map((bullet, index) => (
+              <li key={index}>{bullet}</li>
+            ))}
+          </ul>
+        </div>
       ) : null}
       <AnimatedSettingItem visible={showAutoUpdateToggle}>
         <SettingToggle
