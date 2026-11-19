@@ -9,6 +9,16 @@ const end = source.indexOf('const nearestTextWord =', start);
 assert.ok(start >= 0 && end > start, 'Dictionary helpers must exist in the injected script');
 const helpers = new Function('window', `${source.slice(start, end)}; return { selectedWord, wordFromText };`);
 
+const themeStart = source.indexOf('const abwWrikeThemeCatalog = [');
+const themeEnd = source.indexOf('const abwReportWrikeTheme =', themeStart);
+assert.ok(themeStart >= 0 && themeEnd > themeStart, 'Wrike theme detector helpers must exist in the injected script');
+const themeHelpers = new Function(
+  'window',
+  'document',
+  'Element',
+  `${source.slice(themeStart, themeEnd)}; return { abwWrikeThemeCatalog, abwParseCssColor, abwExtractCssColors, abwMatchWrikeThemeText, abwMatchWrikeThemeColor, abwDetectWrikeThemeFromDom };`,
+);
+
 test('injected dictionary extracts complete Unicode words', () => {
   for (const word of ['Harry', 'campaign', 'Wrike', 'café', 'Client123', "O'Neill", 'follow-up']) {
     const { selectedWord, wordFromText } = helpers({
@@ -27,6 +37,88 @@ test('dictionary ignores collapsed and empty selections', () => {
   assert.equal(selectedWord(), '');
   assert.equal(wordFromText('', 0), '');
   assert.equal(wordFromText('Wrike', 999), 'Wrike');
+});
+
+test('Wrike theme detector matches sidebar colors and ignores modal overlays', () => {
+  class MockElement {
+    constructor({
+      className = '',
+      id = '',
+      attributes = [],
+      rect = { left: 0, top: 0, width: 160, height: 700 },
+      style = { backgroundColor: 'transparent', backgroundImage: 'none', visibility: 'visible', display: 'block' },
+      parentElement = null,
+      inDialog = false,
+    } = {}) {
+      this.className = className;
+      this.id = id;
+      this.attributes = attributes;
+      this._rect = rect;
+      this._style = style;
+      this.parentElement = parentElement;
+      this._inDialog = inDialog;
+    }
+    getBoundingClientRect() {
+      return this._rect;
+    }
+    closest(selector) {
+      if (this._inDialog && selector.includes('dialog')) return this;
+      return this.parentElement?.closest?.(selector) ?? null;
+    }
+  }
+
+  const body = new MockElement({
+    rect: { left: 0, top: 0, width: 1440, height: 900 },
+    style: { backgroundColor: 'rgb(255, 255, 255)', backgroundImage: 'none', visibility: 'visible', display: 'block' },
+  });
+  const docEl = new MockElement({
+    rect: { left: 0, top: 0, width: 1440, height: 900 },
+    style: { backgroundColor: 'transparent', backgroundImage: 'none', visibility: 'visible', display: 'block' },
+  });
+  const sidebar = new MockElement({
+    className: 'wrike-left-navigation',
+    rect: { left: 0, top: 0, width: 160, height: 880 },
+    style: { backgroundColor: 'rgb(0, 57, 64)', backgroundImage: 'none', visibility: 'visible', display: 'block' },
+    parentElement: body,
+  });
+  const modalBackdrop = new MockElement({
+    className: 'modal-backdrop',
+    rect: { left: 0, top: 0, width: 1440, height: 900 },
+    style: { backgroundColor: 'rgba(12, 37, 41, 0.56)', backgroundImage: 'none', visibility: 'visible', display: 'block' },
+    parentElement: body,
+  });
+  const modalDialog = new MockElement({
+    className: 'task-modal',
+    rect: { left: 10, top: 20, width: 220, height: 700 },
+    style: { backgroundColor: 'rgb(255, 255, 255)', backgroundImage: 'none', visibility: 'visible', display: 'block' },
+    parentElement: body,
+    inDialog: true,
+  });
+
+  const mockDocument = {
+    documentElement: docEl,
+    body,
+    elementsFromPoint: () => [modalDialog, modalBackdrop, sidebar, body],
+    querySelectorAll: () => [sidebar],
+  };
+  const mockWindow = {
+    getComputedStyle: (el) => el._style,
+  };
+
+  const {
+    abwParseCssColor,
+    abwMatchWrikeThemeColor,
+    abwMatchWrikeThemeText,
+    abwDetectWrikeThemeFromDom,
+  } = themeHelpers(mockWindow, mockDocument, MockElement);
+
+  assert.equal(abwParseCssColor('rgba(12, 37, 41, 0.56)'), null);
+  assert.deepEqual(abwParseCssColor('rgb(0, 57, 64)'), { r: 0, g: 57, b: 64, a: 1 });
+  assert.equal(abwMatchWrikeThemeColor({ r: 0, g: 57, b: 64 }), 'aquamarine');
+  assert.equal(abwMatchWrikeThemeColor({ r: 16, g: 29, b: 62 }), 'default');
+  assert.equal(abwMatchWrikeThemeColor({ r: 52, g: 37, b: 113 }), 'imperial-purple');
+  assert.equal(abwMatchWrikeThemeText('wrike-theme-woodland-grass'), 'woodland-grass');
+  assert.equal(abwDetectWrikeThemeFromDom(), 'aquamarine');
 });
 
 test('release checks accept matching versions and reject mismatched tags', () => {
@@ -52,4 +144,5 @@ test('tauri updater config specifies valid minisign key, HTTPS GitHub endpoint, 
   ]);
   assert.equal(updater.windows?.installMode, 'passive');
 });
+
 

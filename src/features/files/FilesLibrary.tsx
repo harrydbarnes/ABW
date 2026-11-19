@@ -1,11 +1,10 @@
 import type { DownloadRecord, FileFilter } from "../../types";
-import { openSourceTask } from "../../lib/desktop";
 
 interface Props {
   downloads: DownloadRecord[];
   filter: FileFilter;
   onFilterChange: (filter: FileFilter) => void;
-  onOpenSourceTask: () => void;
+  onOpenSourceTask: (record: DownloadRecord) => void;
   onSearchChange: (search: string) => void;
   onSelect: (id: string) => void;
   onTogglePin: (id: string) => void;
@@ -92,9 +91,7 @@ export function FilesLibrary({
               </button>
               <button
                 className="row-task-link"
-                onClick={() => {
-                  void openSourceTask(file).then(onOpenSourceTask);
-                }}
+                onClick={() => onOpenSourceTask(file)}
                 title={`Open ${file.sourceLabel} in Wrike`}
               >
                 {file.sourceLabel}

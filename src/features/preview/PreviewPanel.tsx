@@ -6,13 +6,27 @@ import { formatBytes, loadCachedPdfBytes, PDF_PREVIEW_BYTE_LIMIT } from "./previ
 const SpreadsheetPreview = lazy(() => import("./SpreadsheetPreview"));
 const PdfPreview = lazy(() => import("./PdfPreview"));
 
-export default function PreviewPanel({ record }: { record: DownloadRecord | null }) {
+export default function PreviewPanel({
+  record,
+  onOpenSourceTask,
+}: {
+  record: DownloadRecord | null;
+  onOpenSourceTask?: (record: DownloadRecord) => void;
+}) {
   const [pdfState, setPdfState] = useState<
     | { status: "idle"; bytes: null; error: null }
     | { status: "loading"; bytes: null; error: null }
     | { status: "ready"; bytes: Uint8Array | null; error: null }
     | { status: "error"; bytes: null; error: string }
   >({ status: "idle", bytes: null, error: null });
+
+  function handleOpenTask(target: DownloadRecord) {
+    if (onOpenSourceTask) {
+      onOpenSourceTask(target);
+      return;
+    }
+    void openSourceTask(target);
+  }
 
   useEffect(() => {
     let live = true;
@@ -69,12 +83,12 @@ export default function PreviewPanel({ record }: { record: DownloadRecord | null
       <header className="preview-header">
         <div className="preview-title">
           <h2>{record.fileName}</h2>
-          <button className="inline-link" onClick={() => void openSourceTask(record)}>
+          <button className="inline-link" onClick={() => handleOpenTask(record)}>
             {record.sourceLabel}
           </button>
         </div>
         <div className="preview-actions">
-          <button className="secondary" onClick={() => void openSourceTask(record)}>
+          <button className="secondary" onClick={() => handleOpenTask(record)}>
             Open task
           </button>
           <button className="primary" onClick={() => void openDownload(record.id)}>

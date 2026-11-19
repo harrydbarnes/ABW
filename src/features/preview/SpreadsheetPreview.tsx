@@ -1,18 +1,26 @@
 import { useEffect, useState } from "react";
-import type { DownloadRecord, WorkbookPreview, WorkbookSheet } from "../../types";
+import type {
+  DownloadRecord,
+  WorkbookCell,
+  WorkbookPreview,
+  WorkbookSheet,
+} from "../../types";
 import { loadCachedSpreadsheetPreview, toColumnLabel } from "./previewCache";
+
+const ROW_HEADER_WIDTH_PX = 38;
+const COLUMN_HEADER_HEIGHT_PX = 28;
 
 const DEMO_PREVIEW: WorkbookPreview = {
   activeSheet: 0,
   sheets: [
     createDemoSheet("Overview", [
       ["Channel", "Owner", "Apr", "May", "Jun", "Q2 total", "Status"],
-      ["Paid social", "Alex Morris", "42,000", "45,500", "48,000", "135,500", "Booked"],
-      ["Connected TV", "Priya Shah", "72,000", "70,000", "76,000", "218,000", "Pending"],
-      ["Audio", "Ben Howard", "18,600", "21,400", "19,800", "59,800", "Booked"],
-      ["Display", "Alex Morris", "12,500", "14,000", "14,000", "40,500", "Approved"],
-      ["Out of home", "Jo Clarke", "31,000", "38,000", "40,000", "109,000", "Review"],
-      ["TOTAL", "", "176,100", "188,900", "197,800", "562,800", ""],
+      ["Paid social", "Alex Morris", "£42,000", "£45,500", "£48,000", "£135,500", "Booked"],
+      ["Connected TV", "Priya Shah", "£72,000", "£70,000", "£76,000", "£218,000", "Pending"],
+      ["Audio", "Ben Howard", "£18,600", "£21,400", "£19,800", "£59,800", "Booked"],
+      ["Display", "Alex Morris", "£12,500", "£14,000", "£14,000", "£40,500", "Approved"],
+      ["Out of home", "Jo Clarke", "£31,000", "£38,000", "£40,000", "£109,000", "Review"],
+      ["TOTAL", "", "£176,100", "£188,900", "£197,800", "£562,800", ""],
       ["", "", "", "", "", "", ""],
       ["Notes", "", "", "", "", "", ""],
       ["Forecast includes pacing adjustments approved on 18 May.", "", "", "", "", "", ""],
@@ -20,8 +28,8 @@ const DEMO_PREVIEW: WorkbookPreview = {
     ]),
     createDemoSheet("Placements", [
       ["Placement", "Market", "Start", "End", "Budget"],
-      ["CTV prime", "UK", "01 Apr", "30 Jun", "218,000"],
-      ["Paid social video", "UK", "07 Apr", "30 Jun", "135,500"],
+      ["CTV prime", "UK", "01 Apr", "30 Jun", "£218,000"],
+      ["Paid social video", "UK", "07 Apr", "30 Jun", "£135,500"],
     ]),
     createDemoSheet("Approvals", [
       ["Item", "Approver", "Decision"],
@@ -101,6 +109,9 @@ export default function SpreadsheetPreview({
     return <div className="unsupported-preview">This workbook has no visible worksheets.</div>;
   }
 
+  const totalTableWidth =
+    ROW_HEADER_WIDTH_PX + sheet.columns.reduce((sum, column) => sum + column.widthPx, 0);
+
   return (
     <div className="spreadsheet-view">
       <div className="document-toolbar">
@@ -114,41 +125,63 @@ export default function SpreadsheetPreview({
         </div>
       </div>
       <div className="sheet-scroller">
-        <table className="sheet" style={{ zoom: `${zoom}%` }}>
-          <colgroup>
-            <col className="row-number-column" />
-            {sheet.columns.map((column) => (
-              <col key={column.index} style={{ width: column.widthPx }} />
-            ))}
-          </colgroup>
-          <thead>
-            <tr>
-              <th className="row-number" />
+        <div
+          className="sheet-stage"
+          style={{
+            zoom: `${zoom}%`,
+            width: totalTableWidth,
+          }}
+        >
+          <table className="sheet" style={{ width: totalTableWidth }}>
+            <colgroup>
+              <col className="row-number-column" />
               {sheet.columns.map((column) => (
-                <th key={column.index}>{column.label}</th>
+                <col key={column.index} style={{ width: column.widthPx }} />
               ))}
-            </tr>
-          </thead>
-          <tbody>
-            {sheet.rows.map((row) => (
-              <tr key={row.index} style={{ height: row.heightPx }}>
-                <th className="row-number">{row.index}</th>
-                {row.cells.map((cell, cellIndex) =>
-                  cell.coveredByMerge ? null : (
-                    <td
-                      colSpan={cell.colSpan}
-                      key={sheet.columns[cellIndex]?.index ?? cellIndex}
-                      rowSpan={cell.rowSpan}
-                      style={cell.style}
-                    >
-                      {cell.value}
-                    </td>
-                  ),
-                )}
+            </colgroup>
+            <thead>
+              <tr>
+                <th className="row-number" />
+                {sheet.columns.map((column) => (
+                  <th key={column.index}>{column.label}</th>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {sheet.rows.map((row) => (
+                <tr key={row.index} style={{ height: row.heightPx }}>
+                  <th className="row-number">{row.index}</th>
+                  {row.cells.map((cell, cellIndex) =>
+                    cell.coveredByMerge ? null : (
+                      <td
+                        colSpan={cell.colSpan}
+                        key={sheet.columns[cellIndex]?.index ?? cellIndex}
+                        rowSpan={cell.rowSpan}
+                        style={cell.style}
+                      >
+                        {cell.value}
+                      </td>
+                    ),
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {sheet.images?.map((image, index) => (
+            <img
+              alt=""
+              className="sheet-image"
+              key={`${index}-${image.leftPx}-${image.topPx}`}
+              src={image.dataUrl}
+              style={{
+                left: ROW_HEADER_WIDTH_PX + image.leftPx,
+                top: COLUMN_HEADER_HEIGHT_PX + image.topPx,
+                width: image.widthPx,
+                height: image.heightPx,
+              }}
+            />
+          ))}
+        </div>
       </div>
       <div className="sheet-tabs" role="tablist" aria-label="Workbook sheets">
         {sheets.map((item, index) => (
@@ -174,23 +207,52 @@ function createDemoSheet(name: string, values: string[][]): WorkbookSheet {
     columns: Array.from({ length: width }, (_, index) => ({
       index: index + 1,
       label: toColumnLabel(index + 1),
-      widthPx: index === 0 ? 176 : 98,
+      widthPx: index === 0 ? 176 : index === 1 ? 128 : 104,
     })),
     rows: values.map((row, rowIndex) => ({
       index: rowIndex + 1,
-      heightPx: 31,
-      cells: Array.from({ length: width }, (_, cellIndex) => ({
-        value: row[cellIndex] ?? "",
-        style:
-          rowIndex === 0
-            ? { backgroundColor: "#f7f9fd", color: "#35445c", fontWeight: 650 }
-            : row[0] === "TOTAL"
-              ? { fontWeight: 650 }
-              : row[0] === "Notes"
-                ? { color: "#1e4089", fontWeight: 650 }
-                : undefined,
-      })),
+      heightPx: 30,
+      cells: Array.from({ length: width }, (_, cellIndex) => {
+        const value = row[cellIndex] ?? "";
+        const isNumeric = /^£?[\d,]+(?:\.\d+)?$/.test(value);
+        const style: NonNullable<WorkbookCell["style"]> = {};
+        if (isNumeric) {
+          style.textAlign = "right";
+        }
+        if (rowIndex === 0) {
+          style.backgroundColor = "#d9e1f2";
+          style.color = "#1f2d46";
+          style.fontWeight = 700;
+          style.borderTop = "1px solid #263244";
+          style.borderBottom = "2px solid #263244";
+        } else if (row[0] === "TOTAL") {
+          style.backgroundColor = "#fff2cc";
+          style.color = "#1f2d46";
+          style.fontWeight = 700;
+          style.borderTop = "1px solid #263244";
+          style.borderBottom = "3px double #263244";
+        } else if (row[0] === "Notes") {
+          style.backgroundColor = "#fce4d6";
+          style.color = "#1e4089";
+          style.fontWeight = 700;
+        } else if (value === "Booked" || value === "Approved") {
+          style.backgroundColor = "#e2efda";
+          style.color = "#1d5b2c";
+          style.fontWeight = 600;
+          style.textAlign = "center";
+        } else if (value === "Pending" || value === "Review") {
+          style.backgroundColor = "#fff2cc";
+          style.color = "#7a5200";
+          style.fontWeight = 600;
+          style.textAlign = "center";
+        }
+        return {
+          value,
+          style: Object.keys(style).length > 0 ? style : undefined,
+        };
+      }),
     })),
   };
 }
+
 

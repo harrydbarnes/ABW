@@ -211,7 +211,7 @@ jobs:
           retention-days: 90
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.ref == 'refs/heads/main' && needs.nsis.outputs.signed == 'true')
     needs: nsis
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -221,7 +221,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_TAG: v${{ needs.nsis.outputs.version }}
       RELEASE_VERSION: ${{ needs.nsis.outputs.version }}
       ARTIFACT_NAME: ABW-Windows-installer-v${{ needs.nsis.outputs.version }}-${{ needs.nsis.outputs.short_sha }}
     steps:
@@ -241,7 +241,7 @@ jobs:
             exit 1
           fi
 
-          notes=$(gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$RELEASE_TAG" --jq '.body' || true)
+          notes=$(gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$RELEASE_TAG" -f target_commitish="$GITHUB_SHA" --jq '.body' || true)
           if [ -z "$notes" ]; then
             notes="Updated ABW Windows installer."
           fi
@@ -271,7 +271,16 @@ jobs:
 
           release_body="$(printf '%s\n\n---\nCurrent-user Windows installer (no administrator rights required). In-app updates are cryptographically signed via Tauri minisign; Windows SmartScreen may still prompt for unsigned executables. Verify the `.sha256` checksum before manual installation.' "$notes")"
 
-          gh release create "$RELEASE_TAG" "${installer[0]}" "$sig_file" "${installer[0]}.sha256" latest.json \
-            --verify-tag \
-            --title "ABW $RELEASE_TAG" \
-            --notes "$release_body"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${installer[0]}" "$sig_file" "${installer[0]}.sha256" latest.json --clobber
+            gh release edit "$RELEASE_TAG" \
+              --title "ABW $RELEASE_TAG" \
+              --notes "$release_body" \
+              --latest
+          else
+            gh release create "$RELEASE_TAG" "${installer[0]}" "$sig_file" "${installer[0]}.sha256" latest.json \
+              --target "$GITHUB_SHA" \
+              --title "ABW $RELEASE_TAG" \
+              --notes "$release_body" \
+              --latest
+          fi

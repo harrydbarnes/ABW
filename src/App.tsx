@@ -14,7 +14,6 @@ import {
 import { Menu } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { FilesLibrary } from "./features/files/FilesLibrary";
-import { SettingsPanel } from "./features/settings/SettingsPanel";
 import {
   checkForAppUpdate,
   closeWrikeTab,
@@ -27,6 +26,8 @@ import {
   loadDownloads,
   loadSettings,
   loadStorageHealth,
+  notifyUpdateAvailable,
+  openSourceTask,
   resizeWrikeTabs,
   saveSettings,
   saveWrikeSession,
@@ -50,10 +51,18 @@ import type {
 } from "./types";
 
 const PreviewPanel = lazy(() => import("./features/preview/PreviewPanel"));
+const SettingsPanel = lazy(() =>
+  import("./features/settings/SettingsPanel").then((module) => ({
+    default: module.SettingsPanel,
+  })),
+);
 const WRIKE_HOME = "https://www.wrike.com/workspace.htm";
 const READ_ONLY_URL = "https://login.wrike.com/login/?forceLogin=false&read";
 const APP_VERSION = import.meta.env.VITE_APP_VERSION;
 const LAUNCH_SPLASH_DURATION_MS = 2800;
+const PERIODIC_UPDATE_CHECK_MS = 4 * 60 * 60 * 1000;
+const FOCUS_UPDATE_CHECK_MIN_AGE_MS = 60 * 60 * 1000;
+const TOP_BANNER_HEIGHT = 42;
 
 type Screen = "wrike" | "files" | "settings";
 type WrikeTabMode = "standard" | "readOnly";
@@ -126,6 +135,7 @@ export function App() {
     confirmBeforeClosingTabs: false,
     openDownloadedFilesAutomatically: false,
     autoCheckForUpdates: true,
+    autoMatchWrikeTheme: true,
     theme: "default",
     customDictionary: [],
     startupTabUrls: [WRIKE_HOME],
@@ -154,6 +164,8 @@ export function App() {
   const canPersistSessionRef = useRef(false);
   const updateRequestInFlightRef = useRef(false);
   const appUpdatePhaseRef = useRef(appUpdate.phase);
+  const lastNotifiedUpdateVersionRef = useRef<string | null>(null);
+  const lastUpdateCheckAtRef = useRef(0);
   const autoUpdateTimerRef = useRef<number | undefined>(undefined);
   const reloadAnimationTimerRef = useRef<number | undefined>(undefined);
   const sessionSaveTimerRef = useRef<number | undefined>(undefined);
@@ -161,9 +173,45 @@ export function App() {
   const tabIdCounterRef = useRef(0);
   const launchStartedAtRef = useRef(Date.now());
 
+  const showUpdateBanner =
+    (appUpdate.phase === "available" ||
+      appUpdate.phase === "downloading" ||
+      appUpdate.phase === "installing") &&
+    !appUpdate.dismissedPrompt;
+  const topBannerInset =
+    (showUpdateBanner ? TOP_BANNER_HEIGHT : 0) + (storageWarning ? TOP_BANNER_HEIGHT : 0);
+  const topBannerInsetRef = useRef(topBannerInset);
+  topBannerInsetRef.current = topBannerInset;
+
   useEffect(() => {
     if (storageWarning) setScreen("settings");
   }, [storageWarning]);
+
+  useEffect(() => {
+    if (!isDesktopRuntime()) {
+      return;
+    }
+    void resizeWrikeTabs(currentWrikeLayouts(), topBannerInset).catch(() => undefined);
+  }, [topBannerInset]);
+
+  useEffect(() => {
+    if (!isDesktopRuntime() || !settings.autoCheckForUpdates) {
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      void runUpdateCheck(false);
+    }, PERIODIC_UPDATE_CHECK_MS);
+    const handleWindowFocus = () => {
+      if (Date.now() - lastUpdateCheckAtRef.current >= FOCUS_UPDATE_CHECK_MIN_AGE_MS) {
+        void runUpdateCheck(false);
+      }
+    };
+    window.addEventListener("focus", handleWindowFocus);
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", handleWindowFocus);
+    };
+  }, [settings.autoCheckForUpdates]);
 
   useEffect(() => {
     const splashTimer = window.setTimeout(
@@ -227,6 +275,7 @@ export function App() {
       return;
     }
     updateRequestInFlightRef.current = true;
+    lastUpdateCheckAtRef.current = Date.now();
     if (manual) {
       setAppUpdate((current) => ({
         ...current,
@@ -238,6 +287,10 @@ export function App() {
       const result = await checkForAppUpdate();
       const checkedAt = new Date().toISOString();
       if (result.status === "available" && result.latestVersion) {
+        if (lastNotifiedUpdateVersionRef.current !== result.latestVersion) {
+          lastNotifiedUpdateVersionRef.current = result.latestVersion;
+          void notifyUpdateAvailable(result.latestVersion).catch(() => undefined);
+        }
         setAppUpdate((current) => ({
           phase: "available",
           latestVersion: result.latestVersion,
@@ -679,7 +732,7 @@ export function App() {
   }
 
   async function resizeCurrentWrikeTabs() {
-    await resizeWrikeTabs(currentWrikeLayouts());
+    await resizeWrikeTabs(currentWrikeLayouts(), topBannerInsetRef.current);
   }
 
   function companionTabId(tabId: string, preferred?: string | null) {
@@ -795,6 +848,41 @@ export function App() {
     setIsTopbarActionsMenuOpen(false);
     await hideWrike(wrikeTabs.map((tab) => tab.id));
     setScreen(next);
+  }
+
+  async function openRecordSourceTask(record: DownloadRecord) {
+    setIsTopbarActionsMenuOpen(false);
+    const tabs = wrikeTabsRef.current;
+    const currentActive = tabs.find((tab) => tab.id === activeWrikeTabIdRef.current);
+    const targetTab =
+      (currentActive && currentActive.mode === "standard" ? currentActive : null) ??
+      tabs.find((tab) => tab.id === "home" && tab.mode === "standard") ??
+      tabs.find((tab) => tab.mode === "standard") ??
+      tabs[0] ??
+      INITIAL_WRIKE_TAB;
+    syncWrikeSplitRef(null);
+    syncActiveWrikeTabId(targetTab.id);
+    setScreen("wrike");
+    if (record.sourceUrl) {
+      setWrikeTabs((current) =>
+        current.map((tab) =>
+          tab.id === targetTab.id
+            ? { ...tab, url: record.sourceUrl, isTitleLoading: true, mode: "standard" }
+            : tab,
+        ),
+      );
+      await resizeWrikeTabs(currentWrikeLayouts(null, targetTab.id)).catch(() => undefined);
+      await openSourceTask(record, targetTab.id);
+      await hideWrike(tabs.filter((tab) => tab.id !== targetTab.id).map((tab) => tab.id));
+      const update = await getWrikeTabState(targetTab.id);
+      if (update) {
+        setWrikeTabs((current) =>
+          current.map((tab) => (tab.id === targetTab.id ? applyWrikeTabUpdate(tab, update) : tab)),
+        );
+      }
+      return;
+    }
+    await showWrike(targetTab.id);
   }
 
   async function addWrikeTab() {
@@ -1454,6 +1542,56 @@ export function App() {
           onAction={(action) => void runWindowAction(action)}
         />
       </header>
+      {showUpdateBanner ? (
+        <div className="update-banner" role="status" aria-live="polite">
+          <div className="update-banner-copy">
+            <strong>
+              {appUpdate.phase === "downloading"
+                ? `Downloading ABW v${appUpdate.latestVersion ?? ""}...`
+                : appUpdate.phase === "installing"
+                  ? `Installing ABW v${appUpdate.latestVersion ?? ""}...`
+                  : `ABW v${appUpdate.latestVersion ?? ""} is available`}
+            </strong>
+            <span>
+              {appUpdate.phase === "downloading"
+                ? appUpdate.totalBytes
+                  ? `${Math.min(100, Math.round((appUpdate.downloadedBytes / appUpdate.totalBytes) * 100))}% downloaded`
+                  : "Downloading update package..."
+                : appUpdate.phase === "installing"
+                  ? "ABW will restart automatically once installation finishes."
+                  : "Update now to get the latest fixes and improvements."}
+            </span>
+          </div>
+          <div className="update-banner-actions">
+            {appUpdate.phase === "available" ? (
+              <button
+                className="update-banner-primary"
+                onClick={() => void startUpdateInstall()}
+                type="button"
+              >
+                Update now
+              </button>
+            ) : null}
+            <button
+              className="update-banner-secondary"
+              onClick={() => void showLocalScreen("settings")}
+              type="button"
+            >
+              View details
+            </button>
+            {appUpdate.phase === "available" ? (
+              <button
+                aria-label="Dismiss update banner"
+                className="update-banner-dismiss"
+                onClick={dismissUpdatePrompt}
+                type="button"
+              >
+                <NavIcon kind="close" />
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       {storageWarning ? (
         <div className="storage-warning" role="alert">
           <span>{storageWarning}</span>
@@ -1569,7 +1707,7 @@ export function App() {
               downloads={visibleDownloads}
               filter={filter}
               onFilterChange={setFilter}
-              onOpenSourceTask={() => setScreen("wrike")}
+              onOpenSourceTask={(record) => void openRecordSourceTask(record)}
               onSearchChange={setSearch}
               onSelect={setSelectedId}
               onTogglePin={togglePinnedDownload}
@@ -1578,20 +1716,25 @@ export function App() {
               selectedId={selectedRecord?.id ?? null}
             />
             <Suspense fallback={<div className="preview-panel loading">Loading preview...</div>}>
-              <PreviewPanel record={selectedRecord} />
+              <PreviewPanel
+                onOpenSourceTask={(record) => void openRecordSourceTask(record)}
+                record={selectedRecord}
+              />
             </Suspense>
           </div>
         ) : (
           <div className="settings-screen">
-            <SettingsPanel
-              appVersion={APP_VERSION}
-              settings={settings}
-              updateState={appUpdate}
-              onChange={(next) => void updateSettings(next)}
-              onCheckForUpdates={() => void runUpdateCheck(true)}
-              onInstallUpdate={() => void startUpdateInstall()}
-              onTestNotification={() => void testNotification()}
-            />
+            <Suspense fallback={<div className="preview-panel loading">Loading settings...</div>}>
+              <SettingsPanel
+                appVersion={APP_VERSION}
+                settings={settings}
+                updateState={appUpdate}
+                onChange={(next) => void updateSettings(next)}
+                onCheckForUpdates={() => void runUpdateCheck(true)}
+                onInstallUpdate={() => void startUpdateInstall()}
+                onTestNotification={() => void testNotification()}
+              />
+            </Suspense>
           </div>
         )}
       </main>

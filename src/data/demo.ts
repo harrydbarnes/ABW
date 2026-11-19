@@ -56,6 +56,7 @@ export const DEFAULT_SETTINGS: Settings = {
   confirmBeforeClosingTabs: false,
   openDownloadedFilesAutomatically: false,
   autoCheckForUpdates: true,
+  autoMatchWrikeTheme: true,
   theme: "default",
   customDictionary: [],
   startupTabUrls: ["https://www.wrike.com/workspace.htm"],

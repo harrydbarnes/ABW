@@ -87,8 +87,14 @@ export function SettingsPanel({
         onChange={(startupTabUrls) => onChange({ ...settings, startupTabUrls })}
       />
       <ThemeSettings
+        autoMatch={settings.autoMatchWrikeTheme}
         selected={settings.theme}
-        onChange={(theme) => onChange({ ...settings, theme })}
+        onAutoMatchChange={(autoMatchWrikeTheme) =>
+          onChange({ ...settings, autoMatchWrikeTheme })
+        }
+        onChange={(theme) =>
+          onChange({ ...settings, theme, autoMatchWrikeTheme: false })
+        }
       />
       <div className="notification-note">
         <div>
@@ -333,10 +339,14 @@ function normalizeUrl(value: string) {
 }
 
 function ThemeSettings({
+  autoMatch,
   selected,
+  onAutoMatchChange,
   onChange,
 }: {
+  autoMatch: boolean;
   selected: AppThemeId;
+  onAutoMatchChange: (autoMatch: boolean) => void;
   onChange: (theme: AppThemeId) => void;
 }) {
   return (
@@ -344,6 +354,14 @@ function ThemeSettings({
       <div>
         <h2>Theme</h2>
         <p>Match ABW's title bar to a Wrike-inspired workspace colour.</p>
+      </div>
+      <div className="theme-auto-toggle">
+        <SettingToggle
+          checked={autoMatch}
+          description="Automatically match the top window bar to the theme selected in your Wrike workspace sidebar. Choosing a theme below switches to manual selection."
+          label="Automatically match Wrike theme"
+          onChange={onAutoMatchChange}
+        />
       </div>
       <div className="theme-grid" role="radiogroup" aria-label="ABW theme">
         {APP_THEMES.map((theme) => (

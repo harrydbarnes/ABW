@@ -95,6 +95,12 @@ export async function sendTestNotification(): Promise<void> {
   }
 }
 
+export async function notifyUpdateAvailable(version: string): Promise<void> {
+  if (desktopRuntime) {
+    await invokeDesktop("notify_update_available", { version });
+  }
+}
+
 export async function checkForAppUpdate(): Promise<AppUpdateCheckResult> {
   if (!desktopRuntime) {
     return {
@@ -119,12 +125,12 @@ export async function installAppUpdate(
   await invokeDesktop("install_update", { onEvent: channel });
 }
 
-export async function openSourceTask(record: DownloadRecord): Promise<void> {
+export async function openSourceTask(record: DownloadRecord, tabId?: string): Promise<void> {
   if (!record.sourceUrl) {
     return;
   }
   if (desktopRuntime) {
-    await invokeDesktop("open_source_task", { url: record.sourceUrl });
+    await invokeDesktop("open_source_task", { url: record.sourceUrl, tabId: tabId ?? null });
   } else {
     window.open(record.sourceUrl, "_blank", "noopener,noreferrer");
   }
@@ -136,9 +142,15 @@ export async function launchWrike(tabId: string, url?: string): Promise<void> {
   }
 }
 
-export async function resizeWrikeTabs(layouts?: WrikeTabLayout[]): Promise<void> {
+export async function resizeWrikeTabs(
+  layouts?: WrikeTabLayout[],
+  topInset?: number,
+): Promise<void> {
   if (desktopRuntime) {
-    await invokeDesktop("resize_wrike_tabs", { layouts: layouts ?? null });
+    await invokeDesktop("resize_wrike_tabs", {
+      layouts: layouts ?? null,
+      topInset: topInset ?? null,
+    });
   }
 }
 

@@ -74,6 +74,8 @@ struct Settings {
     open_downloaded_files_automatically: bool,
     #[serde(default = "default_true")]
     auto_check_for_updates: bool,
+    #[serde(default = "default_true")]
+    auto_match_wrike_theme: bool,
     #[serde(default = "default_theme")]
     theme: String,
     custom_dictionary: Vec<String>,
@@ -146,6 +148,7 @@ impl Default for Settings {
             confirm_before_closing_tabs: false,
             open_downloaded_files_automatically: false,
             auto_check_for_updates: true,
+            auto_match_wrike_theme: true,
             theme: "default".to_owned(),
             custom_dictionary: Vec::new(),
             startup_tab_urls: default_startup_tab_urls(),
@@ -190,6 +193,8 @@ enum WrikePane {
 #[derive(Default)]
 struct AppState {
     wrike_tabs: Mutex<HashMap<String, Arc<CaptureContext>>>,
+    detected_wrike_theme: Mutex<Option<String>>,
+    top_inset: Mutex<f64>,
     quit_prompt_open: AtomicBool,
 }
 
@@ -199,6 +204,7 @@ struct CaptureContext {
     pending: Mutex<HashMap<PathBuf, PendingDownload>>,
     page_title: Mutex<String>,
     page_url: Mutex<Option<String>>,
+    detected_theme: Mutex<Option<String>>,
     history: Mutex<NavigationHistory>,
     is_title_loading: Mutex<bool>,
 }
@@ -210,6 +216,7 @@ impl CaptureContext {
             pending: Mutex::new(HashMap::new()),
             page_title: Mutex::new(String::new()),
             page_url: Mutex::new(Some(url.to_owned())),
+            detected_theme: Mutex::new(None),
             history: Mutex::new(NavigationHistory::new(url)),
             is_title_loading: Mutex::new(true),
         }
@@ -414,10 +421,20 @@ fn update_settings(
     if settings.theme.trim().is_empty() {
         settings.theme = default_theme();
     }
+    let detected_theme = state
+        .detected_wrike_theme
+        .lock()
+        .ok()
+        .and_then(|theme| theme.clone());
     let (settings, previous) =
         persistence::update::<Settings, _>(&settings_path(&app)?, |stored| {
             let previous = stored.clone();
             settings.last_wrike_session = stored.last_wrike_session.clone();
+            if settings.auto_match_wrike_theme && !previous.auto_match_wrike_theme {
+                if let Some(detected) = detected_theme.as_ref() {
+                    settings.theme = detected.clone();
+                }
+            }
             if settings.open_abw_at_system_startup != startup::enabled()? {
                 startup::set_enabled(settings.open_abw_at_system_startup)?;
             }
@@ -439,6 +456,18 @@ fn update_settings(
                 webview
                     .eval(&script)
                     .map_err(|error| format!("Unable to apply spell-check preference: {error}"))?;
+            }
+        }
+    }
+    if settings.auto_match_wrike_theme && !previous.auto_match_wrike_theme {
+        let tab_ids = state
+            .wrike_tabs
+            .lock()
+            .map(|tabs| tabs.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for tab_id in tab_ids {
+            if let Some(webview) = app.get_webview(&wrike_tab_label(&tab_id)?) {
+                let _ = webview.eval("window.__abwDetectWrikeTheme?.(true);");
             }
         }
     }
@@ -467,6 +496,22 @@ fn send_test_notification(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn notify_update_available(app: AppHandle, version: String) -> Result<(), String> {
+    let clean_version = version.trim().trim_start_matches('v');
+    let body = if clean_version.is_empty() {
+        "A new version of ABW is ready to install.".to_owned()
+    } else {
+        format!("ABW v{clean_version} is ready to install. Open ABW to update.")
+    };
+    app.notification()
+        .builder()
+        .title("ABW update available")
+        .body(&body)
+        .show()
+        .map_err(|error| format!("Unable to display a Windows notification: {error}"))
+}
+
+#[tauri::command]
 async fn launch_wrike(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -487,7 +532,13 @@ fn resize_wrike_tabs(
     app: AppHandle,
     state: State<'_, AppState>,
     layouts: Option<Vec<WrikeTabLayout>>,
+    top_inset: Option<f64>,
 ) -> Result<(), String> {
+    if let Some(inset) = top_inset {
+        if let Ok(mut stored) = state.top_inset.lock() {
+            *stored = inset.max(0.0);
+        }
+    }
     if let Some(layouts) = layouts.filter(|layouts| !layouts.is_empty()) {
         for layout in layouts {
             if let Some(webview) = app.get_webview(&wrike_tab_label(&layout.tab_id)?) {
@@ -538,8 +589,12 @@ fn focus_wrike_tab(
         .map_err(|error| format!("Unable to display the Wrike workspace: {error}"))?;
     webview.set_focus().map_err(|error| error.to_string())?;
     if let Some(context) = find_wrike_context(state.inner(), &tab_id) {
+        if let Some(theme) = context.detected_theme.lock().ok().and_then(|t| t.clone()) {
+            let _ = sync_detected_wrike_theme(&app, state.inner(), &theme);
+        }
         emit_wrike_tab_update(&app, &context);
     }
+    let _ = webview.eval("window.__abwDetectWrikeTheme?.();");
     Ok(())
 }
 
@@ -548,6 +603,7 @@ async fn open_source_task(
     app: AppHandle,
     state: State<'_, AppState>,
     url: String,
+    tab_id: Option<String>,
 ) -> Result<(), String> {
     let parsed = Url::parse(&url).map_err(|_| "Invalid source task link.".to_owned())?;
     let allowed_host = parsed
@@ -556,7 +612,13 @@ async fn open_source_task(
     if parsed.scheme() != "https" || !allowed_host {
         return Err("Only HTTPS Wrike task links may be opened inside ABW.".into());
     }
-    open_wrike_at(&app, state.inner(), "home", parsed.as_str(), true)
+    let target_tab_id = tab_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .unwrap_or("home");
+    wrike_tab_label(target_tab_id)?;
+    open_wrike_at(&app, state.inner(), target_tab_id, parsed.as_str(), true)
 }
 
 #[tauri::command]
@@ -650,8 +712,12 @@ fn open_wrike_at(
             .map_err(|error| format!("Unable to display the Wrike workspace: {error}"))?;
         webview.set_focus().map_err(|error| error.to_string())?;
         if let Some(context) = find_wrike_context(state, tab_id) {
+            if let Some(theme) = context.detected_theme.lock().ok().and_then(|t| t.clone()) {
+                let _ = sync_detected_wrike_theme(app, state, &theme);
+            }
             emit_wrike_tab_update(app, &context);
         }
+        let _ = webview.eval("window.__abwDetectWrikeTheme?.();");
         return Ok(());
     }
 
@@ -684,6 +750,10 @@ fn open_wrike_at(
         .on_navigation(move |url| {
             if url.scheme() == "abw-dictionary" {
                 let _ = add_custom_dictionary_word(&navigation_app, url);
+                return false;
+            }
+            if url.scheme() == "abw-theme" {
+                let _ = apply_detected_wrike_theme(&navigation_app, &navigation_context, url);
                 return false;
             }
             let allowed = is_safe_remote_destination(url);
@@ -767,6 +837,7 @@ fn open_wrike_at(
                 if has_title {
                     set_title_loading(&load_context, false);
                 }
+                let _ = _webview.eval("window.__abwDetectWrikeTheme?.();");
             }
             emit_wrike_tab_update(&load_app, &load_context);
         })
@@ -808,7 +879,13 @@ fn wrike_content_geometry(
         .inner_size()
         .map_err(|error| error.to_string())?
         .to_logical::<f64>(scale);
-    let content_height = (host_size.height - TASKBAR_HEIGHT).max(1.0);
+    let top_inset = app
+        .try_state::<AppState>()
+        .and_then(|state| state.top_inset.lock().ok().map(|value| *value))
+        .unwrap_or(0.0)
+        .max(0.0);
+    let top_offset = TASKBAR_HEIGHT + top_inset;
+    let content_height = (host_size.height - top_offset).max(1.0);
     let half_width = (host_size.width / 2.0).max(1.0);
     let (x, width) = match pane {
         WrikePane::Full => (0.0, host_size.width),
@@ -816,7 +893,7 @@ fn wrike_content_geometry(
         WrikePane::Right => (half_width, (host_size.width - half_width).max(1.0)),
     };
     Ok((
-        LogicalPosition::new(x, TASKBAR_HEIGHT),
+        LogicalPosition::new(x, top_offset),
         LogicalSize::new(width, content_height),
     ))
 }
@@ -1267,6 +1344,80 @@ fn add_custom_dictionary_word(app: &AppHandle, url: &Url) -> Result<(), String> 
         .map_err(|error| format!("Unable to refresh settings: {error}"))
 }
 
+const VALID_APP_THEMES: &[&str] = &[
+    "default",
+    "midnight",
+    "aquamarine",
+    "blueberry-pie",
+    "blue-steel",
+    "imperial-purple",
+    "velvet-cosmos",
+    "cool-confetti",
+    "merlot",
+    "halloween",
+    "pumpkin-spice",
+    "woodland-grass",
+    "blue-skies",
+    "flamingo",
+    "cappuccino",
+    "winter-white",
+    "monochrome",
+    "winter-holiday",
+    "legendary-leopard",
+];
+
+fn normalize_detected_theme(value: &str) -> Option<&'static str> {
+    let trimmed = value.trim();
+    VALID_APP_THEMES
+        .iter()
+        .copied()
+        .find(|candidate| candidate.eq_ignore_ascii_case(trimmed))
+}
+
+fn sync_detected_wrike_theme(app: &AppHandle, state: &AppState, theme: &str) -> Result<(), String> {
+    let Some(normalized) = normalize_detected_theme(theme) else {
+        return Ok(());
+    };
+    if let Ok(mut latest) = state.detected_wrike_theme.lock() {
+        *latest = Some(normalized.to_owned());
+    }
+    let current = read_settings(app)?;
+    if !current.auto_match_wrike_theme || current.theme == normalized {
+        return Ok(());
+    }
+    let (settings, changed) =
+        persistence::update::<Settings, _>(&settings_path(app)?, |settings| {
+            if !settings.auto_match_wrike_theme || settings.theme == normalized {
+                return Ok(false);
+            }
+            settings.theme = normalized.to_owned();
+            settings.open_abw_at_system_startup = startup::enabled()?;
+            Ok(true)
+        })?;
+    if changed {
+        app.emit("settings-updated", settings)
+            .map_err(|error| format!("Unable to refresh settings: {error}"))?;
+    }
+    Ok(())
+}
+
+fn apply_detected_wrike_theme(
+    app: &AppHandle,
+    context: &CaptureContext,
+    url: &Url,
+) -> Result<(), String> {
+    let theme = url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "theme").then(|| value.into_owned()))
+        .and_then(|value| normalize_detected_theme(&value))
+        .ok_or_else(|| "No valid Wrike theme was provided.".to_owned())?;
+    if let Ok(mut detected) = context.detected_theme.lock() {
+        *detected = Some(theme.to_owned());
+    }
+    let state = app.state::<AppState>();
+    sync_detected_wrike_theme(app, state.inner(), theme)
+}
+
 #[cfg(target_os = "windows")]
 fn sync_windows_spelling_dictionary(old_words: &[String], new_words: &[String]) {
     let Some(app_data) = env::var_os("APPDATA") else {
@@ -1431,11 +1582,238 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
           const enabled = __ABW_SPELL_CHECK_ENABLED__;
           const abwAutoDownload = __ABW_AUTO_DOWNLOAD__;
           let abwSpellApplyTimer = 0;
+          let abwThemeDetectTimer = 0;
+          const abwWrikeThemeCatalog = [
+            { id: "default", rgb: [16, 29, 62], patterns: [/\bdark[\s_-]*blue\b/i] },
+            { id: "midnight", rgb: [22, 33, 54], patterns: [/\bmidnight\b/i] },
+            { id: "aquamarine", rgb: [0, 57, 64], patterns: [/\baquamarine\b/i] },
+            { id: "blueberry-pie", rgb: [25, 48, 100], patterns: [/\bblueberry(?:[\s_-]*pie)?\b/i] },
+            { id: "blue-steel", rgb: [40, 54, 82], patterns: [/\bblue[\s_-]*steel\b/i] },
+            { id: "imperial-purple", rgb: [52, 37, 113], patterns: [/\bimperial[\s_-]*purple\b/i] },
+            { id: "velvet-cosmos", rgb: [63, 13, 79], patterns: [/\bvelvet[\s_-]*cosmos\b/i] },
+            { id: "cool-confetti", rgb: [63, 13, 79], patterns: [/\bcool[\s_-]*confetti\b/i] },
+            { id: "merlot", rgb: [68, 2, 36], patterns: [/\bmerlot\b/i] },
+            { id: "halloween", rgb: [68, 2, 36], patterns: [/\bhalloween\b/i] },
+            { id: "pumpkin-spice", rgb: [121, 0, 0], patterns: [/\bpumpkin[\s_-]*spice\b/i] },
+            { id: "woodland-grass", rgb: [3, 38, 0], patterns: [/\bwoodland[\s_-]*grass\b/i] },
+            { id: "blue-skies", rgb: [215, 234, 255], patterns: [/\bblue[\s_-]*skies\b/i] },
+            { id: "flamingo", rgb: [255, 223, 247], patterns: [/\bflamingo\b/i] },
+            { id: "cappuccino", rgb: [237, 231, 229], patterns: [/\bcappuccino\b/i] },
+            { id: "winter-white", rgb: [232, 232, 232], patterns: [/\bwinter[\s_-]*white\b/i] },
+            { id: "monochrome", rgb: [232, 232, 232], patterns: [/\bmonochrome\b/i] },
+            { id: "winter-holiday", rgb: [255, 254, 255], patterns: [/\bwinter[\s_-]*holiday\b/i] },
+            { id: "legendary-leopard", rgb: [40, 54, 82], patterns: [/\blegendary[\s_-]*leopard\b/i] }
+          ];
+          const abwParseCssColor = (value) => {
+            const text = String(value || "").trim();
+            if (!text || text === "transparent" || text === "none") return null;
+            const rgbMatch = text.match(
+              /rgba?\(\s*(\d{1,3})[\s,]+(\d{1,3})[\s,]+(\d{1,3})(?:[\s,/]+([0-9.]+%?))?\s*\)/i
+            );
+            if (rgbMatch) {
+              let alpha = 1;
+              if (rgbMatch[4] !== undefined) {
+                alpha = rgbMatch[4].endsWith("%")
+                  ? parseFloat(rgbMatch[4]) / 100
+                  : parseFloat(rgbMatch[4]);
+              }
+              if (!(alpha >= 0.82)) return null;
+              return {
+                r: Number(rgbMatch[1]),
+                g: Number(rgbMatch[2]),
+                b: Number(rgbMatch[3]),
+                a: alpha
+              };
+            }
+            const hexMatch = text.match(/#([0-9a-f]{3,8})\b/i);
+            if (hexMatch) {
+              const raw = hexMatch[1];
+              if (raw.length === 3) {
+                return {
+                  r: parseInt(raw[0] + raw[0], 16),
+                  g: parseInt(raw[1] + raw[1], 16),
+                  b: parseInt(raw[2] + raw[2], 16),
+                  a: 1
+                };
+              }
+              if (raw.length === 6 || raw.length === 8) {
+                const alpha = raw.length === 8 ? parseInt(raw.slice(6, 8), 16) / 255 : 1;
+                if (!(alpha >= 0.82)) return null;
+                return {
+                  r: parseInt(raw.slice(0, 2), 16),
+                  g: parseInt(raw.slice(2, 4), 16),
+                  b: parseInt(raw.slice(4, 6), 16),
+                  a: alpha
+                };
+              }
+            }
+            return null;
+          };
+          const abwExtractCssColors = (value) => {
+            const text = String(value || "");
+            if (!text || text === "none" || text === "transparent") return [];
+            const tokens =
+              text.match(/rgba?\([^)]+\)|#[0-9a-f]{3,8}\b/gi) || [text];
+            return tokens.map(abwParseCssColor).filter(Boolean);
+          };
+          const abwMatchWrikeThemeText = (value) => {
+            const text = String(value || "");
+            if (!text) return null;
+            for (const entry of abwWrikeThemeCatalog) {
+              if (entry.patterns.some((pattern) => pattern.test(text))) {
+                return entry.id;
+              }
+            }
+            return null;
+          };
+          const abwMatchWrikeThemeColor = (rgb, allowPureWhite = true) => {
+            if (!rgb) return null;
+            if (!allowPureWhite && rgb.r >= 253 && rgb.g >= 253 && rgb.b >= 253) {
+              return null;
+            }
+            let bestId = null;
+            let bestDistance = Infinity;
+            for (const entry of abwWrikeThemeCatalog) {
+              const dr = rgb.r - entry.rgb[0];
+              const dg = rgb.g - entry.rgb[1];
+              const db = rgb.b - entry.rgb[2];
+              const distance = Math.hypot(dr, dg, db);
+              if (distance < bestDistance) {
+                bestDistance = distance;
+                bestId = entry.id;
+              }
+            }
+            return bestDistance <= 42 ? bestId : null;
+          };
+          const abwElementIdentityText = (element) => {
+            if (!(element instanceof Element)) return "";
+            const parts = [element.className, element.id];
+            if (element.attributes) {
+              for (let index = 0; index < element.attributes.length; index += 1) {
+                const attr = element.attributes[index];
+                if (attr && /theme|skin|palette|appearance|background/i.test(attr.name)) {
+                  parts.push(`${attr.name}=${attr.value}`);
+                }
+              }
+            }
+            return parts.filter(Boolean).join(" ");
+          };
+          const abwDetectWrikeThemeFromDom = () => {
+            if (!document.body) return null;
+            for (const root of [document.documentElement, document.body]) {
+              const directMatch = abwMatchWrikeThemeText(abwElementIdentityText(root));
+              if (directMatch) return directMatch;
+            }
+            const samplePoints = [
+              [14, 96],
+              [18, 160],
+              [24, 240],
+              [28, 340],
+              [18, 440],
+              [72, 120]
+            ];
+            const candidates = [];
+            const seen = new Set();
+            const addCandidate = (element) => {
+              if (!(element instanceof Element) || seen.has(element)) return;
+              seen.add(element);
+              candidates.push(element);
+            };
+            for (const [x, y] of samplePoints) {
+              const stack =
+                document.elementsFromPoint?.(x, y) ||
+                [document.elementFromPoint?.(x, y)].filter(Boolean);
+              for (const node of stack) {
+                for (
+                  let current = node;
+                  current && current instanceof Element;
+                  current = current.parentElement
+                ) {
+                  addCandidate(current);
+                }
+              }
+            }
+            document
+              .querySelectorAll(
+                'aside, nav, [role="navigation"], [class*="sidebar" i], [class*="navigation" i], [class*="left-panel" i], [class*="workspace" i], [data-theme]'
+              )
+              .forEach(addCandidate);
+            addCandidate(document.body);
+            addCandidate(document.documentElement);
+
+            const sidebarCandidates = [];
+            const layoutCandidates = [];
+            for (const element of candidates) {
+              if (element.closest?.('[role="dialog"], [aria-modal="true"]')) {
+                continue;
+              }
+              const byText = abwMatchWrikeThemeText(abwElementIdentityText(element));
+              if (byText) return byText;
+              const rect = element.getBoundingClientRect?.();
+              if (!rect || rect.width < 28 || rect.height < 110 || rect.left > 32) {
+                continue;
+              }
+              if (rect.width <= 380) {
+                sidebarCandidates.push(element);
+              } else {
+                layoutCandidates.push(element);
+              }
+            }
+
+            const matchFromElements = (elements, allowPureWhite) => {
+              for (const element of elements) {
+                const style = window.getComputedStyle(element);
+                if (style.visibility === "hidden" || style.display === "none") continue;
+                const colors = [
+                  ...abwExtractCssColors(style.backgroundColor),
+                  ...abwExtractCssColors(style.backgroundImage)
+                ];
+                for (const color of colors) {
+                  const matched = abwMatchWrikeThemeColor(color, allowPureWhite);
+                  if (matched) return matched;
+                }
+              }
+              return null;
+            };
+
+            return (
+              matchFromElements(sidebarCandidates, true) ||
+              matchFromElements(layoutCandidates, false)
+            );
+          };
+          const abwReportWrikeTheme = (force = false) => {
+            if (abwAutoDownload) return null;
+            const detected = abwDetectWrikeThemeFromDom();
+            if (!detected) return null;
+            if (!force && window.__abwLastDetectedWrikeTheme === detected) {
+              return detected;
+            }
+            if (document.readyState && document.readyState !== "complete") {
+              window.addEventListener(
+                "load",
+                () => abwReportWrikeTheme(true),
+                { once: true }
+              );
+              return detected;
+            }
+            window.__abwLastDetectedWrikeTheme = detected;
+            window.location.href = `abw-theme://detected?theme=${encodeURIComponent(detected)}`;
+            return detected;
+          };
+          const abwScheduleThemeDetect = (delay = 180) => {
+            if (abwAutoDownload || abwThemeDetectTimer) return;
+            abwThemeDetectTimer = window.setTimeout(() => {
+              abwThemeDetectTimer = 0;
+              abwReportWrikeTheme(false);
+            }, delay);
+          };
+          window.__abwDetectWrikeTheme = (force = false) => abwReportWrikeTheme(Boolean(force));
           const apply = () => {
             document.querySelectorAll('textarea, input[type="text"], [contenteditable="true"], [role="textbox"]')
               .forEach((element) => {
                 if (element.spellcheck !== enabled) element.spellcheck = enabled;
               });
+            abwScheduleThemeDetect(150);
           };
           const scheduleApply = () => {
             if (abwSpellApplyTimer) return;
@@ -1659,6 +2037,7 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
             }, 250);
           };
           const abwKeepDownloadsInWebview = (event) => {
+            abwScheduleThemeDetect(220);
             const target = event.target instanceof Element ? event.target : null;
             const control = target?.closest?.('a, button, [role="button"], [role="link"]');
             if (!control) return;
@@ -1698,10 +2077,24 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
           const start = () => {
             apply();
             const observer = new MutationObserver(scheduleApply);
-            observer.observe(document.body, { childList: true, subtree: true });
+            observer.observe(document.body, {
+              childList: true,
+              subtree: true
+            });
+            const themeObserver = new MutationObserver(() => abwScheduleThemeDetect(150));
+            const themeObserverOptions = {
+              attributes: true,
+              attributeFilter: ["class", "style", "data-theme"]
+            };
+            if (document.documentElement) {
+              themeObserver.observe(document.documentElement, themeObserverOptions);
+            }
+            themeObserver.observe(document.body, themeObserverOptions);
             window.__abwSpellCleanup = () => {
               window.clearTimeout(abwSpellApplyTimer);
+              window.clearTimeout(abwThemeDetectTimer);
               observer.disconnect();
+              themeObserver.disconnect();
             };
             if (!window.__abwContextMenuGuard) {
               document.addEventListener('contextmenu', keepWrikeEditorToolsVisible, true);
@@ -1712,6 +2105,8 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> String {
               abwPatchWindowOpen();
               window.__abwDownloadBridge = true;
             }
+            window.addEventListener("load", () => abwScheduleThemeDetect(120), { once: true });
+            abwScheduleThemeDetect(350);
             if (abwAutoDownload) {
               window.setTimeout(() => {
                 const pageIdentity = `${document.title} ${window.location.href}`;
@@ -1779,6 +2174,7 @@ pub fn run() {
             updater::install_update,
             launch_wrike,
             list_downloads,
+            notify_update_available,
             open_download,
             open_source_task,
             preview_spreadsheet,

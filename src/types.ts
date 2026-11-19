@@ -23,6 +23,7 @@ export interface Settings {
   confirmBeforeClosingTabs: boolean;
   openDownloadedFilesAutomatically: boolean;
   autoCheckForUpdates: boolean;
+  autoMatchWrikeTheme: boolean;
   theme: AppThemeId;
   customDictionary: string[];
   startupTabUrls: string[];
@@ -91,10 +92,19 @@ export interface WrikeSession {
   savedAt: string;
 }
 
+export interface WorkbookImage {
+  dataUrl: string;
+  leftPx: number;
+  topPx: number;
+  widthPx: number;
+  heightPx: number;
+}
+
 export interface WorkbookSheet {
   name: string;
   columns: WorkbookColumn[];
   rows: WorkbookRow[];
+  images?: WorkbookImage[];
 }
 
 export interface WorkbookColumn {
