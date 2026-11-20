@@ -1,6 +1,6 @@
 .files-screen {
   display: grid;
-  grid-template-columns: minmax(340px, var(--files-split-percent, 45%)) 6px minmax(360px, 1fr);
+  grid-template-columns: minmax(340px, var(--files-split-percent, 45%)) 18px minmax(360px, 1fr);
   height: 100%;
 }
 
@@ -17,7 +17,8 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 2px;
+  left: 50%;
+  transform: translateX(-50%);
   width: 2px;
   border-radius: 999px;
   background: transparent;
@@ -117,13 +118,49 @@
 .list-labels {
   padding: 0 29px 12px;
   display: grid;
-  grid-template-columns: minmax(140px, 1.35fr) minmax(110px, 1fr) 84px 98px;
+  grid-template-columns: var(--files-cols, minmax(140px, 1.35fr) minmax(110px, 1fr) 84px 98px);
   gap: 12px;
   color: #8794a9;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  user-select: none;
+}
+
+.list-label-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.col-resizer {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  right: -9px;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.col-resizer::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  border-radius: 999px;
+  background: transparent;
+  transition: background 140ms ease;
+}
+
+.col-resizer:hover::after,
+.col-resizer.dragging::after {
+  background: var(--accent);
 }
 
 .file-list {
@@ -135,7 +172,7 @@
 .file-row {
   display: grid;
   align-items: center;
-  grid-template-columns: minmax(140px, 1.35fr) minmax(110px, 1fr) 84px 98px;
+  grid-template-columns: var(--files-cols, minmax(140px, 1.35fr) minmax(110px, 1fr) 84px 98px);
   gap: 12px;
   width: 100%;
   min-height: 72px;

@@ -671,6 +671,46 @@
   };
   const abwResolveLinkUrl = (target) => {
     if (!(target instanceof Element)) return null;
+    const currentAcc = (() => {
+      try {
+        return new URLSearchParams(window.location.search).get("acc") || "";
+      } catch {
+        return "";
+      }
+    })();
+    const toTaskUrl = (rawId) => {
+      if (!rawId || rawId === currentAcc) return null;
+      return `${window.location.origin}/open.htm?id=${rawId}`;
+    };
+    const extractIdFromValue = (val) => {
+      if (typeof val === "number" && Number.isInteger(val)) {
+        const s = String(val);
+        return s.length >= 7 && s.length <= 12 && s !== currentAcc ? s : null;
+      }
+      if (typeof val === "string") {
+        const match = val.match(/(?:^|\D)(\d{7,12})(?:\D|$)/);
+        if (match && match[1] !== currentAcc) return match[1];
+      }
+      return null;
+    };
+    const extractIdFromObject = (obj, depth = 0) => {
+      if (!obj || typeof obj !== "object" || depth > 2) return null;
+      const directKeys = ["taskId", "itemId", "entityId", "workItemId", "recordId", "rowId", "id"];
+      for (const k of directKeys) {
+        if (k in obj) {
+          const found = extractIdFromValue(obj[k]);
+          if (found) return found;
+        }
+      }
+      const nestedKeys = ["task", "item", "entity", "record", "row", "data", "node", "model"];
+      for (const k of nestedKeys) {
+        if (obj[k] && typeof obj[k] === "object") {
+          const found = extractIdFromObject(obj[k], depth + 1);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
     const resolveRawUrl = (raw) => {
       if (!raw || raw.startsWith("javascript:") || raw === "#") return null;
       try {
@@ -691,7 +731,7 @@
       );
       if (resolved) return resolved;
     }
-    for (let current = target, depth = 0; current && current instanceof Element && depth < 8; current = current.parentElement, depth += 1) {
+    for (let current = target, depth = 0; current && current instanceof Element && depth < 14; current = current.parentElement, depth += 1) {
       if (current === document.body || current === document.documentElement) break;
       const nestedLink = current.querySelector?.("a[href]");
       if (nestedLink) {
@@ -709,14 +749,35 @@
           if (!val) continue;
           const urlMatch = val.match(/https?:\/\/[^\s"'<>]+wrike\.com\/(?:open|workspace)\.htm[^\s"'<>]*/i);
           if (urlMatch) return urlMatch[0];
-          if (/^(?:data-.*id|id)$/i.test(attr.name)) {
-            const idMatch = val.match(/(?:^|\D)(\d{7,11})(?:\D|$)/);
-            if (idMatch) {
-              return `${window.location.origin}/open.htm?id=${idMatch[1]}`;
-            }
+          if (/(?:id|task|item|entity|row|key)/i.test(attr.name)) {
+            const id = extractIdFromValue(val);
+            if (id) return toTaskUrl(id);
           }
         }
       }
+      try {
+        const ownKeys = Object.keys(current);
+        for (let i = 0; i < ownKeys.length; i += 1) {
+          const key = ownKeys[i];
+          if (key.startsWith("__reactProps$") || key.startsWith("__reactFiber$")) {
+            const props = current[key];
+            const found = extractIdFromObject(props) || extractIdFromObject(props?.memoizedProps);
+            if (found) return toTaskUrl(found);
+          } else if (key === "__ngContext__" && Array.isArray(current[key])) {
+            const ctx = current[key];
+            for (let j = 0; j < Math.min(ctx.length, 32); j += 1) {
+              const entry = ctx[j];
+              if (entry && typeof entry === "object" && !(entry instanceof Node)) {
+                const found = extractIdFromObject(entry, 1);
+                if (found) return toTaskUrl(found);
+              }
+            }
+          } else if (/^(?:taskId|itemId|entityId|recordId|rowId)$/i.test(key)) {
+            const found = extractIdFromValue(current[key]);
+            if (found) return toTaskUrl(found);
+          }
+        }
+      } catch {}
     }
     return null;
   };
@@ -1103,34 +1164,60 @@
       /open(?:\.htm|-in-app)/i.test(window.location.pathname) ||
       /opening a link in wrike/i.test(document.title || "") ||
       /opening a link in wrike app/i.test(document.body?.innerText || "");
+    let openHtmHandled = false;
     const clickBrowserLink = () => {
-      if (!isWrikeOpenInterstitial()) return false;
-      const candidates = Array.from(document.querySelectorAll('a, button, [role="link"], span'));
+      if (openHtmHandled || !isWrikeOpenInterstitial()) return false;
+      const candidates = Array.from(document.querySelectorAll('a[href], button, [role="link"]'));
       const browserLink = candidates.find((el) => {
         const href = (el.getAttribute?.("href") || "").toLowerCase();
         const text = (el.textContent || "").trim().toLowerCase();
+        if (text.includes("download wrike app") || text.includes("apps & integrations")) return false;
         return (
-          href.includes("workspace.htm") ||
           text.includes("open this link in your browser") ||
-          text.includes("in your browser")
+          text.includes("in your browser") ||
+          href.includes("workspace.htm") ||
+          href.includes("forceweb") ||
+          href.includes("openinbrowser")
         );
       });
       if (browserLink) {
-        const href = browserLink.getAttribute?.("href");
-        if (href && /^https?:\/\//i.test(href)) {
-          window.location.replace(href);
-        } else {
-          browserLink.click();
+        openHtmHandled = true;
+        const rawHref = (browserLink.getAttribute?.("href") || "").trim();
+        if (rawHref && !rawHref.startsWith("javascript:") && rawHref !== "#") {
+          try {
+            const resolved = new URL(rawHref, window.location.href);
+            if (resolved.protocol === "https:" || resolved.protocol === "http:") {
+              window.location.replace(resolved.href);
+              return true;
+            }
+          } catch {}
         }
+        browserLink.click();
         return true;
       }
       return false;
     };
+    let openHtmObserver = null;
     if (!clickBrowserLink()) {
+      openHtmObserver = new MutationObserver(() => {
+        if (clickBrowserLink()) {
+          openHtmObserver?.disconnect();
+          openHtmObserver = null;
+        }
+      });
+      openHtmObserver.observe(document.documentElement, { childList: true, subtree: true });
       const openHtmTimer = window.setInterval(() => {
-        if (clickBrowserLink()) window.clearInterval(openHtmTimer);
+        if (clickBrowserLink()) {
+          window.clearInterval(openHtmTimer);
+          openHtmObserver?.disconnect();
+          openHtmObserver = null;
+        }
       }, 100);
-      window.setTimeout(() => window.clearInterval(openHtmTimer), 6000);
+      window.setTimeout(() => {
+        window.clearInterval(openHtmTimer);
+        openHtmObserver?.disconnect();
+        openHtmObserver = null;
+      }, 6000);
     }
     const prevCleanup = window.__abwSpellCleanup;
     window.__abwSpellCleanup = () => {

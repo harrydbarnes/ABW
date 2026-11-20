@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef, type KeyboardEvent } from "react";
+import { memo, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { DownloadRecord, FileFilter } from "../../types";
 
 interface Props {
@@ -14,6 +14,40 @@ interface Props {
   pinnedIds: string[];
   search: string;
   selectedId: string | null;
+}
+
+interface FilesColumnWidths {
+  file: number;
+  source: number;
+  date: number;
+}
+
+const DEFAULT_COL_WIDTHS: FilesColumnWidths = {
+  file: 185,
+  source: 135,
+  date: 84,
+};
+
+function loadColumnWidths(): FilesColumnWidths | null {
+  try {
+    const raw = window.localStorage.getItem("abw.filesColWidths");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<FilesColumnWidths>;
+    if (
+      typeof parsed.file === "number" &&
+      typeof parsed.source === "number" &&
+      typeof parsed.date === "number"
+    ) {
+      return {
+        file: Math.max(110, Math.min(480, parsed.file)),
+        source: Math.max(90, Math.min(360, parsed.source)),
+        date: Math.max(68, Math.min(170, parsed.date)),
+      };
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return null;
 }
 
 const filters: Array<{ id: FileFilter; label: string }> = [
@@ -42,7 +76,54 @@ export const FilesLibrary = memo(function FilesLibrary({
   const pinned = useMemo(() => new Set(pinnedIds), [pinnedIds]);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const labelsRef = useRef<HTMLDivElement>(null);
   const todayString = useMemo(() => new Date().toDateString(), [downloads]);
+  const [colWidths, setColWidths] = useState<FilesColumnWidths | null>(() => loadColumnWidths());
+  const [draggingCol, setDraggingCol] = useState<keyof FilesColumnWidths | null>(null);
+
+  const filesColsStyle = useMemo<CSSProperties | undefined>(() => {
+    if (!colWidths) return undefined;
+    return {
+      "--files-cols": `minmax(${colWidths.file}px, 1fr) ${colWidths.source}px ${colWidths.date}px 98px`,
+    } as CSSProperties;
+  }, [colWidths]);
+
+  function startColumnResize(col: keyof FilesColumnWidths, clientX: number) {
+    const labelCells = labelsRef.current?.querySelectorAll<HTMLElement>(".list-label-cell");
+    const initial: FilesColumnWidths = colWidths ?? {
+      file: labelCells?.[0]?.getBoundingClientRect().width ?? DEFAULT_COL_WIDTHS.file,
+      source: labelCells?.[1]?.getBoundingClientRect().width ?? DEFAULT_COL_WIDTHS.source,
+      date: labelCells?.[2]?.getBoundingClientRect().width ?? DEFAULT_COL_WIDTHS.date,
+    };
+    const startX = clientX;
+    setDraggingCol(col);
+    const limits: Record<keyof FilesColumnWidths, [number, number]> = {
+      file: [110, 480],
+      source: [90, 360],
+      date: [68, 170],
+    };
+    const [minW, maxW] = limits[col];
+    const onMove = (event: PointerEvent) => {
+      const delta = event.clientX - startX;
+      const next: FilesColumnWidths = {
+        ...initial,
+        [col]: Math.round(Math.max(minW, Math.min(maxW, initial[col] + delta))),
+      };
+      setColWidths(next);
+      try {
+        window.localStorage.setItem("abw.filesColWidths", JSON.stringify(next));
+      } catch {
+        // ignore storage errors
+      }
+    };
+    const onUp = () => {
+      setDraggingCol(null);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
 
   function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
     if (event.nativeEvent.isComposing) {
@@ -106,6 +187,7 @@ export const FilesLibrary = memo(function FilesLibrary({
       className="files-library"
       aria-label="Downloaded files"
       onKeyDown={handleKeyDown}
+      style={filesColsStyle}
     >
       <header className="library-header">
         <div>
@@ -138,10 +220,43 @@ export const FilesLibrary = memo(function FilesLibrary({
           </button>
         ))}
       </div>
-      <div className="list-labels" aria-hidden="true">
-        <span>File</span>
-        <span>Source task</span>
-        <span>Downloaded</span>
+      <div className="list-labels" ref={labelsRef}>
+        <span className="list-label-cell">
+          File
+          <span
+            aria-label="Resize File column"
+            className={`col-resizer ${draggingCol === "file" ? "dragging" : ""}`}
+            onPointerDown={(event) => {
+              event.preventDefault();
+              startColumnResize("file", event.clientX);
+            }}
+            role="separator"
+          />
+        </span>
+        <span className="list-label-cell">
+          Source task
+          <span
+            aria-label="Resize Source task column"
+            className={`col-resizer ${draggingCol === "source" ? "dragging" : ""}`}
+            onPointerDown={(event) => {
+              event.preventDefault();
+              startColumnResize("source", event.clientX);
+            }}
+            role="separator"
+          />
+        </span>
+        <span className="list-label-cell">
+          Downloaded
+          <span
+            aria-label="Resize Downloaded column"
+            className={`col-resizer ${draggingCol === "date" ? "dragging" : ""}`}
+            onPointerDown={(event) => {
+              event.preventDefault();
+              startColumnResize("date", event.clientX);
+            }}
+            role="separator"
+          />
+        </span>
         <span />
       </div>
       <div className="file-list" ref={listRef} role="list">
