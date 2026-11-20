@@ -11,14 +11,14 @@ Internal engineering notes for coding agents working on ABW (a Tauri 2 + React/V
   - `src/features/preview/SpreadsheetPreview.tsx`: Renders native `WorkbookPreview` data with memoized `SheetRow`s, per-sheet scroll restoration, in-sheet search, cell selection (`Ctrl+C` copy), and zoom.
   - `src/features/preview/previewCache.ts` & `src/features/preview/previewUtils.ts`: In-memory LRU caches (16 MB PDF head cache, 24 MB / 6-entry spreadsheet cache) and pure scale/eviction/formatting helpers.
 - **Native Backend (`src-tauri/src/`)**:
-  - `lib.rs`: Tauri app lifecycle, multi-tab child webviews, injected Wrike spell-check/dictionary/download-capture/shortcut script, `AppState.tracked_paths` canonical path cache (`open_tracked_file` avoids re-parsing `files.json` & re-canonicalizing on every 64 KB PDF range read), and atomic persistence calls.
+  - `lib.rs` & `wrike-injected.js`: Tauri app lifecycle, multi-tab child webviews, injected Wrike spell-check/dictionary/download-capture/shortcut/corner-curve script (`wrike-injected.js` included via `include_str!`), `AppState.tracked_paths` canonical path cache (`open_tracked_file` avoids re-parsing `files.json` & re-canonicalizing on every 64 KB PDF range read), and atomic persistence calls.
   - `spreadsheet.rs`: Native workbook preview engine. Streams OOXML (`.xlsx`/`.xlsm`) via `zip` + `quick-xml` with `<rPh>`/`<extLst>` skipping, theme/indexed color resolution, number/date formatting, and merges; includes a streaming RFC-4180 parser for `.csv`/`.tsv`; falls back to `calamine` for `.xls`/`.xlsb`/`.ods`. Enforces row/column/ZIP-ratio budgets.
   - `persistence.rs`, `close_policy.rs`, `startup.rs`, `updater.rs`: Atomic JSON persistence with `.bak` recovery, tray/quit close policy, Windows startup registry integration, and GitHub release updater.
 
 ## Non-Obvious Constraints & Invariants
 
 1. **Preserve internal-tool download ergonomics**: Do not restrict automatic download opening or `Open in Windows` fallback unless explicitly requested by the user. Keep preview resource budgets (`MAX_PDF_PREVIEW_BYTES`, `MAX_SPREADSHEET_*`, ZIP compression ratio checks) intact, with `Open in Windows` available for oversized/unsupported files.
-2. **Preserve `lib.rs` test markers**: `scripts/desktop-regressions.test.mjs` slices helper functions directly out of `src-tauri/src/lib.rs` using string markers (such as `const selectedWord = () => {`, `const nearestTextWord =`, `const abwSupportedFileName =`, and `abwLooksLikeDownloadUrl`). Keep those markers intact or update the regression test alongside any rename.
+2. **Preserve `wrike-injected.js` test markers**: `scripts/desktop-regressions.test.mjs` slices helper functions directly out of `src-tauri/src/wrike-injected.js` using string markers (such as `const selectedWord = () => {`, `const nearestTextWord =`, `const abwSupportedFileName =`, and `abwLooksLikeDownloadUrl`). Keep those markers intact or update the regression test alongside any rename.
 3. **Version synchronization**: `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` must share the exact same version (`npm run release:check`).
 4. **CI path filtering**: `.github/workflows/windows-installer.yml` ignores `**/*.md` and `docs/**`, so updating `AGENTS.md` will not trigger Windows installer builds.
 

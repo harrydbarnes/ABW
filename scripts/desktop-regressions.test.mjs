@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { execFileSync } from 'node:child_process';
 
-const source = readFileSync(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../src-tauri/src/wrike-injected.js', import.meta.url), 'utf8');
 const start = source.indexOf('const selectedWord = () => {');
 const end = source.indexOf('const nearestTextWord =', start);
 assert.ok(start >= 0 && end > start, 'Dictionary helpers must exist in the injected script');
