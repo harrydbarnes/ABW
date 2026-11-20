@@ -418,20 +418,41 @@
   };
   const abwSchemeQueue = [];
   let abwSchemeDrainTimer = 0;
+  let abwSchemeLoadHooked = false;
   const abwEmitScheme = (url) => {
     if (!url) return;
     abwSchemeQueue.push(url);
-    if (abwSchemeDrainTimer) return;
-    const drain = () => {
-      const next = abwSchemeQueue.shift();
-      if (!next) {
-        abwSchemeDrainTimer = 0;
-        return;
+    if (document.readyState && document.readyState !== "complete") {
+      if (!abwSchemeLoadHooked) {
+        abwSchemeLoadHooked = true;
+        window.addEventListener(
+          "load",
+          () => {
+            abwSchemeLoadHooked = false;
+            if (!abwSchemeDrainTimer && abwSchemeQueue.length) {
+              abwSchemeDrainTimer = window.setTimeout(drainSchemeQueue, 120);
+            }
+          },
+          { once: true }
+        );
       }
-      window.location.href = next;
-      abwSchemeDrainTimer = window.setTimeout(drain, 75);
-    };
-    abwSchemeDrainTimer = window.setTimeout(drain, 15);
+      return;
+    }
+    if (abwSchemeDrainTimer) return;
+    abwSchemeDrainTimer = window.setTimeout(drainSchemeQueue, 25);
+  };
+  const drainSchemeQueue = () => {
+    if (document.readyState && document.readyState !== "complete") {
+      abwSchemeDrainTimer = 0;
+      return;
+    }
+    const next = abwSchemeQueue.shift();
+    if (!next) {
+      abwSchemeDrainTimer = 0;
+      return;
+    }
+    window.location.href = next;
+    abwSchemeDrainTimer = window.setTimeout(drainSchemeQueue, 75);
   };
   const abwDetectWrikeInboxUnread = () => {
     if (abwAutoDownload || !document.body) return false;
@@ -504,27 +525,33 @@
   const abwReportWrikeTheme = (force = false) => {
     if (abwAutoDownload) return null;
     abwSyncWrikeContentCorner();
-    const activeTaskTitle = abwDetectActiveTaskTitle();
-    if (window.__abwLastActiveTaskTitle !== activeTaskTitle) {
-      window.__abwLastActiveTaskTitle = activeTaskTitle;
-      abwEmitScheme(`abw-task://active?title=${encodeURIComponent(activeTaskTitle)}`);
-    }
-    const hasUnread = abwDetectWrikeInboxUnread();
-    if (window.__abwLastInboxUnread !== hasUnread) {
-      window.__abwLastInboxUnread = hasUnread;
-      abwEmitScheme(`abw-inbox://unread?hasUnread=${hasUnread ? "true" : "false"}`);
-    }
-    const detected = abwDetectWrikeThemeFromDom();
-    if (!detected) return null;
-    if (!force && window.__abwLastDetectedWrikeTheme === detected) {
-      return detected;
-    }
     if (document.readyState && document.readyState !== "complete") {
       window.addEventListener(
         "load",
         () => abwReportWrikeTheme(true),
         { once: true }
       );
+      return null;
+    }
+    const activeTaskTitle = abwDetectActiveTaskTitle();
+    if (window.__abwLastActiveTaskTitle !== activeTaskTitle) {
+      const wasUnset = typeof window.__abwLastActiveTaskTitle === "undefined";
+      window.__abwLastActiveTaskTitle = activeTaskTitle;
+      if (!wasUnset || activeTaskTitle) {
+        abwEmitScheme(`abw-task://active?title=${encodeURIComponent(activeTaskTitle)}`);
+      }
+    }
+    const hasUnread = abwDetectWrikeInboxUnread();
+    if (window.__abwLastInboxUnread !== hasUnread) {
+      const wasUnset = typeof window.__abwLastInboxUnread === "undefined";
+      window.__abwLastInboxUnread = hasUnread;
+      if (!wasUnset || hasUnread) {
+        abwEmitScheme(`abw-inbox://unread?hasUnread=${hasUnread ? "true" : "false"}`);
+      }
+    }
+    const detected = abwDetectWrikeThemeFromDom();
+    if (!detected) return null;
+    if (!force && window.__abwLastDetectedWrikeTheme === detected) {
       return detected;
     }
     window.__abwLastDetectedWrikeTheme = detected;
