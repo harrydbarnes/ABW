@@ -1,12 +1,21 @@
-import { useState, type ReactNode } from "react";
-import { APP_THEMES, type AppThemeId, type AppUpdateState, type Settings } from "../../types";
+import { memo, useState, type ReactNode } from "react";
+import {
+  APP_THEMES,
+  type AppThemeId,
+  type AppUpdateState,
+  type DownloadsStorageStats,
+  type Settings,
+} from "../../types";
 
 interface Props {
   appVersion: string;
+  clearingDownloads: boolean;
+  downloadsStats: DownloadsStorageStats | null;
   settings: Settings;
   updateState: AppUpdateState;
   onChange: (next: Settings) => void;
   onCheckForUpdates: () => void;
+  onClearUnpinnedDownloads: () => void;
   onInstallUpdate: () => void;
   onResetApp: () => void;
   onTestNotification: () => void;
@@ -61,12 +70,15 @@ function AnimatedSettingItem({
   );
 }
 
-export function SettingsPanel({
+export const SettingsPanel = memo(function SettingsPanel({
   appVersion,
+  clearingDownloads,
+  downloadsStats,
   settings,
   updateState,
   onChange,
   onCheckForUpdates,
+  onClearUnpinnedDownloads,
   onInstallUpdate,
   onResetApp,
   onTestNotification,
@@ -108,6 +120,11 @@ export function SettingsPanel({
     "Open external links in default browser",
     "Open non-Wrike links in your default Windows browser instead of opening them inside ABW.",
   );
+  const showSuspendInactiveTabs = matchesSearch(
+    query,
+    "Suspend inactive background tabs",
+    "Close hidden Wrike tabs after inactivity to reclaim WebView2 memory. Clicking a suspended tab reloads it where you left off.",
+  );
   const showStartupTabs = matchesSearch(
     query,
     "Startup and new tabs",
@@ -126,6 +143,7 @@ export function SettingsPanel({
     showCloseToTray ||
     showConfirmClose ||
     showExternalLinks ||
+    showSuspendInactiveTabs ||
     showStartupTabs;
 
   const showDownloadNotifications = matchesSearch(
@@ -144,6 +162,12 @@ export function SettingsPanel({
     "Comments, mentions and assignments use Wrike notifications in the live workspace tab. Keep it open and enable notifications when Wrike prompts you.",
     "Send test notification",
   );
+  const showDownloadsCleanup = matchesSearch(
+    query,
+    "Downloads storage",
+    "Clean up unpinned downloads",
+    "Pinned files are kept during cleanup.",
+  );
   const showFileManagementHeader = matchesSearch(
     query,
     "File management",
@@ -153,7 +177,8 @@ export function SettingsPanel({
     showFileManagementHeader ||
     showDownloadNotifications ||
     showOpenDownloaded ||
-    showWrikeNotifications;
+    showWrikeNotifications ||
+    showDownloadsCleanup;
 
   const showThemeSection = matchesSearch(
     query,
@@ -296,6 +321,38 @@ export function SettingsPanel({
               query={query}
             />
           </AnimatedSettingItem>
+          <AnimatedSettingItem visible={showSuspendInactiveTabs || showAbwPrefsHeader}>
+            <label className="setting">
+              <span>
+                <strong>
+                  <HighlightText query={query} text="Suspend inactive background tabs" />
+                </strong>
+                <small>
+                  <HighlightText
+                    query={query}
+                    text="Close hidden Wrike tabs after inactivity to reclaim WebView2 memory. Clicking a suspended tab reloads it where you left off."
+                  />
+                </small>
+              </span>
+              <select
+                aria-label="Suspend inactive background tabs"
+                className="setting-select"
+                onChange={(event) =>
+                  onChange({
+                    ...settings,
+                    suspendInactiveTabsMinutes: Number(event.target.value),
+                  })
+                }
+                value={settings.suspendInactiveTabsMinutes}
+              >
+                <option value={0}>Off</option>
+                <option value={5}>5 minutes</option>
+                <option value={15}>15 minutes</option>
+                <option value={30}>30 minutes</option>
+                <option value={60}>60 minutes</option>
+              </select>
+            </label>
+          </AnimatedSettingItem>
           <AnimatedSettingItem visible={showStartupTabs || showAbwPrefsHeader}>
             <StartupTabsSettings
               onChange={(startupTabUrls) => onChange({ ...settings, startupTabUrls })}
@@ -350,6 +407,32 @@ export function SettingsPanel({
               </div>
               <button className="secondary-action" onClick={onTestNotification}>
                 <HighlightText query={query} text="Send test notification" />
+              </button>
+            </div>
+          </AnimatedSettingItem>
+          <AnimatedSettingItem visible={showDownloadsCleanup || showFileManagementHeader}>
+            <div className="notification-note">
+              <div>
+                <h3><HighlightText query={query} text="Downloads storage" /></h3>
+                <p>
+                  {downloadsStats
+                    ? `${downloadsStats.totalFiles} downloaded ${downloadsStats.totalFiles === 1 ? "file" : "files"} (${formatBytes(downloadsStats.totalBytes)}) · ${downloadsStats.pinnedFiles} pinned · ${formatBytes(downloadsStats.unpinnedBytes)} unpinned.`
+                    : "ABW stores intercepted downloads in its per-user application data directory. Pinned files are kept during cleanup."}
+                </p>
+              </div>
+              <button
+                className="secondary-action"
+                disabled={
+                  clearingDownloads ||
+                  !downloadsStats ||
+                  downloadsStats.totalFiles <= downloadsStats.pinnedFiles
+                }
+                onClick={onClearUnpinnedDownloads}
+              >
+                <HighlightText
+                  query={query}
+                  text={clearingDownloads ? "Cleaning up..." : "Clean up unpinned downloads"}
+                />
               </button>
             </div>
           </AnimatedSettingItem>
@@ -456,7 +539,7 @@ export function SettingsPanel({
       ) : null}
     </section>
   );
-}
+});
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) {

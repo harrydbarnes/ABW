@@ -16,8 +16,11 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { FilesLibrary } from "./features/files/FilesLibrary";
 import {
   checkForAppUpdate,
+  clearUnpinnedDownloads,
   closeWrikeTab,
+  deleteDownload,
   focusWrikeTab,
+  getDownloadsStorageStats,
   getWrikeTabState,
   installAppUpdate,
   launchWrike,
@@ -30,11 +33,13 @@ import {
   openSourceTask,
   resetApp,
   resizeWrikeTabs,
+  revealDownload,
   saveSettings,
   saveWrikeSession,
   sendTestNotification,
   setUpdateTaskbarBadge,
   subscribeToDownloadCompleted,
+  subscribeToDownloadDeleted,
   subscribeToDownloadErrors,
   subscribeToDownloads,
   subscribeToOpenInNewTab,
@@ -48,6 +53,7 @@ import {
   type WrikeTabLayout,
   type WrikeTabUpdate,
 } from "./lib/desktop";
+import { evictPreviewById, formatBytes } from "./features/preview/previewCache";
 import {
   filterAndSortDownloads,
   nextTabIndexForCycle,
@@ -56,6 +62,7 @@ import {
 import type {
   AppUpdateState,
   DownloadRecord,
+  DownloadsStorageStats,
   FavoriteTicket,
   FileFilter,
   Settings,
@@ -188,6 +195,7 @@ export function App() {
     openExternalLinksInBrowser: true,
     autoCheckForUpdates: true,
     autoMatchWrikeTheme: true,
+    suspendInactiveTabsMinutes: 0,
     theme: "default",
     customDictionary: [],
     startupTabUrls: [WRIKE_HOME],
@@ -196,6 +204,9 @@ export function App() {
     visitHistory: [],
     lastWrikeSession: null,
   });
+  const [suspendedTabIds, setSuspendedTabIds] = useState<string[]>([]);
+  const [downloadsStats, setDownloadsStats] = useState<DownloadsStorageStats | null>(null);
+  const [clearingDownloads, setClearingDownloads] = useState(false);
   const [ticketModal, setTicketModal] = useState<"favorites" | "history" | null>(null);
   const [appUpdate, setAppUpdate] = useState<AppUpdateState>({
     phase: "idle",
@@ -216,8 +227,11 @@ export function App() {
   const wrikeTabsRef = useRef(wrikeTabs);
   const activeWrikeTabIdRef = useRef(activeWrikeTabId);
   const wrikeSplitRef = useRef(wrikeSplit);
+  const screenRef = useRef(screen);
+  screenRef.current = screen;
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  const tabLastActiveAtRef = useRef<Map<string, number>>(new Map());
   const lastRecordedVisitRef = useRef<Map<string, string>>(new Map());
   const canPersistSessionRef = useRef(false);
   const updateRequestInFlightRef = useRef(false);
@@ -513,6 +527,7 @@ export function App() {
     let disposeSettingsUpdates: () => void = () => undefined;
     let disposeOpenInNewTab: () => void = () => undefined;
     let disposeShareUrl: () => void = () => undefined;
+    let disposeDeleted: () => void = () => undefined;
     let disposeShortcuts: () => void = () => undefined;
     void subscribeToDownloads(refresh).then((unsubscribe) => {
       dispose = unsubscribe;
@@ -522,6 +537,11 @@ export function App() {
       setNotice(`${record.fileName} is ready in Files.`);
     }).then((unsubscribe) => {
       disposeCompleted = unsubscribe;
+    });
+    void subscribeToDownloadDeleted((id) => {
+      evictPreviewById(id);
+    }).then((unsubscribe) => {
+      disposeDeleted = unsubscribe;
     });
     void subscribeToDownloadErrors((message) => {
       setNotice(`Download was not added to Files: ${message}`);
@@ -620,6 +640,7 @@ export function App() {
     return () => {
       dispose();
       disposeCompleted();
+      disposeDeleted();
       disposeErrors();
       disposeTabUpdates();
       disposeSettingsUpdates();
@@ -628,6 +649,73 @@ export function App() {
       disposeShortcuts();
     };
   }, []);
+
+  useEffect(() => {
+    if (screen !== "settings") {
+      return;
+    }
+    let live = true;
+    void getDownloadsStorageStats()
+      .then((stats) => {
+        if (live) {
+          setDownloadsStats(stats);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [screen, downloads, settings.pinnedDownloadIds]);
+
+  useEffect(() => {
+    const now = Date.now();
+    const visibleIds =
+      screen === "wrike" ? visibleWrikeTabIds(wrikeSplit, activeWrikeTabId) : [activeWrikeTabId];
+    for (const tabId of visibleIds) {
+      if (tabId) {
+        tabLastActiveAtRef.current.set(tabId, now);
+      }
+    }
+    if (visibleIds.length) {
+      setSuspendedTabIds((current) =>
+        current.some((id) => visibleIds.includes(id))
+          ? current.filter((id) => !visibleIds.includes(id))
+          : current,
+      );
+    }
+  }, [activeWrikeTabId, screen, wrikeSplit]);
+
+  useEffect(() => {
+    if (!isDesktopRuntime() || settings.suspendInactiveTabsMinutes <= 0) {
+      return;
+    }
+    const thresholdMs = settings.suspendInactiveTabsMinutes * 60_000;
+    const intervalMs = Math.min(30_000, Math.max(5_000, Math.floor(thresholdMs / 4)));
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      const activeIds = new Set(
+        screenRef.current === "wrike" ? visibleWrikeTabIds() : [activeWrikeTabIdRef.current],
+      );
+      const toSuspend: string[] = [];
+      for (const tab of wrikeTabsRef.current) {
+        if (activeIds.has(tab.id)) {
+          continue;
+        }
+        const lastActiveAt = tabLastActiveAtRef.current.get(tab.id) ?? now;
+        if (now - lastActiveAt >= thresholdMs) {
+          toSuspend.push(tab.id);
+        }
+      }
+      if (!toSuspend.length) {
+        return;
+      }
+      for (const tabId of toSuspend) {
+        void closeWrikeTab(tabId).catch(() => undefined);
+      }
+      setSuspendedTabIds((current) => [...new Set([...current, ...toSuspend])]);
+    }, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [settings.suspendInactiveTabsMinutes]);
 
   useEffect(() => {
     const closeMenu = () => {
@@ -1562,6 +1650,48 @@ export function App() {
     void updateSettings({ ...settings, pinnedDownloadIds: [...pinned] });
   }
 
+  function revealDownloadedFile(id: string) {
+    void revealDownload(id).catch((error) =>
+      setNotice(`Unable to reveal file in folder: ${String(error)}`),
+    );
+  }
+
+  function removeDownloadedFile(record: DownloadRecord) {
+    if (record.demo) {
+      return;
+    }
+    evictPreviewById(record.id);
+    void deleteDownload(record.id)
+      .then(() => {
+        setDownloads((current) => current.filter((item) => item.id !== record.id));
+        setNotice(`Removed ${record.fileName}.`);
+      })
+      .catch((error) => setNotice(`Unable to remove ${record.fileName}: ${String(error)}`));
+  }
+
+  function handleClearUnpinnedDownloads() {
+    if (clearingDownloads) {
+      return;
+    }
+    setClearingDownloads(true);
+    void clearUnpinnedDownloads()
+      .then((result) => {
+        if (result.removedCount === 0) {
+          setNotice("No unpinned downloads to remove.");
+        } else {
+          setNotice(
+            `Removed ${result.removedCount} unpinned ${result.removedCount === 1 ? "file" : "files"} (${formatBytes(result.freedBytes)} freed).`,
+          );
+        }
+        return Promise.all([loadDownloads(), getDownloadsStorageStats()]).then(([items, stats]) => {
+          setDownloads(items);
+          setDownloadsStats(stats);
+        });
+      })
+      .catch((error) => setNotice(`Unable to clean up downloads: ${String(error)}`))
+      .finally(() => setClearingDownloads(false));
+  }
+
   async function toggleSpellCheck() {
     await closeTopbarActionsMenu();
     const spellCheck = !settings.spellCheck;
@@ -1697,12 +1827,14 @@ export function App() {
         <div className="workspace-tabs" role="tablist" aria-label="Wrike tabs">
           {wrikeTabs.map((tab, index) => {
             const selected = screen === "wrike" && activeWrikeTabId === tab.id;
+            const suspended = suspendedTabIds.includes(tab.id);
             return (
               <div
                 aria-selected={selected}
                 className={[
                   "workspace-tab",
                   selected ? "selected" : "",
+                  suspended ? "suspended" : "",
                   tab.mode === "readOnly" ? "read-only" : "",
                   wrikeSplit?.leftTabId === tab.id ? "split-left" : "",
                   wrikeSplit?.rightTabId === tab.id ? "split-right" : "",
@@ -1723,7 +1855,7 @@ export function App() {
                 onKeyDown={(event) => handleTabKeyDown(event, tab.id)}
                 role="tab"
                 tabIndex={0}
-                title={tab.title}
+                title={suspended ? `${tab.title} (suspended to save memory)` : tab.title}
               >
                 <span className={`tab-title ${tab.isTitleLoading ? "loading" : ""}`}>{tab.title}</span>
                 {index === 0 ? <span className="external-dot" /> : null}
@@ -2118,8 +2250,10 @@ export function App() {
             <FilesLibrary
               downloads={visibleDownloads}
               filter={filter}
+              onDelete={removeDownloadedFile}
               onFilterChange={setFilter}
               onOpenSourceTask={(record) => void openRecordSourceTask(record)}
+              onReveal={revealDownloadedFile}
               onSearchChange={setSearch}
               onSelect={setSelectedId}
               onTogglePin={togglePinnedDownload}
@@ -2129,7 +2263,9 @@ export function App() {
             />
             <Suspense fallback={<div className="preview-panel loading">Loading preview...</div>}>
               <PreviewPanel
+                onDeleteDownload={removeDownloadedFile}
                 onOpenSourceTask={(record) => void openRecordSourceTask(record)}
+                onRevealDownload={revealDownloadedFile}
                 record={selectedRecord}
               />
             </Suspense>
@@ -2139,10 +2275,13 @@ export function App() {
             <Suspense fallback={<div className="preview-panel loading">Loading settings...</div>}>
               <SettingsPanel
                 appVersion={APP_VERSION}
+                clearingDownloads={clearingDownloads}
+                downloadsStats={downloadsStats}
                 settings={settings}
                 updateState={appUpdate}
                 onChange={(next) => void updateSettings(next)}
                 onCheckForUpdates={() => void runUpdateCheck(true)}
+                onClearUnpinnedDownloads={handleClearUnpinnedDownloads}
                 onInstallUpdate={() => void startUpdateInstall()}
                 onResetApp={() => void handleResetApp()}
                 onTestNotification={() => void testNotification()}

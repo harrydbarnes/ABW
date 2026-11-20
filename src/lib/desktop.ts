@@ -1,7 +1,9 @@
 import type {
   AppUpdateCheckResult,
   AppUpdateDownloadEvent,
+  ClearDownloadsResult,
   DownloadRecord,
+  DownloadsStorageStats,
   Settings,
   WorkbookPreview,
   WrikeSession,
@@ -149,6 +151,38 @@ export async function openDownload(id: string): Promise<void> {
   }
 }
 
+export async function revealDownload(id: string): Promise<void> {
+  if (desktopRuntime) {
+    await invokeDesktop("reveal_download", { id });
+  }
+}
+
+export async function deleteDownload(id: string): Promise<void> {
+  if (desktopRuntime) {
+    await invokeDesktop("delete_download", { id });
+  }
+}
+
+export async function getDownloadsStorageStats(): Promise<DownloadsStorageStats> {
+  if (!desktopRuntime) {
+    const totalBytes = DEMO_DOWNLOADS.reduce((sum, item) => sum + item.sizeBytes, 0);
+    return {
+      totalFiles: DEMO_DOWNLOADS.length,
+      pinnedFiles: 0,
+      totalBytes,
+      unpinnedBytes: totalBytes,
+    };
+  }
+  return invokeDesktop<DownloadsStorageStats>("downloads_storage_stats");
+}
+
+export async function clearUnpinnedDownloads(): Promise<ClearDownloadsResult> {
+  if (!desktopRuntime) {
+    return { removedCount: 0, freedBytes: 0 };
+  }
+  return invokeDesktop<ClearDownloadsResult>("clear_unpinned_downloads");
+}
+
 export async function sendTestNotification(): Promise<void> {
   if (desktopRuntime) {
     await invokeDesktop("send_test_notification");
@@ -283,6 +317,15 @@ export async function subscribeToDownloadCompleted(
     return () => undefined;
   }
   return listen<DownloadRecord>("download-completed", (event) => notify(event.payload));
+}
+
+export async function subscribeToDownloadDeleted(
+  notify: (id: string) => void,
+): Promise<() => void> {
+  if (!desktopRuntime) {
+    return () => undefined;
+  }
+  return listen<string>("download-deleted", (event) => notify(event.payload));
 }
 
 export async function subscribeToDownloadErrors(notify: (message: string) => void): Promise<() => void> {

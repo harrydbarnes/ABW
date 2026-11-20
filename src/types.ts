@@ -45,6 +45,7 @@ export interface Settings {
   openExternalLinksInBrowser: boolean;
   autoCheckForUpdates: boolean;
   autoMatchWrikeTheme: boolean;
+  suspendInactiveTabsMinutes: number;
   theme: AppThemeId;
   customDictionary: string[];
   startupTabUrls: string[];
@@ -157,6 +158,18 @@ export interface WorkbookPreview {
   sheets: WorkbookSheet[];
   styles?: CSSProperties[];
   activeSheet: number;
+}
+
+export interface DownloadsStorageStats {
+  totalFiles: number;
+  pinnedFiles: number;
+  totalBytes: number;
+  unpinnedBytes: number;
+}
+
+export interface ClearDownloadsResult {
+  removedCount: number;
+  freedBytes: number;
 }
 
 export type FileFilter = "all" | FileKind;

@@ -9,9 +9,13 @@ const PdfPreview = lazy(() => import("./PdfPreview"));
 export default memo(function PreviewPanel({
   record,
   onOpenSourceTask,
+  onRevealDownload,
+  onDeleteDownload,
 }: {
   record: DownloadRecord | null;
   onOpenSourceTask?: (record: DownloadRecord) => void;
+  onRevealDownload?: (id: string) => void;
+  onDeleteDownload?: (record: DownloadRecord) => void;
 }) {
   function handleOpenTask(target: DownloadRecord) {
     if (onOpenSourceTask) {
@@ -45,6 +49,24 @@ export default memo(function PreviewPanel({
           <button className="secondary" onClick={() => handleOpenTask(record)}>
             Open task
           </button>
+          {onRevealDownload ? (
+            <button
+              className="secondary"
+              disabled={!!record.demo}
+              onClick={() => onRevealDownload(record.id)}
+            >
+              Show in folder
+            </button>
+          ) : null}
+          {onDeleteDownload ? (
+            <button
+              className="secondary danger"
+              disabled={!!record.demo}
+              onClick={() => onDeleteDownload(record)}
+            >
+              Remove
+            </button>
+          ) : null}
           <button className="primary" onClick={() => void openDownload(record.id)}>
             Open in Windows
           </button>

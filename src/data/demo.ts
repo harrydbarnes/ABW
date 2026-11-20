@@ -59,6 +59,7 @@ export const DEFAULT_SETTINGS: Settings = {
   openExternalLinksInBrowser: true,
   autoCheckForUpdates: true,
   autoMatchWrikeTheme: true,
+  suspendInactiveTabsMinutes: 0,
   theme: "default",
   customDictionary: [],
   startupTabUrls: ["https://www.wrike.com/workspace.htm"],

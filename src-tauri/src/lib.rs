@@ -3,7 +3,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env, fs,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -106,6 +106,8 @@ struct Settings {
     auto_check_for_updates: bool,
     #[serde(default = "default_true")]
     auto_match_wrike_theme: bool,
+    #[serde(default)]
+    suspend_inactive_tabs_minutes: u32,
     #[serde(default = "default_theme")]
     theme: String,
     custom_dictionary: Vec<String>,
@@ -172,6 +174,7 @@ impl Default for Settings {
             open_external_links_in_browser: true,
             auto_check_for_updates: true,
             auto_match_wrike_theme: true,
+            suspend_inactive_tabs_minutes: 0,
             theme: "default".to_owned(),
             custom_dictionary: Vec::new(),
             startup_tab_urls: default_startup_tab_urls(),
@@ -445,6 +448,224 @@ async fn preview_spreadsheet(
 fn open_download(app: AppHandle, id: String) -> Result<(), String> {
     let path = resolve_tracked_path(&app, &id)?;
     open::that(path).map_err(|error| format!("Unable to open file in Windows: {error}"))
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadsStorageStats {
+    total_files: usize,
+    pinned_files: usize,
+    total_bytes: u64,
+    unpinned_bytes: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClearDownloadsResult {
+    removed_count: usize,
+    freed_bytes: u64,
+}
+
+#[tauri::command]
+async fn downloads_storage_stats(app: AppHandle) -> Result<DownloadsStorageStats, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let records = read_records(&app)?;
+        let stored_settings = settings_path(&app)
+            .and_then(|path| persistence::read::<Settings>(&path))
+            .unwrap_or_default();
+        let pinned: HashSet<&str> = stored_settings
+            .pinned_download_ids
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let root = downloads_dir(&app)
+            .ok()
+            .and_then(|dir| dir.canonicalize().ok());
+        let mut total_files = 0_usize;
+        let mut pinned_files = 0_usize;
+        let mut total_bytes = 0_u64;
+        let mut unpinned_bytes = 0_u64;
+        for record in &records {
+            let disk_size = root.as_ref().and_then(|root_dir| {
+                let resolved = root_dir.join(&record.file_name).canonicalize().ok()?;
+                if !resolved.starts_with(root_dir) {
+                    return None;
+                }
+                fs::metadata(resolved).ok().map(|meta| meta.len())
+            });
+            let Some(size) = disk_size else {
+                continue;
+            };
+            total_files += 1;
+            total_bytes = total_bytes.saturating_add(size);
+            if pinned.contains(record.id.as_str()) {
+                pinned_files += 1;
+            } else {
+                unpinned_bytes = unpinned_bytes.saturating_add(size);
+            }
+        }
+        Ok(DownloadsStorageStats {
+            total_files,
+            pinned_files,
+            total_bytes,
+            unpinned_bytes,
+        })
+    })
+    .await
+    .map_err(|error| format!("Unable to inspect download storage: {error}"))?
+}
+
+#[tauri::command]
+async fn clear_unpinned_downloads(app: AppHandle) -> Result<ClearDownloadsResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let stored_settings = settings_path(&app)
+            .and_then(|path| persistence::read::<Settings>(&path))
+            .unwrap_or_default();
+        let pinned: HashSet<String> = stored_settings.pinned_download_ids.into_iter().collect();
+        let root = downloads_dir(&app)?
+            .canonicalize()
+            .map_err(|error| format!("Unable to validate downloads directory: {error}"))?;
+
+        let (kept_records, removed_entries) =
+            persistence::update::<Vec<DownloadRecord>, _>(&records_path(&app)?, |records| {
+                let all_records = std::mem::take(records);
+                let mut removed = Vec::new();
+                for record in all_records {
+                    let disk_path = root
+                        .join(&record.file_name)
+                        .canonicalize()
+                        .ok()
+                        .filter(|resolved| resolved.starts_with(&root));
+                    if pinned.contains(&record.id) && disk_path.is_some() {
+                        records.push(record);
+                    } else {
+                        removed.push((record.id, disk_path, record.size_bytes));
+                    }
+                }
+                Ok(removed)
+            })?;
+
+        let mut freed_bytes = 0_u64;
+        let mut removed_ids = Vec::with_capacity(removed_entries.len());
+        for (id, disk_path, fallback_size) in removed_entries {
+            invalidate_tracked_paths(&app, Some(&id));
+            if let Some(resolved) = disk_path {
+                let actual_size = fs::metadata(&resolved)
+                    .map(|meta| meta.len())
+                    .unwrap_or(fallback_size);
+                match fs::remove_file(&resolved) {
+                    Ok(()) => freed_bytes = freed_bytes.saturating_add(actual_size),
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(format!("Unable to remove downloaded file: {error}"));
+                    }
+                }
+            }
+            removed_ids.push(id);
+        }
+
+        let kept_ids: HashSet<&str> = kept_records.iter().map(|r| r.id.as_str()).collect();
+        let (updated_settings, settings_changed) =
+            persistence::update::<Settings, _>(&settings_path(&app)?, |stored| {
+                let before = stored.pinned_download_ids.len();
+                stored
+                    .pinned_download_ids
+                    .retain(|pinned_id| kept_ids.contains(pinned_id.as_str()));
+                stored.open_abw_at_system_startup = startup::enabled()?;
+                Ok(stored.pinned_download_ids.len() != before)
+            })?;
+        if settings_changed {
+            let _ = app.emit("settings-updated", updated_settings);
+        }
+        let removed_count = removed_ids.len();
+        app.emit("downloads-updated", ())
+            .map_err(|error| format!("Unable to refresh Files view: {error}"))?;
+        for removed_id in removed_ids {
+            let _ = app.emit("download-deleted", removed_id);
+        }
+        Ok(ClearDownloadsResult {
+            removed_count,
+            freed_bytes,
+        })
+    })
+    .await
+    .map_err(|error| format!("Unable to clear downloads: {error}"))?
+}
+
+#[tauri::command]
+async fn reveal_download(app: AppHandle, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = resolve_tracked_path(&app, &id)?;
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            let raw = path.to_string_lossy();
+            let display_path = raw.strip_prefix(r"\\?\").unwrap_or(raw.as_ref());
+            std::process::Command::new("explorer.exe")
+                .raw_arg(format!("/select,\"{display_path}\""))
+                .spawn()
+                .map_err(|error| format!("Unable to reveal file in Explorer: {error}"))?;
+            Ok(())
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let parent = path.parent().unwrap_or(&path);
+            open::that(parent).map_err(|error| format!("Unable to open folder: {error}"))
+        }
+    })
+    .await
+    .map_err(|error| format!("Unable to reveal file: {error}"))?
+}
+
+#[tauri::command]
+async fn delete_download(app: AppHandle, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        invalidate_tracked_paths(&app, Some(&id));
+        let removed =
+            persistence::update::<Vec<DownloadRecord>, _>(&records_path(&app)?, |records| {
+                let Some(index) = records.iter().position(|record| record.id == id) else {
+                    return Ok(None);
+                };
+                Ok(Some(records.remove(index)))
+            })?
+            .1
+            .ok_or_else(|| "This download is no longer in the Files library.".to_owned())?;
+
+        if let Ok(root) = downloads_dir(&app)?.canonicalize() {
+            if let Some(resolved) = root
+                .join(&removed.file_name)
+                .canonicalize()
+                .ok()
+                .filter(|resolved| resolved.starts_with(&root))
+            {
+                match fs::remove_file(&resolved) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(format!("Unable to remove downloaded file: {error}"));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let (settings, had_pin) =
+            persistence::update::<Settings, _>(&settings_path(&app)?, |stored| {
+                let before = stored.pinned_download_ids.len();
+                stored
+                    .pinned_download_ids
+                    .retain(|pinned_id| pinned_id != &id);
+                stored.open_abw_at_system_startup = startup::enabled()?;
+                Ok(stored.pinned_download_ids.len() != before)
+            })?;
+        if had_pin {
+            let _ = app.emit("settings-updated", settings);
+        }
+        app.emit("downloads-updated", ())
+            .map_err(|error| format!("Unable to refresh Files view: {error}"))?;
+        app.emit("download-deleted", id)
+            .map_err(|error| format!("Unable to update deleted download state: {error}"))
+    })
+    .await
+    .map_err(|error| format!("Unable to remove download: {error}"))?
 }
 
 #[tauri::command]
@@ -2912,6 +3133,9 @@ pub fn run() {
             updater::check_for_update,
             close_wrike_tab,
             focus_wrike_tab,
+            clear_unpinned_downloads,
+            delete_download,
+            downloads_storage_stats,
             get_wrike_tab_state,
             get_settings,
             hide_wrike_tabs,
@@ -2927,6 +3151,7 @@ pub fn run() {
             read_download_range,
             reset_app,
             resize_wrike_tabs,
+            reveal_download,
             send_test_notification,
             set_update_badge,
             storage_health,
