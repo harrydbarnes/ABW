@@ -260,6 +260,7 @@ struct CaptureContext {
     tab_id: String,
     pending: Mutex<HashMap<PathBuf, PendingDownload>>,
     page_title: Mutex<String>,
+    active_task_title: Mutex<Option<String>>,
     page_url: Mutex<Option<String>>,
     detected_theme: Mutex<Option<String>>,
     history: Mutex<NavigationHistory>,
@@ -272,6 +273,7 @@ impl CaptureContext {
             tab_id: tab_id.to_owned(),
             pending: Mutex::new(HashMap::new()),
             page_title: Mutex::new(String::new()),
+            active_task_title: Mutex::new(None),
             page_url: Mutex::new(Some(url.to_owned())),
             detected_theme: Mutex::new(None),
             history: Mutex::new(NavigationHistory::new(url)),
@@ -1206,6 +1208,16 @@ fn open_wrike_at(
                 let _ = apply_detected_wrike_theme(&navigation_app, &navigation_context, url);
                 return false;
             }
+            if url.scheme() == "abw-task" {
+                let title = url
+                    .query_pairs()
+                    .find_map(|(key, value)| (key == "title").then(|| value.trim().to_owned()))
+                    .filter(|value| !value.is_empty());
+                if let Ok(mut active) = navigation_context.active_task_title.lock() {
+                    *active = title;
+                }
+                return false;
+            }
             if url.scheme() == "abw-inbox" {
                 let has_unread = url
                     .query_pairs()
@@ -1473,15 +1485,25 @@ fn download_handler(
 }
 
 fn captured_provenance(context: &CaptureContext) -> PendingDownload {
+    let active_task = context
+        .active_task_title
+        .lock()
+        .ok()
+        .and_then(|title| title.as_ref().map(|t| clean_wrike_title(t)))
+        .filter(|title| !title.is_empty());
+    let source_label = active_task
+        .or_else(|| {
+            context
+                .page_title
+                .lock()
+                .ok()
+                .map(|title| clean_wrike_title(&title))
+                .filter(|title| !title.is_empty())
+        })
+        .unwrap_or_else(|| "Wrike task".to_owned());
     PendingDownload {
         source_url: context.page_url.lock().ok().and_then(|url| url.clone()),
-        source_label: context
-            .page_title
-            .lock()
-            .ok()
-            .map(|title| clean_wrike_title(&title))
-            .filter(|title| !title.is_empty())
-            .unwrap_or_else(|| "Wrike task".to_owned()),
+        source_label,
     }
 }
 

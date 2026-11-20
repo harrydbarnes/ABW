@@ -90,9 +90,9 @@
 }
 
 .list-labels {
-  padding: 0 30px 12px;
+  padding: 0 29px 12px;
   display: grid;
-  grid-template-columns: minmax(154px, 1fr) minmax(110px, 148px) auto 30px;
+  grid-template-columns: minmax(140px, 1fr) minmax(110px, 148px) 92px 98px;
   gap: 12px;
   color: #8794a9;
   font-size: 11px;
@@ -110,7 +110,7 @@
 .file-row {
   display: grid;
   align-items: center;
-  grid-template-columns: minmax(140px, 1fr) minmax(96px, 140px) auto auto;
+  grid-template-columns: minmax(140px, 1fr) minmax(110px, 148px) 92px 98px;
   gap: 12px;
   width: 100%;
   min-height: 72px;
@@ -200,8 +200,6 @@
 
 .file-row time {
   color: var(--muted);
-  align-self: start;
-  padding-top: 5px;
   font-size: 12px;
   white-space: nowrap;
 }

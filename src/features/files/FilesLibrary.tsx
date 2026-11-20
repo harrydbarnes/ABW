@@ -24,11 +24,6 @@ const filters: Array<{ id: FileFilter; label: string }> = [
 ];
 
 const TIME_FORMATTER = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
-const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
-  day: "numeric",
-  month: "short",
-  year: "numeric",
-});
 
 export const FilesLibrary = memo(function FilesLibrary({
   downloads,
@@ -257,6 +252,17 @@ function formatDate(value: string, todayString: string) {
   if (Number.isNaN(date.getTime())) {
     return "";
   }
-  const time = TIME_FORMATTER.format(date);
-  return date.toDateString() === todayString ? `Today, ${time}` : `${DATE_FORMATTER.format(date)}, ${time}`;
+  const now = new Date();
+  const ageMs = now.getTime() - date.getTime();
+  if (ageMs >= 0 && ageMs < 24 * 60 * 60 * 1000) {
+    const time = TIME_FORMATTER.format(date);
+    return date.toDateString() === todayString ? `Today, ${time}` : `Yesterday, ${time}`;
+  }
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  if (date.getFullYear() !== now.getFullYear()) {
+    const year = String(date.getFullYear()).slice(-2);
+    return `${day}/${month}/${year}`;
+  }
+  return `${day}/${month}`;
 }

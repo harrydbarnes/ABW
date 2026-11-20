@@ -438,7 +438,7 @@
         }
         row = next;
         const rowText = (row.textContent || "").replace(/\s+/g, " ").trim();
-        const match = rowText.match(/\b(\d+)\+?(?:\s|$)/);
+        const match = rowText.match(/(?:inbox\s*|\b)(\d+)\+?(?:\s|$)/i);
         if (match && Number.parseInt(match[1], 10) > 0) {
           return true;
         }
@@ -446,9 +446,40 @@
     }
     return false;
   };
+  const abwDetectActiveTaskTitle = () => {
+    if (abwAutoDownload || !document.body) return "";
+    const selectors = [
+      '[data-testid="task-title"]',
+      '[data-application="task-view"] textarea',
+      '.task-view-header textarea',
+      'textarea.title-field',
+      '[class*="task-title"] textarea',
+      '[class*="item-title"] textarea',
+      '[role="dialog"] textarea',
+      '[role="dialog"] h1'
+    ];
+    for (const selector of selectors) {
+      const el = document.querySelector(selector);
+      if (!el) continue;
+      const rect = el.getBoundingClientRect?.();
+      if (!rect || rect.width === 0 || rect.height === 0) continue;
+      const raw = (typeof el.value === "string" ? el.value : el.textContent || "").replace(/\s+/g, " ").trim();
+      if (raw && raw.length >= 2 && raw.length <= 240 && !/^inbox\b/i.test(raw)) {
+        return raw;
+      }
+    }
+    return "";
+  };
   const abwReportWrikeTheme = (force = false) => {
     if (abwAutoDownload) return null;
     abwSyncWrikeContentCorner();
+    const activeTaskTitle = abwDetectActiveTaskTitle();
+    if (window.__abwLastActiveTaskTitle !== activeTaskTitle) {
+      window.__abwLastActiveTaskTitle = activeTaskTitle;
+      window.setTimeout(() => {
+        window.location.href = `abw-task://active?title=${encodeURIComponent(activeTaskTitle)}`;
+      }, 15);
+    }
     const hasUnread = abwDetectWrikeInboxUnread();
     if (window.__abwLastInboxUnread !== hasUnread) {
       window.__abwLastInboxUnread = hasUnread;
@@ -586,29 +617,12 @@
   };
   const abwResolveLinkUrl = (target) => {
     if (!(target instanceof Element)) return null;
-    const toWorkspaceUrl = (rawUrl) => {
-      try {
-        const parsed = new URL(rawUrl, window.location.href);
-        if (
-          (parsed.hostname === "wrike.com" || parsed.hostname.endsWith(".wrike.com")) &&
-          parsed.pathname.endsWith("/open.htm")
-        ) {
-          const id = parsed.searchParams.get("id");
-          if (id && /^\d+$/.test(id)) {
-            return `${parsed.origin}/workspace.htm#t=${id}`;
-          }
-        }
-        return parsed.href;
-      } catch {
-        return rawUrl;
-      }
-    };
     const resolveRawUrl = (raw) => {
       if (!raw || raw.startsWith("javascript:") || raw === "#") return null;
       try {
         const resolved = new URL(raw, window.location.href);
         if (resolved.protocol === "https:" || resolved.protocol === "http:") {
-          return toWorkspaceUrl(resolved.href);
+          return resolved.href;
         }
       } catch {}
       return null;
@@ -640,11 +654,11 @@
           const val = (attr.value || "").trim();
           if (!val) continue;
           const urlMatch = val.match(/https?:\/\/[^\s"'<>]+wrike\.com\/(?:open|workspace)\.htm[^\s"'<>]*/i);
-          if (urlMatch) return toWorkspaceUrl(urlMatch[0]);
+          if (urlMatch) return urlMatch[0];
           if (/^(?:data-.*id|id)$/i.test(attr.name)) {
             const idMatch = val.match(/(?:^|\D)(\d{7,11})(?:\D|$)/);
             if (idMatch) {
-              return `${window.location.origin}/workspace.htm#t=${idMatch[1]}`;
+              return `${window.location.origin}/open.htm?id=${idMatch[1]}`;
             }
           }
         }
@@ -1023,9 +1037,39 @@
     const inboxPollTimer = window.setInterval(() => {
       if (!document.hidden) abwScheduleThemeDetect(80);
     }, 8000);
+    const handleWindowBlur = () => {
+      closeDictionaryMenu();
+      const target = document.activeElement || document.body || document;
+      try {
+        target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+      } catch {}
+    };
+    window.addEventListener("blur", handleWindowBlur);
+    if (window.location.pathname.endsWith("/open.htm")) {
+      const clickBrowserLink = () => {
+        const candidates = Array.from(document.querySelectorAll("a[href]"));
+        const browserLink = candidates.find((a) => {
+          const href = (a.getAttribute("href") || "").toLowerCase();
+          const text = (a.textContent || "").toLowerCase();
+          return href.includes("workspace.htm") || text.includes("browser");
+        });
+        if (browserLink) {
+          browserLink.click();
+          return true;
+        }
+        return false;
+      };
+      if (!clickBrowserLink()) {
+        const openHtmTimer = window.setInterval(() => {
+          if (clickBrowserLink()) window.clearInterval(openHtmTimer);
+        }, 120);
+        window.setTimeout(() => window.clearInterval(openHtmTimer), 6000);
+      }
+    }
     const prevCleanup = window.__abwSpellCleanup;
     window.__abwSpellCleanup = () => {
       window.clearInterval(inboxPollTimer);
+      window.removeEventListener("blur", handleWindowBlur);
       window.removeEventListener("resize", handleResizeCornerSync);
       document.removeEventListener("pointermove", handlePointerMoveCornerSync, true);
       document.removeEventListener("transitionend", handleTransitionEndCornerSync, true);
