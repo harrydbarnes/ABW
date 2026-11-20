@@ -108,6 +108,8 @@ struct Settings {
     auto_match_wrike_theme: bool,
     #[serde(default)]
     suspend_inactive_tabs_minutes: u32,
+    #[serde(default = "default_true")]
+    custom_context_menu: bool,
     #[serde(default = "default_theme")]
     theme: String,
     custom_dictionary: Vec<String>,
@@ -175,6 +177,7 @@ impl Default for Settings {
             auto_check_for_updates: true,
             auto_match_wrike_theme: true,
             suspend_inactive_tabs_minutes: 0,
+            custom_context_menu: true,
             theme: "default".to_owned(),
             custom_dictionary: Vec::new(),
             startup_tab_urls: default_startup_tab_urls(),
@@ -730,6 +733,23 @@ fn update_settings(
             }
         }
     }
+    if previous.custom_context_menu != settings.custom_context_menu {
+        let context_script = if settings.custom_context_menu {
+            "window.__abwCustomContextMenuEnabled = true;"
+        } else {
+            "window.__abwCustomContextMenuEnabled = false;"
+        };
+        let tab_ids = state
+            .wrike_tabs
+            .lock()
+            .map(|tabs| tabs.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_else(|_| vec!["home".to_owned()]);
+        for tab_id in tab_ids {
+            if let Some(webview) = app.get_webview(&wrike_tab_label(&tab_id)?) {
+                let _ = webview.eval(context_script);
+            }
+        }
+    }
     if settings.auto_match_wrike_theme && !previous.auto_match_wrike_theme {
         let tab_ids = state
             .wrike_tabs
@@ -775,6 +795,11 @@ fn reset_app(app: AppHandle, state: State<'_, AppState>) -> Result<Settings, Str
         sync_windows_spelling_dictionary(&previous.custom_dictionary, &defaults.custom_dictionary);
     }
     let script = apply_spell_check_script(defaults.spell_check, false);
+    let context_script = if defaults.custom_context_menu {
+        "window.__abwCustomContextMenuEnabled = true;"
+    } else {
+        "window.__abwCustomContextMenuEnabled = false;"
+    };
     let tab_ids = state
         .wrike_tabs
         .lock()
@@ -783,6 +808,7 @@ fn reset_app(app: AppHandle, state: State<'_, AppState>) -> Result<Settings, Str
     for tab_id in tab_ids {
         if let Some(webview) = app.get_webview(&wrike_tab_label(&tab_id)?) {
             let _ = webview.eval(script);
+            let _ = webview.eval(context_script);
         }
     }
     app.emit("settings-updated", defaults.clone())
@@ -1091,10 +1117,10 @@ fn open_wrike_at(
         .get_window("main")
         .ok_or_else(|| "Unable to locate the ABW application window.".to_owned())?;
     let (content_position, content_size) = wrike_content_geometry(app, WrikePane::Full)?;
-    let spell_check = settings_path(app)
+    let (spell_check, custom_context_menu) = settings_path(app)
         .and_then(|path| persistence::read::<Settings>(&path))
-        .map(|stored| stored.spell_check)
-        .unwrap_or(true);
+        .map(|stored| (stored.spell_check, stored.custom_context_menu))
+        .unwrap_or((true, true));
     let context = Arc::new(CaptureContext::new(tab_id, destination));
     let title_context = Arc::clone(&context);
     let title_app = app.clone();
@@ -1116,6 +1142,11 @@ fn open_wrike_at(
     let builder = WebviewBuilder::new(label, WebviewUrl::External(parsed))
         .auto_resize()
         .zoom_hotkeys_enabled(true)
+        .initialization_script(if custom_context_menu {
+            "window.__abwCustomContextMenuEnabled = true;"
+        } else {
+            "window.__abwCustomContextMenuEnabled = false;"
+        })
         .initialization_script(apply_spell_check_script(spell_check, false))
         .on_navigation(move |url| {
             if is_po_handoff(url) {

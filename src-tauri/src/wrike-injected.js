@@ -586,12 +586,29 @@
   };
   const abwResolveLinkUrl = (target) => {
     if (!(target instanceof Element)) return null;
+    const toWorkspaceUrl = (rawUrl) => {
+      try {
+        const parsed = new URL(rawUrl, window.location.href);
+        if (
+          (parsed.hostname === "wrike.com" || parsed.hostname.endsWith(".wrike.com")) &&
+          parsed.pathname.endsWith("/open.htm")
+        ) {
+          const id = parsed.searchParams.get("id");
+          if (id && /^\d+$/.test(id)) {
+            return `${parsed.origin}/workspace.htm#t=${id}`;
+          }
+        }
+        return parsed.href;
+      } catch {
+        return rawUrl;
+      }
+    };
     const resolveRawUrl = (raw) => {
       if (!raw || raw.startsWith("javascript:") || raw === "#") return null;
       try {
         const resolved = new URL(raw, window.location.href);
         if (resolved.protocol === "https:" || resolved.protocol === "http:") {
-          return resolved.href;
+          return toWorkspaceUrl(resolved.href);
         }
       } catch {}
       return null;
@@ -623,11 +640,11 @@
           const val = (attr.value || "").trim();
           if (!val) continue;
           const urlMatch = val.match(/https?:\/\/[^\s"'<>]+wrike\.com\/(?:open|workspace)\.htm[^\s"'<>]*/i);
-          if (urlMatch) return urlMatch[0];
+          if (urlMatch) return toWorkspaceUrl(urlMatch[0]);
           if (/^(?:data-.*id|id)$/i.test(attr.name)) {
             const idMatch = val.match(/(?:^|\D)(\d{7,11})(?:\D|$)/);
             if (idMatch) {
-              return `https://www.wrike.com/open.htm?id=${idMatch[1]}`;
+              return `${window.location.origin}/workspace.htm#t=${idMatch[1]}`;
             }
           }
         }
@@ -709,7 +726,10 @@
       window.location.href = `abw-share://open?url=${encodeURIComponent(shareTarget)}`;
     });
     document.body.append(menu);
-    window.setTimeout(() => document.addEventListener("click", closeDictionaryMenu, { once: true, capture: true }), 0);
+    window.setTimeout(() => {
+      document.addEventListener("click", closeDictionaryMenu, { once: true, capture: true });
+      window.addEventListener("blur", closeDictionaryMenu, { once: true });
+    }, 0);
   };
   const showDictionaryMenu = (word, event) => {
     closeDictionaryMenu();
@@ -736,7 +756,10 @@
       closeDictionaryMenu();
     });
     document.body.append(menu);
-    window.setTimeout(() => document.addEventListener("click", closeDictionaryMenu, { once: true, capture: true }), 0);
+    window.setTimeout(() => {
+      document.addEventListener("click", closeDictionaryMenu, { once: true, capture: true });
+      window.addEventListener("blur", closeDictionaryMenu, { once: true });
+    }, 0);
   };
   const keepWrikeEditorToolsVisible = (event) => {
     const editable = findEditable(event.target);
@@ -751,7 +774,11 @@
     }
   };
   const handleLinkContextMenu = (event) => {
-    if (event.defaultPrevented || findEditable(event.target)) {
+    if (
+      window.__abwCustomContextMenuEnabled === false ||
+      event.defaultPrevented ||
+      findEditable(event.target)
+    ) {
       return;
     }
     const linkUrl = abwResolveLinkUrl(event.target);

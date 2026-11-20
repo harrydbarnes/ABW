@@ -120,6 +120,11 @@ export const SettingsPanel = memo(function SettingsPanel({
     "Open external links in default browser",
     "Open non-Wrike links in your default Windows browser instead of opening them inside ABW.",
   );
+  const showCustomContextMenu = matchesSearch(
+    query,
+    "Custom right-click menu",
+    "Show ABW's custom right-click menu in Wrike with Open in new tab and Share shortcuts. Turn off to use the default browser menu.",
+  );
   const showSuspendInactiveTabs = matchesSearch(
     query,
     "Suspend inactive background tabs",
@@ -143,6 +148,7 @@ export const SettingsPanel = memo(function SettingsPanel({
     showCloseToTray ||
     showConfirmClose ||
     showExternalLinks ||
+    showCustomContextMenu ||
     showSuspendInactiveTabs ||
     showStartupTabs;
 
@@ -318,6 +324,15 @@ export const SettingsPanel = memo(function SettingsPanel({
               onChange={(openExternalLinksInBrowser) =>
                 onChange({ ...settings, openExternalLinksInBrowser })
               }
+              query={query}
+            />
+          </AnimatedSettingItem>
+          <AnimatedSettingItem visible={showCustomContextMenu || showAbwPrefsHeader}>
+            <SettingToggle
+              checked={settings.customContextMenu}
+              description="Show ABW's custom right-click menu in Wrike with Open in new tab and Share shortcuts. Turn off to use the default browser menu."
+              label="Custom right-click menu"
+              onChange={(customContextMenu) => onChange({ ...settings, customContextMenu })}
               query={query}
             />
           </AnimatedSettingItem>

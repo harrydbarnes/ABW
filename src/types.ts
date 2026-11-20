@@ -43,6 +43,7 @@ export interface Settings {
   confirmBeforeClosingTabs: boolean;
   openDownloadedFilesAutomatically: boolean;
   openExternalLinksInBrowser: boolean;
+  customContextMenu: boolean;
   autoCheckForUpdates: boolean;
   autoMatchWrikeTheme: boolean;
   suspendInactiveTabsMinutes: number;

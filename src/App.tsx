@@ -189,6 +189,7 @@ export function App() {
     confirmBeforeClosingTabs: false,
     openDownloadedFilesAutomatically: false,
     openExternalLinksInBrowser: true,
+    customContextMenu: true,
     autoCheckForUpdates: true,
     autoMatchWrikeTheme: true,
     suspendInactiveTabsMinutes: 0,
