@@ -586,46 +586,67 @@
   };
   const abwResolveLinkUrl = (target) => {
     if (!(target instanceof Element)) return null;
+    const resolveRawUrl = (raw) => {
+      if (!raw || raw.startsWith("javascript:") || raw === "#") return null;
+      try {
+        const resolved = new URL(raw, window.location.href);
+        if (resolved.protocol === "https:" || resolved.protocol === "http:") {
+          return resolved.href;
+        }
+      } catch {}
+      return null;
+    };
     const link = target.closest("a[href], [data-href], [data-url]");
     if (link) {
-      const raw =
+      const resolved = resolveRawUrl(
         link.getAttribute("href") ||
         link.getAttribute("data-href") ||
         link.getAttribute("data-url") ||
-        "";
-      if (raw && !raw.startsWith("javascript:") && !raw.startsWith("#")) {
-        try {
-          const resolved = new URL(raw, window.location.href);
-          if (resolved.protocol === "https:" || resolved.protocol === "http:") {
-            return resolved.href;
-          }
-        } catch {}
-      }
+        ""
+      );
+      if (resolved) return resolved;
     }
-    const item = target.closest("[data-task-id], [data-id], [data-item-id]");
-    if (item) {
-      const id =
-        item.getAttribute("data-task-id") ||
-        item.getAttribute("data-item-id") ||
-        item.getAttribute("data-id") ||
-        "";
-      if (/^\d{5,}$/.test(id.trim())) {
-        return `https://www.wrike.com/open.htm?id=${id.trim()}`;
+    for (let current = target, depth = 0; current && current instanceof Element && depth < 8; current = current.parentElement, depth += 1) {
+      if (current === document.body || current === document.documentElement) break;
+      const nestedLink = current.querySelector?.("a[href]");
+      if (nestedLink) {
+        const rect = current.getBoundingClientRect?.();
+        if (rect && rect.height <= 160) {
+          const resolved = resolveRawUrl(nestedLink.getAttribute("href") || "");
+          if (resolved) return resolved;
+        }
+      }
+      if (current.attributes) {
+        for (let i = 0; i < current.attributes.length; i += 1) {
+          const attr = current.attributes[i];
+          if (!attr) continue;
+          const val = (attr.value || "").trim();
+          if (!val) continue;
+          const urlMatch = val.match(/https?:\/\/[^\s"'<>]+wrike\.com\/(?:open|workspace)\.htm[^\s"'<>]*/i);
+          if (urlMatch) return urlMatch[0];
+          if (/^(?:data-.*id|id)$/i.test(attr.name)) {
+            const idMatch = val.match(/(?:^|\D)(\d{7,11})(?:\D|$)/);
+            if (idMatch) {
+              return `https://www.wrike.com/open.htm?id=${idMatch[1]}`;
+            }
+          }
+        }
       }
     }
     return null;
   };
   const showLinkContextMenu = (url, event) => {
     closeDictionaryMenu();
+    const shareTarget = url || window.location.href;
     const menu = document.createElement("div");
     menu.id = "abw-link-menu";
     menu.setAttribute("role", "menu");
     Object.assign(menu.style, {
       position: "fixed",
-      left: `${Math.min(window.innerWidth - 200, Math.max(8, event.clientX))}px`,
-      top: `${Math.min(window.innerHeight - 150, Math.max(8, event.clientY))}px`,
+      left: `${Math.min(window.innerWidth - 210, Math.max(8, event.clientX))}px`,
+      top: `${Math.min(window.innerHeight - 210, Math.max(8, event.clientY))}px`,
       zIndex: "2147483647",
-      minWidth: "184px",
+      minWidth: "196px",
       padding: "6px",
       border: "1px solid #d6dce8",
       borderRadius: "8px",
@@ -659,17 +680,33 @@
       });
       menu.append(btn);
     };
-    addMenuItem("Open in new tab", () => {
-      window.location.href = `abw-new-tab://open?url=${encodeURIComponent(url)}`;
-    });
-    addMenuItem("Copy link", () => {
-      navigator.clipboard?.writeText(url).catch(() => undefined);
-    });
-    const sep = document.createElement("div");
-    Object.assign(sep.style, { height: "1px", background: "#e5ebf4", margin: "4px 6px" });
-    menu.append(sep);
+    const addSeparator = () => {
+      const sep = document.createElement("div");
+      Object.assign(sep.style, { height: "1px", background: "#e5ebf4", margin: "4px 6px" });
+      menu.append(sep);
+    };
+    if (url) {
+      addMenuItem("Open in new tab", () => {
+        window.location.href = `abw-new-tab://open?url=${encodeURIComponent(url)}`;
+      });
+      addMenuItem("Copy link", () => {
+        navigator.clipboard?.writeText(url).catch(() => undefined);
+      });
+      addSeparator();
+    } else {
+      addMenuItem("Back", () => window.history.back());
+      addMenuItem("Refresh", () => window.location.reload());
+      addSeparator();
+      addMenuItem("Open current page in new tab", () => {
+        window.location.href = `abw-new-tab://open?url=${encodeURIComponent(window.location.href)}`;
+      });
+      addMenuItem("Copy link", () => {
+        navigator.clipboard?.writeText(window.location.href).catch(() => undefined);
+      });
+      addSeparator();
+    }
     addMenuItem("Share", () => {
-      window.location.href = `abw-share://open?url=${encodeURIComponent(url)}`;
+      window.location.href = `abw-share://open?url=${encodeURIComponent(shareTarget)}`;
     });
     document.body.append(menu);
     window.setTimeout(() => document.addEventListener("click", closeDictionaryMenu, { once: true, capture: true }), 0);
@@ -718,10 +755,8 @@
       return;
     }
     const linkUrl = abwResolveLinkUrl(event.target);
-    if (linkUrl) {
-      event.preventDefault();
-      showLinkContextMenu(linkUrl, event);
-    }
+    event.preventDefault();
+    showLinkContextMenu(linkUrl, event);
   };
   const abwSupportedFileName = /[^\\r\\n]{1,180}[.](pdf|doc|docx|xls|xlsx|xlsm|xlsb|ods|csv|tsv|rtf|txt)/i;
   const abwDownloadWord = /download/i;
