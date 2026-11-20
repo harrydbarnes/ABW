@@ -915,7 +915,7 @@ fn open_wrike_at(
                             tauri::async_runtime::spawn_blocking(move || {
                                 let status = po_bridge::run_job(booking.into());
                                 if let Some(webview) = app.get_webview(&label) {
-                                    let _ = webview.eval(&format!(
+                                    let _ = webview.eval(format!(
                                         "window.__abwReceivePoStatus?.('{id}', '{status}');"
                                     ));
                                 }
