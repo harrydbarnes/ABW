@@ -2388,6 +2388,38 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> &'static str 
               matchFromElements(layoutCandidates, false)
             );
           };
+          let abwCornerObservedContent = null;
+          let abwCornerObservedSidebar = null;
+          let abwCornerResizeObserver = null;
+          let abwCornerRafId = 0;
+          const abwObserveCornerTargets = (contentEl, sidebarEl) => {
+            if (typeof ResizeObserver !== "function") return;
+            if (contentEl === abwCornerObservedContent && sidebarEl === abwCornerObservedSidebar) {
+              return;
+            }
+            abwCornerObservedContent = contentEl;
+            abwCornerObservedSidebar = sidebarEl;
+            if (!abwCornerResizeObserver) {
+              abwCornerResizeObserver = new ResizeObserver(() => {
+                abwSyncWrikeContentCorner();
+              });
+            } else {
+              abwCornerResizeObserver.disconnect();
+            }
+            if (contentEl instanceof Element) {
+              abwCornerResizeObserver.observe(contentEl);
+            }
+            if (sidebarEl instanceof Element && sidebarEl !== contentEl) {
+              abwCornerResizeObserver.observe(sidebarEl);
+            }
+          };
+          const abwScheduleCornerSync = () => {
+            if (abwAutoDownload || abwCornerRafId) return;
+            abwCornerRafId = window.requestAnimationFrame(() => {
+              abwCornerRafId = 0;
+              abwSyncWrikeContentCorner();
+            });
+          };
           const abwSyncWrikeContentCorner = () => {
             if (abwAutoDownload || !document.body) return;
             const cornerId = "abw-wrike-corner";
@@ -2427,6 +2459,8 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> &'static str 
 
             let cornerLeft = null;
             let cornerTop = 0;
+            let matchedContentEl = null;
+            let matchedSidebarEl = null;
 
             // 1. Primary: find the main white content container directly.
             const contentProbeX = Math.round(viewportWidth * 0.6);
@@ -2455,6 +2489,7 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> &'static str 
                 if (isNearWhite(style.backgroundColor)) {
                   cornerLeft = rect.left;
                   cornerTop = Math.max(0, rect.top);
+                  matchedContentEl = node;
                   break;
                 }
               }
@@ -2492,6 +2527,7 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> &'static str 
                   const bg = resolveBackgroundColor(current);
                   if (!bg || isNearWhite(bg)) continue;
                   sidebarColor = bg;
+                  matchedSidebarEl = current;
                   if (cornerLeft === null) {
                     cornerLeft = rect.right;
                     cornerTop = Math.max(0, rect.top);
@@ -2512,6 +2548,8 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> &'static str 
                 }
               }
             }
+
+            abwObserveCornerTargets(matchedContentEl, matchedSidebarEl);
 
             const existing = document.getElementById(cornerId);
             if (cornerLeft === null || !sidebarColor || cornerLeft <= 0 || cornerLeft >= viewportWidth - 60) {
@@ -2534,9 +2572,11 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> &'static str 
               corner.innerHTML = `<svg width="13" height="13" viewBox="-1 -1 13 13" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M-1 -1H12V0A12 12 0 0 0 0 12H-1Z" fill="currentColor"/></svg>`;
               document.body.append(corner);
             }
-            corner.style.left = `${Math.floor(cornerLeft) - 1}px`;
-            corner.style.top = `${Math.floor(cornerTop) - 1}px`;
-            corner.style.color = sidebarColor;
+            const nextLeft = `${Math.floor(cornerLeft) - 1}px`;
+            const nextTop = `${Math.floor(cornerTop) - 1}px`;
+            if (corner.style.left !== nextLeft) corner.style.left = nextLeft;
+            if (corner.style.top !== nextTop) corner.style.top = nextTop;
+            if (corner.style.color !== sidebarColor) corner.style.color = sidebarColor;
           };
           const abwDetectWrikeInboxUnread = () => {
             if (abwAutoDownload || !document.body) return false;
@@ -3019,8 +3059,13 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> &'static str 
             window.__abwSpellCleanup = () => {
               window.clearTimeout(abwSpellApplyTimer);
               window.clearTimeout(abwThemeDetectTimer);
+              if (abwCornerRafId) {
+                window.cancelAnimationFrame(abwCornerRafId);
+                abwCornerRafId = 0;
+              }
               observer?.disconnect();
               themeObserver.disconnect();
+              abwCornerResizeObserver?.disconnect();
             };
             if (!window.__abwContextMenuGuard) {
               document.addEventListener('contextmenu', keepWrikeEditorToolsVisible, true);
@@ -3057,8 +3102,22 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> &'static str 
               document.addEventListener("keydown", abwHandleKeyboardShortcuts, true);
               window.__abwShortcutBridge = true;
             }
+            const handleResizeCornerSync = () => {
+              abwScheduleCornerSync();
+              abwScheduleThemeDetect(80);
+            };
+            const handlePointerMoveCornerSync = (event) => {
+              if (event.buttons & 1) {
+                abwScheduleCornerSync();
+              }
+            };
+            const handleTransitionEndCornerSync = () => {
+              abwScheduleCornerSync();
+            };
             window.addEventListener("load", () => abwScheduleThemeDetect(120), { once: true });
-            window.addEventListener("resize", () => abwScheduleThemeDetect(80));
+            window.addEventListener("resize", handleResizeCornerSync);
+            document.addEventListener("pointermove", handlePointerMoveCornerSync, { passive: true, capture: true });
+            document.addEventListener("transitionend", handleTransitionEndCornerSync, true);
             document.addEventListener("click", () => abwScheduleThemeDetect(220), true);
             const inboxPollTimer = window.setInterval(() => {
               if (!document.hidden) abwScheduleThemeDetect(80);
@@ -3066,6 +3125,9 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> &'static str 
             const prevCleanup = window.__abwSpellCleanup;
             window.__abwSpellCleanup = () => {
               window.clearInterval(inboxPollTimer);
+              window.removeEventListener("resize", handleResizeCornerSync);
+              document.removeEventListener("pointermove", handlePointerMoveCornerSync, true);
+              document.removeEventListener("transitionend", handleTransitionEndCornerSync, true);
               prevCleanup?.();
             };
             abwScheduleThemeDetect(350);
