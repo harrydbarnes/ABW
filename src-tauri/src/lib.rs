@@ -1,3 +1,4 @@
+pub mod po_bridge;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -872,6 +873,7 @@ fn open_wrike_at(
     let title_app = app.clone();
     let navigation_context = Arc::clone(&context);
     let navigation_app = app.clone();
+    let po_webview_label = label.clone();
     let load_context = Arc::clone(&context);
     let load_app = app.clone();
     let popup_context = Arc::clone(&context);
@@ -896,6 +898,32 @@ fn open_wrike_at(
                     .ok()
                     .and_then(|page| page.as_ref().and_then(|value| Url::parse(value).ok()))
                     .is_some_and(|source| is_wrike_workspace_destination(&source));
+                if let Some(params) = url.fragment().and_then(|value| value.strip_prefix("abw-check-po?")) {
+                    let mut booking = serde_json::Map::new();
+                    let mut automatic_id = None;
+                    for (key, value) in url::form_urlencoded::parse(params.as_bytes()) {
+                        if key == "automatic" {
+                            automatic_id = Uuid::parse_str(&value).ok();
+                        } else if matches!(key.as_ref(), "media" | "client" | "product" | "po" | "start" | "end" | "total" | "plan") && value.len() <= 100 {
+                            booking.insert(key.into_owned(), serde_json::Value::String(value.into_owned()));
+                        }
+                    }
+                    if let Some(id) = automatic_id {
+                        if from_wrike && url.as_str().len() < 8192 {
+                            let app = navigation_app.clone();
+                            let label = po_webview_label.clone();
+                            tauri::async_runtime::spawn_blocking(move || {
+                                let status = po_bridge::run_job(booking.into());
+                                if let Some(webview) = app.get_webview(&label) {
+                                    let _ = webview.eval(&format!(
+                                        "window.__abwReceivePoStatus?.('{id}', '{status}');"
+                                    ));
+                                }
+                            });
+                        }
+                        return false;
+                    }
+                }
                 let message = if !from_wrike || url.as_str().len() >= 8192 {
                     Some("Unable to read the task for Check PO. Reopen the Wrike task and try again.")
                 } else if open_po_in_chrome(url).is_err() {
