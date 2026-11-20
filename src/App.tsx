@@ -14,6 +14,7 @@ import { Menu } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { MaterialIcon, NavIcon, WindowControls } from "./components/AppIcons";
 import { FilesLibrary } from "./features/files/FilesLibrary";
+import { SettingsPanel } from "./features/settings/SettingsPanel";
 import {
   checkForAppUpdate,
   clearUnpinnedDownloads,
@@ -71,11 +72,6 @@ import type {
 } from "./types";
 
 const PreviewPanel = lazy(() => import("./features/preview/PreviewPanel"));
-const SettingsPanel = lazy(() =>
-  import("./features/settings/SettingsPanel").then((module) => ({
-    default: module.SettingsPanel,
-  })),
-);
 const TicketDrawerModal = lazy(() => import("./features/tickets/TicketDrawerModal"));
 const WRIKE_HOME = "https://www.wrike.com/workspace.htm";
 
@@ -1242,8 +1238,9 @@ export function App() {
   async function showLocalScreen(next: Exclude<Screen, "wrike">) {
     setIsTopbarActionsMenuOpen(false);
     setTicketModal(null);
-    await hideWrike(wrikeTabs.map((tab) => tab.id));
     setScreen(next);
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    await hideWrike(wrikeTabs.map((tab) => tab.id));
   }
 
   async function openRecordSourceTask(record: DownloadRecord) {
@@ -2272,21 +2269,19 @@ export function App() {
           </div>
         ) : (
           <div className="settings-screen">
-            <Suspense fallback={<div className="preview-panel loading">Loading settings...</div>}>
-              <SettingsPanel
-                appVersion={APP_VERSION}
-                clearingDownloads={clearingDownloads}
-                downloadsStats={downloadsStats}
-                settings={settings}
-                updateState={appUpdate}
-                onChange={(next) => void updateSettings(next)}
-                onCheckForUpdates={() => void runUpdateCheck(true)}
-                onClearUnpinnedDownloads={handleClearUnpinnedDownloads}
-                onInstallUpdate={() => void startUpdateInstall()}
-                onResetApp={() => void handleResetApp()}
-                onTestNotification={() => void testNotification()}
-              />
-            </Suspense>
+            <SettingsPanel
+              appVersion={APP_VERSION}
+              clearingDownloads={clearingDownloads}
+              downloadsStats={downloadsStats}
+              settings={settings}
+              updateState={appUpdate}
+              onChange={(next) => void updateSettings(next)}
+              onCheckForUpdates={() => void runUpdateCheck(true)}
+              onClearUnpinnedDownloads={handleClearUnpinnedDownloads}
+              onInstallUpdate={() => void startUpdateInstall()}
+              onResetApp={() => void handleResetApp()}
+              onTestNotification={() => void testNotification()}
+            />
           </div>
         )}
       </main>
