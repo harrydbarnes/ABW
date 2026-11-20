@@ -585,6 +585,40 @@
   }
 }
 
+.update-summary-clip {
+  overflow: hidden;
+}
+
+.update-summary-text.is-checking {
+  animation: update-summary-from-left 280ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+.update-summary-text.is-result {
+  animation: update-summary-from-right 300ms cubic-bezier(.22, 1, .36, 1) both;
+}
+
+@keyframes update-summary-from-left {
+  from {
+    opacity: 0;
+    transform: translateX(-18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes update-summary-from-right {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
 .update-notes-card {
   margin: 14px 22px 0 38px;
   padding: 14px 16px;

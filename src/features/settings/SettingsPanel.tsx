@@ -650,9 +650,20 @@ function AppUpdateSettings({
       <div className="setting-group-header update-panel-header">
         <div>
           <h2><HighlightText query={query} text="App updates" /></h2>
-          <p className={phase === "error" ? "update-error" : undefined}>
-            <HighlightText query={query} text={summary} />
-          </p>
+          <div className="update-summary-clip">
+            <p
+              className={`update-summary-text ${
+                phase === "checking"
+                  ? "is-checking"
+                  : phase === "idle"
+                    ? ""
+                    : "is-result"
+              } ${phase === "error" ? "update-error" : ""}`.trim()}
+              key={phase}
+            >
+              <HighlightText query={query} text={summary} />
+            </p>
+          </div>
         </div>
         <div className="update-actions">
           {(phase === "available" || (phase === "error" && latestVersion)) && latestVersion ? (

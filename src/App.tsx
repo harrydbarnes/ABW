@@ -347,7 +347,8 @@ export function App() {
       return;
     }
     updateRequestInFlightRef.current = true;
-    lastUpdateCheckAtRef.current = Date.now();
+    const checkStartedAt = Date.now();
+    lastUpdateCheckAtRef.current = checkStartedAt;
     if (manual) {
       setAppUpdate((current) => ({
         ...current,
@@ -357,6 +358,12 @@ export function App() {
     }
     try {
       const result = await checkForAppUpdate();
+      if (manual) {
+        const remaining = 750 - (Date.now() - checkStartedAt);
+        if (remaining > 0) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, remaining));
+        }
+      }
       const checkedAt = new Date().toISOString();
       if (result.status === "available" && result.latestVersion) {
         if (lastNotifiedUpdateVersionRef.current !== result.latestVersion) {
