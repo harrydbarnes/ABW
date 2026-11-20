@@ -596,11 +596,11 @@ fn notify_update_available(app: AppHandle, version: String) -> Result<(), String
 
 #[cfg(target_os = "windows")]
 fn taskbar_badge_image() -> tauri::image::Image<'static> {
-    const SIZE: u32 = 16;
+    const SIZE: u32 = 32;
     let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
     let center = (SIZE as f32 - 1.0) / 2.0;
-    let outer_radius = 7.2_f32;
-    let inner_radius = 5.4_f32;
+    let outer_radius = 14.5_f32;
+    let inner_radius = 11.0_f32;
     for y in 0..SIZE {
         for x in 0..SIZE {
             let dist = ((x as f32 - center).powi(2) + (y as f32 - center).powi(2)).sqrt();
@@ -614,7 +614,7 @@ fn taskbar_badge_image() -> tauri::image::Image<'static> {
                 rgba[offset] = 8;
                 rgba[offset + 1] = 47;
                 rgba[offset + 2] = 73;
-                rgba[offset + 3] = 230;
+                rgba[offset + 3] = 235;
             }
         }
     }
@@ -625,14 +625,17 @@ fn taskbar_badge_image() -> tauri::image::Image<'static> {
 fn sync_taskbar_badge(app: &AppHandle, state: &AppState) {
     let active = state.wrike_inbox_unread.load(Ordering::Relaxed)
         || state.update_available_badge.load(Ordering::Relaxed);
-    if let Some(window) = app.get_window("main") {
-        let icon = if active {
-            Some(taskbar_badge_image())
-        } else {
-            None
-        };
-        let _ = window.set_overlay_icon(icon);
-    }
+    let app_handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(window) = app_handle.get_window("main") {
+            let icon = if active {
+                Some(taskbar_badge_image())
+            } else {
+                None
+            };
+            let _ = window.set_overlay_icon(icon);
+        }
+    });
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -2296,18 +2299,18 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> &'static str 
               const parent = node.parentElement;
               if (!parent) continue;
               const rect = parent.getBoundingClientRect?.();
-              if (!rect || rect.width === 0 || rect.height === 0 || rect.left > 360) continue;
+              if (!rect || rect.width === 0 || rect.height === 0 || rect.left > 380) continue;
 
               let row = parent;
-              for (let depth = 0; depth < 4 && row.parentElement; depth += 1) {
+              for (let depth = 0; depth < 6 && row.parentElement; depth += 1) {
                 const next = row.parentElement;
                 const nextRect = next.getBoundingClientRect?.();
-                if (!nextRect || nextRect.height > 72 || nextRect.width > 380 || nextRect.left > 360) {
+                if (!nextRect || nextRect.height > 76 || nextRect.width > 420 || nextRect.left > 380) {
                   break;
                 }
                 row = next;
                 const rowText = (row.textContent || "").replace(/\s+/g, " ").trim();
-                const match = rowText.match(/\b(\d+)\+?\b/);
+                const match = rowText.match(/\b(\d+)\+?(?:\s|$)/);
                 if (match && Number.parseInt(match[1], 10) > 0) {
                   return true;
                 }
@@ -2808,6 +2811,14 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> &'static str 
             window.addEventListener("load", () => abwScheduleThemeDetect(120), { once: true });
             window.addEventListener("resize", () => abwScheduleThemeDetect(80));
             document.addEventListener("click", () => abwScheduleThemeDetect(220), true);
+            const inboxPollTimer = window.setInterval(() => {
+              if (!document.hidden) abwScheduleThemeDetect(80);
+            }, 8000);
+            const prevCleanup = window.__abwSpellCleanup;
+            window.__abwSpellCleanup = () => {
+              window.clearInterval(inboxPollTimer);
+              prevCleanup?.();
+            };
             abwScheduleThemeDetect(350);
             if (abwAutoDownload) {
               window.setTimeout(() => {
