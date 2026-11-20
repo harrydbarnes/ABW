@@ -875,6 +875,33 @@ fn badged_window_icon(base: &tauri::image::Image<'_>) -> tauri::image::Image<'st
 }
 
 #[cfg(target_os = "windows")]
+fn taskbar_overlay_badge_icon() -> tauri::image::Image<'static> {
+    const SIZE: u32 = 16;
+    let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
+    let center = (SIZE as f32 - 1.0) / 2.0;
+    let outer_radius = 7.2_f32;
+    let inner_radius = 5.4_f32;
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let dist = ((x as f32 - center).powi(2) + (y as f32 - center).powi(2)).sqrt();
+            let offset = ((y * SIZE + x) * 4) as usize;
+            if dist <= inner_radius {
+                rgba[offset] = 34;
+                rgba[offset + 1] = 211;
+                rgba[offset + 2] = 238;
+                rgba[offset + 3] = 255;
+            } else if dist <= outer_radius {
+                rgba[offset] = 8;
+                rgba[offset + 1] = 47;
+                rgba[offset + 2] = 73;
+                rgba[offset + 3] = 255;
+            }
+        }
+    }
+    tauri::image::Image::new_owned(rgba, SIZE, SIZE)
+}
+
+#[cfg(target_os = "windows")]
 fn sync_taskbar_badge(app: &AppHandle, state: &AppState) {
     let active = state.wrike_inbox_unread.load(Ordering::Relaxed)
         || state.update_available_badge.load(Ordering::Relaxed);
@@ -889,7 +916,8 @@ fn sync_taskbar_badge(app: &AppHandle, state: &AppState) {
                 };
                 let _ = window.set_icon(next_icon);
             }
-            let _ = window.set_overlay_icon(None);
+            let overlay = active.then(taskbar_overlay_badge_icon);
+            let _ = window.set_overlay_icon(overlay);
         }
     });
 }

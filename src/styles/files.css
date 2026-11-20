@@ -1,7 +1,32 @@
 .files-screen {
   display: grid;
-  grid-template-columns: minmax(430px, 45%) minmax(460px, 55%);
+  grid-template-columns: minmax(340px, var(--files-split-percent, 45%)) 6px minmax(360px, 1fr);
   height: 100%;
+}
+
+.files-resizer {
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 2;
+  transition: background 140ms ease;
+}
+
+.files-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  border-radius: 999px;
+  background: transparent;
+  transition: background 140ms ease;
+}
+
+.files-resizer:hover::after,
+.files-resizer.dragging::after {
+  background: var(--accent);
 }
 
 .files-library {
@@ -92,7 +117,7 @@
 .list-labels {
   padding: 0 29px 12px;
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) minmax(110px, 148px) 92px 98px;
+  grid-template-columns: minmax(140px, 1.35fr) minmax(110px, 1fr) 84px 98px;
   gap: 12px;
   color: #8794a9;
   font-size: 11px;
@@ -110,7 +135,7 @@
 .file-row {
   display: grid;
   align-items: center;
-  grid-template-columns: minmax(140px, 1fr) minmax(110px, 148px) 92px 98px;
+  grid-template-columns: minmax(140px, 1.35fr) minmax(110px, 1fr) 84px 98px;
   gap: 12px;
   width: 100%;
   min-height: 72px;

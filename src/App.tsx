@@ -179,6 +179,18 @@ export function App() {
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [filter, setFilter] = useState<FileFilter>("all");
+  const [filesSplitPercent, setFilesSplitPercent] = useState<number>(() => {
+    try {
+      const saved = Number(window.localStorage.getItem("abw.filesSplitPercent"));
+      if (Number.isFinite(saved) && saved >= 26 && saved <= 70) {
+        return saved;
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return 45;
+  });
+  const [isResizingFiles, setIsResizingFiles] = useState(false);
   const [settings, setSettings] = useState<Settings>({
     spellCheck: true,
     showSpellCheckInTopbar: false,
@@ -2251,7 +2263,10 @@ export function App() {
             </p>
           </section>
         ) : screen === "files" ? (
-          <div className="files-screen">
+          <div
+            className="files-screen"
+            style={{ "--files-split-percent": `${filesSplitPercent}%` } as React.CSSProperties}
+          >
             <FilesLibrary
               downloads={visibleDownloads}
               filter={filter}
@@ -2265,6 +2280,36 @@ export function App() {
               pinnedIds={settings.pinnedDownloadIds}
               search={search}
               selectedId={selectedRecord?.id ?? null}
+            />
+            <div
+              aria-label="Resize file list and preview pane"
+              aria-orientation="vertical"
+              className={`files-resizer ${isResizingFiles ? "dragging" : ""}`}
+              onPointerDown={(event) => {
+                const container = event.currentTarget.parentElement;
+                if (!container) return;
+                event.preventDefault();
+                setIsResizingFiles(true);
+                const rect = container.getBoundingClientRect();
+                const onMove = (moveEvent: PointerEvent) => {
+                  const pct = ((moveEvent.clientX - rect.left) / rect.width) * 100;
+                  const clamped = Math.max(26, Math.min(70, pct));
+                  setFilesSplitPercent(clamped);
+                  try {
+                    window.localStorage.setItem("abw.filesSplitPercent", String(clamped));
+                  } catch {
+                    // ignore storage errors
+                  }
+                };
+                const onUp = () => {
+                  setIsResizingFiles(false);
+                  window.removeEventListener("pointermove", onMove);
+                  window.removeEventListener("pointerup", onUp);
+                };
+                window.addEventListener("pointermove", onMove);
+                window.addEventListener("pointerup", onUp);
+              }}
+              role="separator"
             />
             <Suspense fallback={<div className="preview-panel loading">Loading preview...</div>}>
               <PreviewPanel

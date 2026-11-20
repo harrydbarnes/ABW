@@ -416,10 +416,29 @@
     if (corner.style.top !== nextTop) corner.style.top = nextTop;
     if (corner.style.color !== sidebarColor) corner.style.color = sidebarColor;
   };
+  const abwSchemeQueue = [];
+  let abwSchemeDrainTimer = 0;
+  const abwEmitScheme = (url) => {
+    if (!url) return;
+    abwSchemeQueue.push(url);
+    if (abwSchemeDrainTimer) return;
+    const drain = () => {
+      const next = abwSchemeQueue.shift();
+      if (!next) {
+        abwSchemeDrainTimer = 0;
+        return;
+      }
+      window.location.href = next;
+      abwSchemeDrainTimer = window.setTimeout(drain, 75);
+    };
+    abwSchemeDrainTimer = window.setTimeout(drain, 15);
+  };
   const abwDetectWrikeInboxUnread = () => {
     if (abwAutoDownload || !document.body) return false;
-    const root = abwCornerObservedSidebar?.isConnected ? abwCornerObservedSidebar : document.body;
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    if (/\binbox\s*\(\s*\d+\+?\s*\)/i.test(document.title || "")) {
+      return true;
+    }
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     while (walker.nextNode()) {
       const node = walker.currentNode;
       const raw = (node.textContent || "").trim();
@@ -427,13 +446,13 @@
       const parent = node.parentElement;
       if (!parent) continue;
       const rect = parent.getBoundingClientRect?.();
-      if (!rect || rect.width === 0 || rect.height === 0 || rect.left > 380) continue;
+      if (!rect || rect.width === 0 || rect.height === 0 || rect.left > 420) continue;
 
       let row = parent;
       for (let depth = 0; depth < 6 && row.parentElement; depth += 1) {
         const next = row.parentElement;
         const nextRect = next.getBoundingClientRect?.();
-        if (!nextRect || nextRect.height > 76 || nextRect.width > 420 || nextRect.left > 380) {
+        if (!nextRect || nextRect.height > 76 || nextRect.width > 440 || nextRect.left > 420) {
           break;
         }
         row = next;
@@ -450,13 +469,25 @@
     if (abwAutoDownload || !document.body) return "";
     const selectors = [
       '[data-testid="task-title"]',
+      '[data-testid*="task-title" i]',
+      '[data-testid*="item-title" i]',
+      'wrike-task-title',
       '[data-application="task-view"] textarea',
+      '[data-application="task-view"] [contenteditable="true"]',
       '.task-view-header textarea',
+      '.task-view-header [contenteditable="true"]',
       'textarea.title-field',
-      '[class*="task-title"] textarea',
-      '[class*="item-title"] textarea',
+      '[class*="title-field" i] textarea',
+      '[class*="title-field" i] [contenteditable="true"]',
+      '[class*="task-title" i] textarea',
+      '[class*="task-title" i] [contenteditable="true"]',
+      '[class*="item-title" i] textarea',
+      '[class*="item-title" i] [contenteditable="true"]',
+      '[contenteditable="true"][aria-label*="title" i]',
       '[role="dialog"] textarea',
-      '[role="dialog"] h1'
+      '[role="dialog"] [contenteditable="true"]',
+      '[role="dialog"] h1',
+      '[role="dialog"] h2'
     ];
     for (const selector of selectors) {
       const el = document.querySelector(selector);
@@ -476,16 +507,12 @@
     const activeTaskTitle = abwDetectActiveTaskTitle();
     if (window.__abwLastActiveTaskTitle !== activeTaskTitle) {
       window.__abwLastActiveTaskTitle = activeTaskTitle;
-      window.setTimeout(() => {
-        window.location.href = `abw-task://active?title=${encodeURIComponent(activeTaskTitle)}`;
-      }, 15);
+      abwEmitScheme(`abw-task://active?title=${encodeURIComponent(activeTaskTitle)}`);
     }
     const hasUnread = abwDetectWrikeInboxUnread();
     if (window.__abwLastInboxUnread !== hasUnread) {
       window.__abwLastInboxUnread = hasUnread;
-      window.setTimeout(() => {
-        window.location.href = `abw-inbox://unread?hasUnread=${hasUnread ? "true" : "false"}`;
-      }, 40);
+      abwEmitScheme(`abw-inbox://unread?hasUnread=${hasUnread ? "true" : "false"}`);
     }
     const detected = abwDetectWrikeThemeFromDom();
     if (!detected) return null;
@@ -501,7 +528,7 @@
       return detected;
     }
     window.__abwLastDetectedWrikeTheme = detected;
-    window.location.href = `abw-theme://detected?theme=${encodeURIComponent(detected)}`;
+    abwEmitScheme(`abw-theme://detected?theme=${encodeURIComponent(detected)}`);
     return detected;
   };
   const abwScheduleThemeDetect = (delay = 180) => {
@@ -1045,26 +1072,38 @@
       } catch {}
     };
     window.addEventListener("blur", handleWindowBlur);
-    if (window.location.pathname.endsWith("/open.htm")) {
-      const clickBrowserLink = () => {
-        const candidates = Array.from(document.querySelectorAll("a[href]"));
-        const browserLink = candidates.find((a) => {
-          const href = (a.getAttribute("href") || "").toLowerCase();
-          const text = (a.textContent || "").toLowerCase();
-          return href.includes("workspace.htm") || text.includes("browser");
-        });
-        if (browserLink) {
+    const isWrikeOpenInterstitial = () =>
+      /open(?:\.htm|-in-app)/i.test(window.location.pathname) ||
+      /opening a link in wrike/i.test(document.title || "") ||
+      /opening a link in wrike app/i.test(document.body?.innerText || "");
+    const clickBrowserLink = () => {
+      if (!isWrikeOpenInterstitial()) return false;
+      const candidates = Array.from(document.querySelectorAll('a, button, [role="link"], span'));
+      const browserLink = candidates.find((el) => {
+        const href = (el.getAttribute?.("href") || "").toLowerCase();
+        const text = (el.textContent || "").trim().toLowerCase();
+        return (
+          href.includes("workspace.htm") ||
+          text.includes("open this link in your browser") ||
+          text.includes("in your browser")
+        );
+      });
+      if (browserLink) {
+        const href = browserLink.getAttribute?.("href");
+        if (href && /^https?:\/\//i.test(href)) {
+          window.location.replace(href);
+        } else {
           browserLink.click();
-          return true;
         }
-        return false;
-      };
-      if (!clickBrowserLink()) {
-        const openHtmTimer = window.setInterval(() => {
-          if (clickBrowserLink()) window.clearInterval(openHtmTimer);
-        }, 120);
-        window.setTimeout(() => window.clearInterval(openHtmTimer), 6000);
+        return true;
       }
+      return false;
+    };
+    if (!clickBrowserLink()) {
+      const openHtmTimer = window.setInterval(() => {
+        if (clickBrowserLink()) window.clearInterval(openHtmTimer);
+      }, 100);
+      window.setTimeout(() => window.clearInterval(openHtmTimer), 6000);
     }
     const prevCleanup = window.__abwSpellCleanup;
     window.__abwSpellCleanup = () => {

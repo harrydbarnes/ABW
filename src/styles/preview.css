@@ -74,15 +74,38 @@
   padding: 0 15px;
   font-size: 13px;
   font-weight: 550;
+  transition: transform 140ms ease, background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease, color 140ms ease;
+}
+
+.preview-actions button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgb(16 29 53 / 10%);
+}
+
+.preview-actions button:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: none;
 }
 
 .preview-actions .secondary {
   border: 1px solid var(--border);
+  background: #fff;
+}
+
+.preview-actions .secondary:hover:not(:disabled) {
+  background: #f3f6fc;
+  border-color: #c2cfe5;
+  color: #101d35;
 }
 
 .preview-actions .primary {
   color: #fff;
   background: var(--accent);
+}
+
+.preview-actions .primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+  box-shadow: 0 4px 12px rgb(49 93 232 / 26%);
 }
 
 .spreadsheet-view,
