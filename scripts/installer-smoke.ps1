@@ -77,6 +77,8 @@ if ((Get-FileHash $executable -Algorithm SHA256).Hash -ne $ExpectedExecutableHas
     throw 'Startup-disabled upgrade executable differs from the verified fresh current installation.'
 }
 ./scripts/native-workflow-smoke.ps1 -Executable $executable -DataDirectory $dataDirectory
+node ./scripts/po-bridge-smoke.mjs $executable
+if ($LASTEXITCODE -ne 0) { throw 'Automatic PO native messaging smoke test failed.' }
 $uninstaller = Join-Path $directory 'uninstall.exe'
 if (-not (Test-Path $uninstaller)) { throw 'Uninstaller was not created.' }
 $process = Start-Process $uninstaller -ArgumentList @('/S', "_?=$directory") -WindowStyle Hidden -PassThru

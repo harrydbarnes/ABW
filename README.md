@@ -199,3 +199,15 @@ are dormant unless PRs are deliberately enabled later. Dependabot security
 updates must also remain disabled in the repository's code-security settings;
 the PR limit does not apply to security updates. Keep Dependabot alerts enabled
 for visibility. The weekly workflow is the active report-only alternative.
+
+### Automatic PO checks
+
+ABW can check a complete booking while you view its Wrike task. Install the matching Ops Toolshed extension in Chrome and leave Chrome running with a signed-in Prisma Campaigns tab. Complete Okta in Chrome if ABW shows **Sign in to Prisma**. Select the PO status to open the full Check PO result.
+
+Pair ABW with your installed extension once. In Chrome, open **Extensions**, enable **Developer mode**, and copy the ID displayed for **Ops Toolshed**. Run the following in PowerShell with that ID. The registration applies to your Windows user and allows only that extension ID.
+
+```powershell
+& "$env:LOCALAPPDATA\ABW\abw.exe" --register-po-host '<Ops Toolshed extension ID>'
+```
+
+If ABW was installed in a different folder, use the full path to its installed executable. The ordinary **Check PO** button remains available when the background connection is unavailable.
