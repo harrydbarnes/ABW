@@ -180,20 +180,21 @@ export default memo(function SpreadsheetPreview({
   const [matchCursor, setMatchCursor] = useState(0);
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) {
-      return;
-    }
     const handleWheel = (event: WheelEvent) => {
       if (!event.ctrlKey) {
         return;
       }
+      const container = containerRef.current;
+      if (!container || !(event.target instanceof Node) || !container.contains(event.target)) {
+        return;
+      }
       event.preventDefault();
-      const delta = event.deltaY < 0 ? 10 : -10;
+      const rawStep = Math.round(-event.deltaY * 0.12);
+      const delta = rawStep === 0 ? (event.deltaY < 0 ? 5 : -5) : Math.max(-15, Math.min(15, rawStep));
       setZoom((current) => Math.min(160, Math.max(60, current + delta)));
     };
-    container.addEventListener("wheel", handleWheel, { passive: false });
-    return () => container.removeEventListener("wheel", handleWheel);
+    window.addEventListener("wheel", handleWheel, { passive: false });
+    return () => window.removeEventListener("wheel", handleWheel);
   }, []);
 
   useEffect(() => {

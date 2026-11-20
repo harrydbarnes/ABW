@@ -110,7 +110,7 @@
 .file-row {
   display: grid;
   align-items: center;
-  grid-template-columns: minmax(154px, 1fr) minmax(110px, 148px) auto 30px;
+  grid-template-columns: minmax(140px, 1fr) minmax(96px, 140px) auto auto;
   gap: 12px;
   width: 100%;
   min-height: 72px;

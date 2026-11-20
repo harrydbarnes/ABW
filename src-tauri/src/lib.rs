@@ -817,16 +817,19 @@ fn notify_update_available(app: AppHandle, version: String) -> Result<(), String
 }
 
 #[cfg(target_os = "windows")]
-fn taskbar_badge_image() -> tauri::image::Image<'static> {
-    const SIZE: u32 = 32;
-    let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
-    let center = (SIZE as f32 - 1.0) / 2.0;
-    let outer_radius = 14.5_f32;
-    let inner_radius = 11.0_f32;
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let dist = ((x as f32 - center).powi(2) + (y as f32 - center).powi(2)).sqrt();
-            let offset = ((y * SIZE + x) * 4) as usize;
+fn badged_window_icon(base: &tauri::image::Image<'_>) -> tauri::image::Image<'static> {
+    let width = base.width();
+    let height = base.height();
+    let mut rgba = base.rgba().to_vec();
+    let min_dim = width.min(height) as f32;
+    let outer_radius = (min_dim * 0.21).max(3.5);
+    let inner_radius = (min_dim * 0.16).max(2.5);
+    let cx = width as f32 - outer_radius - (min_dim * 0.03);
+    let cy = outer_radius + (min_dim * 0.03);
+    for y in 0..height {
+        for x in 0..width {
+            let dist = ((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt();
+            let offset = ((y * width + x) * 4) as usize;
             if dist <= inner_radius {
                 rgba[offset] = 34;
                 rgba[offset + 1] = 211;
@@ -836,11 +839,11 @@ fn taskbar_badge_image() -> tauri::image::Image<'static> {
                 rgba[offset] = 8;
                 rgba[offset + 1] = 47;
                 rgba[offset + 2] = 73;
-                rgba[offset + 3] = 235;
+                rgba[offset + 3] = 245;
             }
         }
     }
-    tauri::image::Image::new_owned(rgba, SIZE, SIZE)
+    tauri::image::Image::new_owned(rgba, width, height)
 }
 
 #[cfg(target_os = "windows")]
@@ -850,12 +853,15 @@ fn sync_taskbar_badge(app: &AppHandle, state: &AppState) {
     let app_handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Some(window) = app_handle.get_window("main") {
-            let icon = if active {
-                Some(taskbar_badge_image())
-            } else {
-                None
-            };
-            let _ = window.set_overlay_icon(icon);
+            if let Some(default_icon) = app_handle.default_window_icon() {
+                let next_icon = if active {
+                    badged_window_icon(default_icon)
+                } else {
+                    default_icon.to_owned()
+                };
+                let _ = window.set_icon(next_icon);
+            }
+            let _ = window.set_overlay_icon(None);
         }
     });
 }

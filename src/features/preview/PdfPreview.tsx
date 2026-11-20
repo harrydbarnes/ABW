@@ -58,23 +58,24 @@ export default memo(function PdfPreview({
   }, [page]);
 
   useEffect(() => {
-    const element = canvasWrap.current;
-    if (!element) {
-      return;
-    }
     const handleWheel = (event: WheelEvent) => {
       if (!event.ctrlKey) {
         return;
       }
+      const root = rootRef.current;
+      if (!root || !(event.target instanceof Node) || !root.contains(event.target)) {
+        return;
+      }
       event.preventDefault();
-      const delta = event.deltaY < 0 ? 10 : -10;
+      const rawStep = Math.round(-event.deltaY * 0.14);
+      const delta = rawStep === 0 ? (event.deltaY < 0 ? 6 : -6) : Math.max(-20, Math.min(20, rawStep));
       setFitMode("manual");
       setZoom((current) =>
         Math.max(MIN_ZOOM_PERCENT, Math.min(MAX_ZOOM_PERCENT, current + delta)),
       );
     };
-    element.addEventListener("wheel", handleWheel, { passive: false });
-    return () => element.removeEventListener("wheel", handleWheel);
+    window.addEventListener("wheel", handleWheel, { passive: false });
+    return () => window.removeEventListener("wheel", handleWheel);
   }, []);
 
   useEffect(() => {
