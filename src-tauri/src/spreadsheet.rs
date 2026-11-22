@@ -433,6 +433,7 @@ enum PreviewParseOutcome {
     Fallback,
 }
 
+#[cfg(test)]
 pub fn validate_spreadsheet_archive(path: &Path) -> Result<(), String> {
     let mut file = File::open(path)
         .map_err(|error| format!("Unable to inspect spreadsheet archive: {error}"))?;
