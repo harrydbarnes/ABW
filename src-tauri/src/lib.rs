@@ -297,11 +297,17 @@ enum WrikePane {
     Right,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct SettingsFileStamp {
+    modified: Option<std::time::SystemTime>,
+    len: u64,
+}
+
 struct AppState {
     wrike_tabs: Mutex<HashMap<String, Arc<CaptureContext>>>,
     tracked_paths: Mutex<HashMap<String, PathBuf>>,
     detected_wrike_theme: Mutex<Option<String>>,
-    cached_settings: RwLock<Option<Settings>>,
+    cached_settings: RwLock<Option<(Settings, Option<SettingsFileStamp>)>>,
     top_inset: Mutex<f64>,
     quit_prompt_open: AtomicBool,
     wrike_inbox_unread: AtomicBool,
@@ -904,7 +910,7 @@ async fn update_last_wrike_session(app: AppHandle, session: WrikeSession) -> Res
         })?;
         if let Some(state) = app.try_state::<AppState>() {
             if let Ok(mut cached) = state.cached_settings.write() {
-                if let Some(settings) = cached.as_mut() {
+                if let Some((settings, _)) = cached.as_mut() {
                     settings.last_wrike_session = Some(normalized);
                 }
             }
@@ -1940,10 +1946,20 @@ fn read_settings(app: &AppHandle) -> Result<Settings, String> {
     Ok(settings)
 }
 
+fn current_settings_file_stamp(app: &AppHandle) -> Option<SettingsFileStamp> {
+    let path = settings_path(app).ok()?;
+    let metadata = fs::metadata(path).ok()?;
+    Some(SettingsFileStamp {
+        modified: metadata.modified().ok(),
+        len: metadata.len(),
+    })
+}
+
 fn store_cached_settings(app: &AppHandle, settings: &Settings) {
+    let stamp = current_settings_file_stamp(app);
     if let Some(state) = app.try_state::<AppState>() {
         if let Ok(mut cached) = state.cached_settings.write() {
-            *cached = Some(settings.clone());
+            *cached = Some((settings.clone(), stamp));
         }
     }
 }
@@ -1955,10 +1971,13 @@ fn refresh_cached_settings(app: &AppHandle) -> Result<Settings, String> {
 }
 
 fn get_cached_settings(app: &AppHandle) -> Result<Settings, String> {
+    let current_stamp = current_settings_file_stamp(app);
     if let Some(state) = app.try_state::<AppState>() {
         if let Ok(cached) = state.cached_settings.read() {
-            if let Some(settings) = cached.as_ref() {
-                return Ok(settings.clone());
+            if let Some((settings, cached_stamp)) = cached.as_ref() {
+                if *cached_stamp == current_stamp {
+                    return Ok(settings.clone());
+                }
             }
         }
     }
