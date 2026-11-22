@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FavoriteTicket, VisitHistoryEntry } from "../../types";
 
 type Mode = "favorites" | "history";
@@ -14,23 +14,23 @@ interface Props {
 }
 
 const PAGE_SIZE = 20;
+const DAY_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+});
+const TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
 
 function formatVisitedTimestamp(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) {
     return iso;
   }
-  const day = date.toLocaleDateString(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
-  const time = date.toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-  return `${day}, ${time}`;
+  return `${DAY_FORMATTER.format(date)}, ${TIME_FORMATTER.format(date)}`;
 }
 
 export default function TicketDrawerModal({
@@ -45,35 +45,38 @@ export default function TicketDrawerModal({
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
 
+  useEffect(() => {
+    setQuery("");
+    setPage(0);
+  }, [mode]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   const normalizedQuery = query.trim().toLowerCase();
 
-  const filteredFavorites = useMemo(() => {
+  const activeItems = useMemo(() => {
+    const source = mode === "favorites" ? favorites : history;
     if (!normalizedQuery) {
-      return favorites;
+      return source;
     }
-    return favorites.filter(
+    return source.filter(
       (item) =>
         item.title.toLowerCase().includes(normalizedQuery) ||
         (item.client ?? "").toLowerCase().includes(normalizedQuery) ||
         (item.details ?? "").toLowerCase().includes(normalizedQuery) ||
         item.url.toLowerCase().includes(normalizedQuery),
     );
-  }, [favorites, normalizedQuery]);
+  }, [favorites, history, mode, normalizedQuery]);
 
-  const filteredHistory = useMemo(() => {
-    if (!normalizedQuery) {
-      return history;
-    }
-    return history.filter(
-      (item) =>
-        item.title.toLowerCase().includes(normalizedQuery) ||
-        (item.client ?? "").toLowerCase().includes(normalizedQuery) ||
-        (item.details ?? "").toLowerCase().includes(normalizedQuery) ||
-        item.url.toLowerCase().includes(normalizedQuery),
-    );
-  }, [history, normalizedQuery]);
-
-  const activeItems = mode === "favorites" ? filteredFavorites : filteredHistory;
   const totalPages = Math.max(1, Math.ceil(activeItems.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages - 1);
   const pageItems = activeItems.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);

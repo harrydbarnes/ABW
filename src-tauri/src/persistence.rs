@@ -1,9 +1,55 @@
 use serde::{de::DeserializeOwned, Serialize};
-use std::{fs, io::Write, path::Path, sync::Mutex};
+use std::{
+    fs,
+    io::Write,
+    path::Path,
+    sync::RwLock,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-static DATA_LOCK: Mutex<()> = Mutex::new(());
+static DATA_LOCK: RwLock<()> = RwLock::new(());
+
+pub fn format_unix_timestamp_rfc3339(seconds: i64) -> Option<String> {
+    let days = seconds.div_euclid(86_400);
+    let secs_of_day = seconds.rem_euclid(86_400);
+    let hour = secs_of_day / 3_600;
+    let minute = (secs_of_day % 3_600) / 60;
+    let second = secs_of_day % 60;
+    let (year, month, day) = civil_from_unix_days(days)?;
+    if !(0..=9_999).contains(&year) {
+        return None;
+    }
+    Some(format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}+00:00"
+    ))
+}
+
+pub fn now_rfc3339() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    format_unix_timestamp_rfc3339(seconds).unwrap_or_else(|| "1970-01-01T00:00:00+00:00".to_owned())
+}
+
+fn civil_from_unix_days(days: i64) -> Option<(i64, u32, u32)> {
+    let z = days.checked_add(719_468)?;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = y + i64::from(m <= 2);
+    Some((year, m as u32, d as u32))
+}
 
 pub fn read<T: DeserializeOwned + Default>(path: &Path) -> Result<T, String> {
+    let _guard = DATA_LOCK
+        .read()
+        .map_err(|_| "Application data lock failed.")?;
     match fs::read(path) {
         Ok(contents) => match serde_json::from_slice(&contents) {
             Ok(value) => Ok(value),
@@ -22,6 +68,7 @@ fn backup_path(path: &Path) -> std::path::PathBuf {
 }
 
 pub fn health<T: DeserializeOwned>(path: &Path) -> Option<String> {
+    let _guard = DATA_LOCK.read().ok()?;
     let contents = fs::read(path).ok()?;
     if serde_json::from_slice::<T>(&contents).is_ok() {
         return None;
@@ -50,7 +97,7 @@ where
     T: DeserializeOwned + Serialize + Default,
 {
     let _guard = DATA_LOCK
-        .lock()
+        .write()
         .map_err(|_| "Application data lock failed.")?;
     let (mut value, backup_action) = match fs::read(path) {
         Ok(contents) => match serde_json::from_slice::<T>(&contents) {

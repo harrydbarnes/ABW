@@ -98,14 +98,6 @@ export async function saveWrikeSession(session: WrikeSession): Promise<void> {
   }
 }
 
-export async function readDownload(id: string): Promise<Uint8Array | null> {
-  if (!desktopRuntime) {
-    return null;
-  }
-  const bytes = await invokeDesktop<ArrayBuffer>("read_download", { id });
-  return new Uint8Array(bytes);
-}
-
 export async function readDownloadHead(id: string): Promise<PdfHeadResult | null> {
   if (!desktopRuntime) {
     return null;
@@ -148,6 +140,12 @@ export async function previewSpreadsheet(id: string): Promise<WorkbookPreview | 
 export async function openDownload(id: string): Promise<void> {
   if (desktopRuntime) {
     await invokeDesktop("open_download", { id });
+  }
+}
+
+export async function openDownloadsFolder(): Promise<void> {
+  if (desktopRuntime) {
+    await invokeDesktop("open_downloads_folder");
   }
 }
 
@@ -236,10 +234,32 @@ export async function openSourceTask(record: DownloadRecord, tabId?: string): Pr
   }
 }
 
-export async function launchWrike(tabId: string, url?: string): Promise<void> {
+export async function launchWrike(
+  tabId: string,
+  url?: string,
+  options?: { hidden?: boolean },
+): Promise<void> {
   if (desktopRuntime) {
-    await invokeDesktop("launch_wrike", { tabId, url: url ?? null });
+    await invokeDesktop("launch_wrike", {
+      tabId,
+      url: url ?? null,
+      hidden: options?.hidden ?? false,
+    });
   }
+}
+
+export async function suspendWrikeTab(tabId: string): Promise<boolean> {
+  if (!desktopRuntime) {
+    return false;
+  }
+  return invokeDesktop<boolean>("suspend_wrike_tab", { tabId });
+}
+
+export async function resumeWrikeTab(tabId: string): Promise<boolean> {
+  if (!desktopRuntime) {
+    return false;
+  }
+  return invokeDesktop<boolean>("resume_wrike_tab", { tabId });
 }
 
 export async function resizeWrikeTabs(

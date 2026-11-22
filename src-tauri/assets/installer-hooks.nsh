@@ -15,7 +15,10 @@ Function AbwCaptureStartup
 FunctionEnd
 
 !macro NSIS_HOOK_PREINSTALL
-  IfSilent 0 abw_preinstall_done
+  IfSilent abw_preinstall_capture
+  StrCmp $UpdateMode 1 abw_preinstall_capture
+  StrCmp $PassiveMode 1 abw_preinstall_capture abw_preinstall_done
+  abw_preinstall_capture:
     Call AbwCaptureStartup
   abw_preinstall_done:
 !macroend
@@ -27,6 +30,8 @@ FunctionEnd
   abw_startup_new:
     StrCpy $R0 0
     IfSilent abw_startup_apply
+    StrCmp $UpdateMode 1 abw_startup_apply
+    StrCmp $PassiveMode 1 abw_startup_apply
     MessageBox MB_YESNO|MB_ICONQUESTION "Start ABW automatically when you sign in to Windows?" IDNO abw_startup_apply
     StrCpy $R0 1
   abw_startup_apply:
@@ -42,5 +47,6 @@ FunctionEnd
 !macro NSIS_HOOK_POSTUNINSTALL
   StrCmp $UpdateMode 1 abw_uninstall_done
     DeleteRegValue HKCU "${ABW_RUN_KEY}" "ABW"
+    DeleteRegKey HKCU "${ABW_PREF_KEY}"
   abw_uninstall_done:
 !macroend

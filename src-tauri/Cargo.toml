@@ -7,14 +7,12 @@ edition = "2021"
 
 [lib]
 name = "abw_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-calamine = "0.38.0"
-chrono = { version = "0.4", features = ["serde"] }
 open = "5"
 quick-xml = "0.42.0"
 serde = { version = "1", features = ["derive"] }
@@ -30,6 +28,8 @@ uuid = { version = "1", features = ["v4"] }
 zip = { version = "9.5.1", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
+webview2-com = "0.39.1"
+windows-core = "0.62.2"
 winreg = "0.56"
 
 [profile.release]

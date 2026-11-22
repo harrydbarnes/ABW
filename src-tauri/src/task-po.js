@@ -89,16 +89,25 @@
     event.stopPropagation();
     if (panel) location.assign(handoff + bookingValues());
   };
-  let scheduled = false;
+  let scheduleTimer = 0;
+  let rafId = 0;
   function schedule() {
-    if (!scheduled) {scheduled=true; requestAnimationFrame(() => {scheduled=false; sync();});}
+    if (scheduleTimer || rafId) return;
+    scheduleTimer = setTimeout(() => {
+      scheduleTimer = 0;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        sync();
+      });
+    }, 120);
   }
   function start() {
-    window.__abwPoObserver.observe(document.documentElement,{childList:true,subtree:true});
-    addEventListener('resize',schedule); addEventListener('scroll',schedule,true); addEventListener('hashchange',schedule);
+    window.__abwPoObserver.observe(document.documentElement, { childList: true, subtree: true });
+    addEventListener('resize', schedule, { passive: true });
+    addEventListener('hashchange', schedule);
     schedule();
     setInterval(() => { if (!document.hidden && panel) schedule(); }, 15000);
   }
-  window.__abwPoObserver=new MutationObserver(schedule);
-  if (document.documentElement) start(); else addEventListener('DOMContentLoaded',start,{once:true});
+  window.__abwPoObserver = new MutationObserver(schedule);
+  if (document.documentElement) start(); else addEventListener('DOMContentLoaded', start, { once: true });
 })();

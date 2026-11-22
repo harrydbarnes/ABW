@@ -212,4 +212,17 @@ test('injected keyboard shortcut handler emits expected abw-shortcut URLs', () =
   ]);
 });
 
+test('installer hooks guard startup prompt during passive/update installs and clean up preference key on full uninstall', () => {
+  const hooks = readFileSync(new URL('../src-tauri/assets/installer-hooks.nsh', import.meta.url), 'utf8');
+  assert.match(hooks, /StrCmp \$UpdateMode 1 abw_startup_apply/);
+  assert.match(hooks, /StrCmp \$PassiveMode 1 abw_startup_apply/);
+  assert.match(hooks, /DeleteRegKey HKCU "\$\{ABW_PREF_KEY\}"/);
+});
+
+test('injected script exposes instant spellcheck toggle and gates open.htm observer', () => {
+  assert.match(source, /window\.__abwSetSpellCheck\s*=/);
+  assert.match(source, /if \(isLikelyOpenInterstitialPage\(\) && !clickBrowserLink\(\)\)/);
+  assert.match(source, /document\.readyState && document\.readyState !== "complete"/);
+});
+
 

@@ -82,7 +82,7 @@ export function estimatePreviewSize(preview: WorkbookPreview | null): number {
     for (const row of sheet.rows) {
       bytes += 48 + row.cells.length * 64;
       for (const cell of row.cells) {
-        bytes += cell.value.length * 2;
+        bytes += (cell.value?.length ?? 0) * 2;
         if (cell.styleIndex !== undefined) {
           bytes += 8;
         }
@@ -204,7 +204,7 @@ export function createPreviewCache<
     };
     entry.promise = entry.promise
       .then((head) => {
-        if (!head || !head.complete || head.initialChunk.byteLength > PDF_CACHE_ENTRY_BYTE_LIMIT) {
+        if (!head || head.initialChunk.byteLength > PDF_CACHE_ENTRY_BYTE_LIMIT) {
           pdfCache.delete(record.id);
           return head;
         }

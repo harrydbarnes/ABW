@@ -1,6 +1,7 @@
 import {
   lazy,
   Suspense,
+  useCallback,
   useDeferredValue,
   useEffect,
   useRef,
@@ -13,6 +14,7 @@ import {
 import { Menu } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { MaterialIcon, NavIcon, WindowControls } from "./components/AppIcons";
+import { DEFAULT_SETTINGS } from "./data/demo";
 import { FilesLibrary } from "./features/files/FilesLibrary";
 import { SettingsPanel } from "./features/settings/SettingsPanel";
 import {
@@ -31,9 +33,11 @@ import {
   loadSettings,
   loadStorageHealth,
   notifyUpdateAvailable,
+  openDownloadsFolder,
   openSourceTask,
   resetApp,
   resizeWrikeTabs,
+  resumeWrikeTab,
   revealDownload,
   saveSettings,
   saveWrikeSession,
@@ -48,6 +52,7 @@ import {
   subscribeToShareUrl,
   subscribeToWrikeShortcuts,
   subscribeToWrikeTabUpdates,
+  suspendWrikeTab,
   wrikeTabAction,
   type WrikeShortcutEvent,
   type WrikeTabAction,
@@ -58,6 +63,8 @@ import { evictPreviewById, formatBytes } from "./features/preview/previewCache";
 import {
   filterAndSortDownloads,
   nextTabIndexForCycle,
+  normalizedStartupUrls as normalizeStartupUrlsShared,
+  normalizeUrlInput,
   tabIndexFromShortcutDigit,
 } from "./lib/workspaceUtils";
 import type {
@@ -191,29 +198,10 @@ export function App() {
     return 45;
   });
   const [isResizingFiles, setIsResizingFiles] = useState(false);
-  const [settings, setSettings] = useState<Settings>({
-    spellCheck: true,
-    showSpellCheckInTopbar: false,
-    launchWrikeOnStart: true,
-    downloadNotifications: true,
-    openAbwAtSystemStartup: false,
-    closeToNotificationArea: true,
-    confirmBeforeClosingTabs: false,
-    openDownloadedFilesAutomatically: false,
-    openExternalLinksInBrowser: true,
-    customContextMenu: true,
-    autoCheckForUpdates: true,
-    autoMatchWrikeTheme: true,
-    suspendInactiveTabsMinutes: 0,
-    theme: "default",
-    customDictionary: [],
-    startupTabUrls: [WRIKE_HOME],
-    pinnedDownloadIds: [],
-    favoriteTickets: [],
-    visitHistory: [],
-    lastWrikeSession: null,
-  });
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [suspendedTabIds, setSuspendedTabIds] = useState<string[]>([]);
+  const suspendedTabIdsRef = useRef<Set<string>>(new Set());
+  suspendedTabIdsRef.current = new Set(suspendedTabIds);
   const [downloadsStats, setDownloadsStats] = useState<DownloadsStorageStats | null>(null);
   const [clearingDownloads, setClearingDownloads] = useState(false);
   const [ticketModal, setTicketModal] = useState<"favorites" | "history" | null>(null);
@@ -242,6 +230,7 @@ export function App() {
   settingsRef.current = settings;
   const tabLastActiveAtRef = useRef<Map<string, number>>(new Map());
   const lastRecordedVisitRef = useRef<Map<string, string>>(new Map());
+  const filesDragCleanupRef = useRef<(() => void) | null>(null);
   const canPersistSessionRef = useRef(false);
   const updateRequestInFlightRef = useRef(false);
   const appUpdatePhaseRef = useRef(appUpdate.phase);
@@ -308,6 +297,7 @@ export function App() {
       window.clearTimeout(autoUpdateTimerRef.current);
       window.clearTimeout(reloadAnimationTimerRef.current);
       window.clearTimeout(sessionSaveTimerRef.current);
+      filesDragCleanupRef.current?.();
     };
   }, []);
 
@@ -524,6 +514,10 @@ export function App() {
         setSessionPrompt(next.lastWrikeSession);
       }
       if (next.launchWrikeOnStart) {
+        const startupUrls = normalizedStartupUrls(next.startupTabUrls);
+        if (isDesktopRuntime()) {
+          void launchWrike("home", startupUrls[0], { hidden: true }).catch(() => undefined);
+        }
         await waitForLaunchSplash();
         await openStartupTabs(next.startupTabUrls);
         if (!canRestoreSession) {
@@ -536,135 +530,139 @@ export function App() {
         }
       }
     }).catch((error) => setStorageWarning(`Unable to load preferences: ${String(error)}`));
-    let dispose: () => void = () => undefined;
-    let disposeCompleted: () => void = () => undefined;
-    let disposeErrors: () => void = () => undefined;
-    let disposeTabUpdates: () => void = () => undefined;
-    let disposeSettingsUpdates: () => void = () => undefined;
-    let disposeOpenInNewTab: () => void = () => undefined;
-    let disposeShareUrl: () => void = () => undefined;
-    let disposeDeleted: () => void = () => undefined;
-    let disposeShortcuts: () => void = () => undefined;
-    void subscribeToDownloads(refresh).then((unsubscribe) => {
-      dispose = unsubscribe;
-    });
-    void subscribeToDownloadCompleted((record) => {
-      setSelectedId(record.id);
-      setNotice(`${record.fileName} is ready in Files.`);
-    }).then((unsubscribe) => {
-      disposeCompleted = unsubscribe;
-    });
-    void subscribeToDownloadDeleted((id) => {
-      evictPreviewById(id);
-    }).then((unsubscribe) => {
-      disposeDeleted = unsubscribe;
-    });
-    void subscribeToDownloadErrors((message) => {
-      setNotice(`Download was not added to Files: ${message}`);
-    }).then((unsubscribe) => {
-      disposeErrors = unsubscribe;
-    });
-    void subscribeToWrikeTabUpdates((update) => {
-      setWrikeTabs((current) =>
-        current.map((tab) =>
-          tab.id === update.tabId ? applyWrikeTabUpdate(tab, update) : tab,
-        ),
-      );
-      const cleanTitle = update.title.trim();
-      const targetUrl = update.url?.trim() ?? "";
-      if (
-        targetUrl &&
-        targetUrl !== "about:blank" &&
-        !update.isTitleLoading &&
-        cleanTitle &&
-        cleanTitle !== "Wrike" &&
-        cleanTitle !== "Read Only Mode"
-      ) {
-        const signature = `${targetUrl}::${cleanTitle}`;
-        if (lastRecordedVisitRef.current.get(update.tabId) !== signature) {
-          lastRecordedVisitRef.current.set(update.tabId, signature);
-          const currentSettings = settingsRef.current;
-          const now = new Date().toISOString();
-          const { client, details } = extractWrikeTicketMetadata(cleanTitle, targetUrl);
-          const existingIndex = currentSettings.visitHistory.findIndex(
-            (entry) => entry.url === targetUrl,
-          );
-          let nextHistory: VisitHistoryEntry[];
-          if (existingIndex >= 0) {
-            const existing = currentSettings.visitHistory[existingIndex];
-            const updated: VisitHistoryEntry = {
-              ...existing,
-              title: cleanTitle,
-              client: client ?? existing.client,
-              details: details ?? existing.details,
-              lastVisitedAt: now,
-              visitCount: existing.visitCount + 1,
-            };
-            nextHistory = [
-              updated,
-              ...currentSettings.visitHistory.filter((_, idx) => idx !== existingIndex),
-            ];
-          } else {
-            nextHistory = [
-              {
-                id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
-                title: cleanTitle,
-                url: targetUrl,
-                client,
-                details,
-                lastVisitedAt: now,
-                visitCount: 1,
-              },
-              ...currentSettings.visitHistory,
-            ].slice(0, 250);
-          }
-          const nextSettings = { ...currentSettings, visitHistory: nextHistory };
-          settingsRef.current = nextSettings;
-          setSettings(nextSettings);
-          void saveSettings(nextSettings).catch(() => undefined);
+    let cancelled = false;
+    const unsubscribers: Array<() => void> = [];
+    const registerUnsubscriber = (promise: Promise<() => void>) => {
+      void promise.then((unsubscribe) => {
+        if (cancelled) {
+          unsubscribe();
+        } else {
+          unsubscribers.push(unsubscribe);
         }
-      }
-    }).then((unsubscribe) => {
-      disposeTabUpdates = unsubscribe;
-    });
-    void subscribeToSettingsUpdates((next) => {
-      setSettings(next);
-    }).then((unsubscribe) => {
-      disposeSettingsUpdates = unsubscribe;
-    });
-    void subscribeToOpenInNewTab((url) => {
-      void addWrikeTab(url);
-    }).then((unsubscribe) => {
-      disposeOpenInNewTab = unsubscribe;
-    });
-    void subscribeToShareUrl((url) => {
-      if (navigator.share) {
-        void navigator.share({ title: "Wrike", url }).catch(() => undefined);
-      } else {
-        void navigator.clipboard?.writeText(url).then(() => {
-          setNotice("Link copied to clipboard for sharing.");
-        }).catch(() => undefined);
-      }
-    }).then((unsubscribe) => {
-      disposeShareUrl = unsubscribe;
-    });
-    void subscribeToWrikeShortcuts((shortcut) => {
-      shortcutHandlerRef.current(shortcut);
-    }).then((unsubscribe) => {
-      disposeShortcuts = unsubscribe;
-    });
+      });
+    };
+    registerUnsubscriber(subscribeToDownloads(refresh));
+    registerUnsubscriber(
+      subscribeToDownloadCompleted((record) => {
+        setSelectedId(record.id);
+        setNotice(`${record.fileName} is ready in Files.`);
+      }),
+    );
+    registerUnsubscriber(
+      subscribeToDownloadDeleted((id) => {
+        evictPreviewById(id);
+      }),
+    );
+    registerUnsubscriber(
+      subscribeToDownloadErrors((message) => {
+        setNotice(`Download was not added to Files: ${message}`);
+      }),
+    );
+    registerUnsubscriber(
+      subscribeToWrikeTabUpdates((update) => {
+        setWrikeTabs((current) =>
+          current.map((tab) =>
+            tab.id === update.tabId ? applyWrikeTabUpdate(tab, update) : tab,
+          ),
+        );
+        const cleanTitle = update.title.trim();
+        const targetUrl = update.url?.trim() ?? "";
+        if (
+          targetUrl &&
+          targetUrl !== "about:blank" &&
+          !update.isTitleLoading &&
+          cleanTitle &&
+          cleanTitle !== "Wrike" &&
+          cleanTitle !== "Read Only Mode"
+        ) {
+          const signature = `${targetUrl}::${cleanTitle}`;
+          if (lastRecordedVisitRef.current.get(update.tabId) !== signature) {
+            lastRecordedVisitRef.current.set(update.tabId, signature);
+            const currentSettings = settingsRef.current;
+            const now = new Date().toISOString();
+            const { client, details } = extractWrikeTicketMetadata(cleanTitle, targetUrl);
+            const existingIndex = currentSettings.visitHistory.findIndex(
+              (entry) => entry.url === targetUrl,
+            );
+            let nextHistory: VisitHistoryEntry[];
+            if (existingIndex >= 0) {
+              const existing = currentSettings.visitHistory[existingIndex];
+              const updated: VisitHistoryEntry = {
+                ...existing,
+                title: cleanTitle,
+                client: client ?? existing.client,
+                details: details ?? existing.details,
+                lastVisitedAt: now,
+                visitCount: existing.visitCount + 1,
+              };
+              nextHistory = [
+                updated,
+                ...currentSettings.visitHistory.filter((_, idx) => idx !== existingIndex),
+              ];
+            } else {
+              nextHistory = [
+                {
+                  id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+                  title: cleanTitle,
+                  url: targetUrl,
+                  client,
+                  details,
+                  lastVisitedAt: now,
+                  visitCount: 1,
+                },
+                ...currentSettings.visitHistory,
+              ].slice(0, 250);
+            }
+            const nextSettings = { ...currentSettings, visitHistory: nextHistory };
+            settingsRef.current = nextSettings;
+            setSettings(nextSettings);
+            void saveSettings(nextSettings).catch(() => undefined);
+          }
+        }
+      }),
+    );
+    registerUnsubscriber(
+      subscribeToSettingsUpdates((next) => {
+        settingsRef.current = next;
+        setSettings(next);
+      }),
+    );
+    registerUnsubscriber(
+      subscribeToOpenInNewTab((url) => {
+        void addWrikeTab(url);
+      }),
+    );
+    registerUnsubscriber(
+      subscribeToShareUrl((url) => {
+        if (navigator.share) {
+          void navigator.share({ title: "Wrike", url }).catch(() => undefined);
+        } else {
+          void navigator.clipboard
+            ?.writeText(url)
+            .then(() => {
+              setNotice("Link copied to clipboard for sharing.");
+            })
+            .catch(() => undefined);
+        }
+      }),
+    );
+    registerUnsubscriber(
+      subscribeToWrikeShortcuts((shortcut) => {
+        shortcutHandlerRef.current(shortcut);
+      }),
+    );
     return () => {
-      dispose();
-      disposeCompleted();
-      disposeDeleted();
-      disposeErrors();
-      disposeTabUpdates();
-      disposeSettingsUpdates();
-      disposeOpenInNewTab();
-      disposeShareUrl();
-      disposeShortcuts();
+      cancelled = true;
+      for (const unsubscribe of unsubscribers) {
+        unsubscribe();
+      }
     };
   }, []);
+
+  const pinnedDownloadIdsKey = useMemo(
+    () => settings.pinnedDownloadIds.join(","),
+    [settings.pinnedDownloadIds],
+  );
 
   useEffect(() => {
     if (screen !== "settings") {
@@ -681,7 +679,7 @@ export function App() {
     return () => {
       live = false;
     };
-  }, [screen, downloads, settings.pinnedDownloadIds]);
+  }, [screen, downloads, pinnedDownloadIdsKey]);
 
   useEffect(() => {
     const now = Date.now();
@@ -690,6 +688,9 @@ export function App() {
     for (const tabId of visibleIds) {
       if (tabId) {
         tabLastActiveAtRef.current.set(tabId, now);
+        if (suspendedTabIdsRef.current.has(tabId)) {
+          void resumeWrikeTab(tabId).catch(() => undefined);
+        }
       }
     }
     if (visibleIds.length) {
@@ -712,9 +713,10 @@ export function App() {
       const activeIds = new Set(
         screenRef.current === "wrike" ? visibleWrikeTabIds() : [activeWrikeTabIdRef.current],
       );
+      const alreadySuspended = suspendedTabIdsRef.current;
       const toSuspend: string[] = [];
       for (const tab of wrikeTabsRef.current) {
-        if (activeIds.has(tab.id)) {
+        if (activeIds.has(tab.id) || alreadySuspended.has(tab.id)) {
           continue;
         }
         const lastActiveAt = tabLastActiveAtRef.current.get(tab.id) ?? now;
@@ -726,7 +728,7 @@ export function App() {
         return;
       }
       for (const tabId of toSuspend) {
-        void closeWrikeTab(tabId).catch(() => undefined);
+        void suspendWrikeTab(tabId).catch(() => undefined);
       }
       setSuspendedTabIds((current) => [...new Set([...current, ...toSuspend])]);
     }, intervalMs);
@@ -754,7 +756,9 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     let resizeTimer: number | undefined;
+    let maxCheckTimer: number | undefined;
     let unlistenResize: (() => void) | undefined;
     const syncWrikeBounds = () => {
       if (!isDesktopRuntime()) {
@@ -766,15 +770,26 @@ export function App() {
     if (isDesktopRuntime()) {
       const appWindow = getCurrentWindow();
       void appWindow.isMaximized().then(setIsWindowMaximized).catch(() => undefined);
-      void appWindow.onResized(() => {
-        void appWindow.isMaximized().then(setIsWindowMaximized).catch(() => undefined);
-      }).then((dispose) => {
-        unlistenResize = dispose;
-      });
+      void appWindow
+        .onResized(() => {
+          window.clearTimeout(maxCheckTimer);
+          maxCheckTimer = window.setTimeout(() => {
+            void appWindow.isMaximized().then(setIsWindowMaximized).catch(() => undefined);
+          }, 80);
+        })
+        .then((dispose) => {
+          if (cancelled) {
+            dispose();
+          } else {
+            unlistenResize = dispose;
+          }
+        });
     }
     window.addEventListener("resize", syncWrikeBounds);
     return () => {
+      cancelled = true;
       window.clearTimeout(resizeTimer);
+      window.clearTimeout(maxCheckTimer);
       unlistenResize?.();
       window.removeEventListener("resize", syncWrikeBounds);
     };
@@ -788,28 +803,8 @@ export function App() {
   const selectedRecord =
     visibleDownloads.find((record) => record.id === selectedId) ?? visibleDownloads[0] ?? null;
 
-  function normalizeUrlInput(value: string): string | null {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return null;
-    }
-    const candidate =
-      trimmed.includes("://") || trimmed === "about:blank" ? trimmed : `https://${trimmed}`;
-    try {
-      const url = new URL(candidate);
-      return url.protocol === "http:" || url.protocol === "https:" || url.href === "about:blank"
-        ? url.href
-        : null;
-    } catch {
-      return null;
-    }
-  }
-
-  function normalizedStartupUrls(urls = settings.startupTabUrls) {
-    const normalized = urls
-      .map(normalizeUrlInput)
-      .filter((url): url is string => Boolean(url));
-    return normalized.length ? [...new Set(normalized)] : [WRIKE_HOME];
+  function normalizedStartupUrls(urls = settingsRef.current.startupTabUrls) {
+    return normalizeStartupUrlsShared(urls);
   }
 
   function isWrikeHomepageUrl(rawUrl: string): boolean {
@@ -1043,10 +1038,12 @@ export function App() {
       focusTabId === nextSplit.leftTabId
         ? [nextSplit.rightTabId, nextSplit.leftTabId]
         : [nextSplit.leftTabId, nextSplit.rightTabId];
-    for (const tabId of launchOrder) {
-      const tab = wrikeTabsRef.current.find((candidate) => candidate.id === tabId);
-      await launchWrike(tabId, tab?.mode === "readOnly" ? READ_ONLY_URL : undefined);
-    }
+    await Promise.all(
+      launchOrder.map((tabId) => {
+        const tab = wrikeTabsRef.current.find((candidate) => candidate.id === tabId);
+        return launchWrike(tabId, tab?.mode === "readOnly" ? READ_ONLY_URL : undefined);
+      }),
+    );
     await resizeWrikeTabs(currentWrikeLayouts(nextSplit, focusTabId)).catch(() => undefined);
     await hideWrike(wrikeTabsRef.current.filter((tab) => !visibleIds.includes(tab.id)).map((tab) => tab.id));
   }
@@ -1060,23 +1057,26 @@ export function App() {
     await showWrike(activeWrikeTabIdRef.current);
   }
 
+  const favoriteUrls = useMemo(
+    () => new Set(settings.favoriteTickets.map((item) => item.url)),
+    [settings.favoriteTickets],
+  );
+
   function isTabFavorited(tab: WrikeTab): boolean {
     const targetUrl = tab.url ?? "";
-    if (!targetUrl) {
-      return false;
-    }
-    return settings.favoriteTickets.some((item) => item.url === targetUrl);
+    return Boolean(targetUrl && favoriteUrls.has(targetUrl));
   }
 
   function toggleFavoriteTab(tab: WrikeTab) {
+    const current = settingsRef.current;
     const targetUrl = tab.url ?? normalizedStartupUrls()[0];
     if (!targetUrl) {
       return;
     }
-    const exists = settings.favoriteTickets.some((item) => item.url === targetUrl);
+    const exists = current.favoriteTickets.some((item) => item.url === targetUrl);
     let nextFavorites: FavoriteTicket[];
     if (exists) {
-      nextFavorites = settings.favoriteTickets.filter((item) => item.url !== targetUrl);
+      nextFavorites = current.favoriteTickets.filter((item) => item.url !== targetUrl);
     } else {
       const cleanTitle = tab.title.trim() || "Wrike";
       const { client, details } = extractWrikeTicketMetadata(cleanTitle, targetUrl);
@@ -1089,10 +1089,10 @@ export function App() {
           details,
           addedAt: new Date().toISOString(),
         },
-        ...settings.favoriteTickets,
+        ...current.favoriteTickets,
       ];
     }
-    void updateSettings({ ...settings, favoriteTickets: nextFavorites });
+    void updateSettings({ ...current, favoriteTickets: nextFavorites }, { silent: true });
   }
 
   async function openTicketModal(mode: "favorites" | "history") {
@@ -1150,18 +1150,26 @@ export function App() {
   }
 
   function removeFavoriteUrl(url: string) {
-    void updateSettings({
-      ...settings,
-      favoriteTickets: settings.favoriteTickets.filter((item) => item.url !== url),
-    });
+    const current = settingsRef.current;
+    void updateSettings(
+      {
+        ...current,
+        favoriteTickets: current.favoriteTickets.filter((item) => item.url !== url),
+      },
+      { silent: true },
+    );
   }
 
   function clearVisitHistory() {
     lastRecordedVisitRef.current.clear();
-    void updateSettings({
-      ...settings,
-      visitHistory: [],
-    });
+    const current = settingsRef.current;
+    void updateSettings(
+      {
+        ...current,
+        visitHistory: [],
+      },
+      { silent: true },
+    );
   }
 
   async function handleResetApp() {
@@ -1172,6 +1180,8 @@ export function App() {
       setSessionPrompt(null);
       setTicketModal(null);
       lastRecordedVisitRef.current.clear();
+      tabLastActiveAtRef.current.clear();
+      setSuspendedTabIds([]);
       setSearch("");
       setFilter("all");
       for (const tab of wrikeTabsRef.current) {
@@ -1408,6 +1418,11 @@ export function App() {
       }
     } finally {
       closingTabIdsRef.current.delete(tabId);
+      tabLastActiveAtRef.current.delete(tabId);
+      lastRecordedVisitRef.current.delete(tabId);
+      setSuspendedTabIds((current) =>
+        current.includes(tabId) ? current.filter((id) => id !== tabId) : current,
+      );
     }
   }
 
@@ -1647,33 +1662,43 @@ export function App() {
   const activeWrikeTab =
     wrikeTabs.find((tab) => tab.id === activeWrikeTabId) ?? wrikeTabs[0] ?? null;
 
-  async function updateSettings(next: Settings) {
-    try {
-      const persisted = await saveSettings(next);
-      setSettings(persisted);
-      setNotice("Preferences saved.");
-    } catch (error) {
-      setStorageWarning(`Unable to save preferences: ${String(error)}`);
-    }
-  }
+  const updateSettings = useCallback(
+    async (next: Settings, options?: { silent?: boolean }) => {
+      try {
+        const persisted = await saveSettings(next);
+        settingsRef.current = persisted;
+        setSettings(persisted);
+        if (!options?.silent) {
+          setNotice("Preferences saved.");
+        }
+      } catch (error) {
+        setStorageWarning(`Unable to save preferences: ${String(error)}`);
+      }
+    },
+    [],
+  );
 
-  function togglePinnedDownload(id: string) {
-    const pinned = new Set(settings.pinnedDownloadIds);
-    if (pinned.has(id)) {
-      pinned.delete(id);
-    } else {
-      pinned.add(id);
-    }
-    void updateSettings({ ...settings, pinnedDownloadIds: [...pinned] });
-  }
+  const togglePinnedDownload = useCallback(
+    (id: string) => {
+      const current = settingsRef.current;
+      const pinned = new Set(current.pinnedDownloadIds);
+      if (pinned.has(id)) {
+        pinned.delete(id);
+      } else {
+        pinned.add(id);
+      }
+      void updateSettings({ ...current, pinnedDownloadIds: [...pinned] }, { silent: true });
+    },
+    [updateSettings],
+  );
 
-  function revealDownloadedFile(id: string) {
+  const revealDownloadedFile = useCallback((id: string) => {
     void revealDownload(id).catch((error) =>
       setNotice(`Unable to reveal file in folder: ${String(error)}`),
     );
-  }
+  }, []);
 
-  function removeDownloadedFile(record: DownloadRecord) {
+  const removeDownloadedFile = useCallback((record: DownloadRecord) => {
     if (record.demo) {
       return;
     }
@@ -1684,36 +1709,46 @@ export function App() {
         setNotice(`Removed ${record.fileName}.`);
       })
       .catch((error) => setNotice(`Unable to remove ${record.fileName}: ${String(error)}`));
-  }
+  }, []);
 
-  function handleClearUnpinnedDownloads() {
-    if (clearingDownloads) {
-      return;
-    }
-    setClearingDownloads(true);
-    void clearUnpinnedDownloads()
-      .then((result) => {
-        if (result.removedCount === 0) {
-          setNotice("No unpinned downloads to remove.");
-        } else {
-          setNotice(
-            `Removed ${result.removedCount} unpinned ${result.removedCount === 1 ? "file" : "files"} (${formatBytes(result.freedBytes)} freed).`,
-          );
-        }
-        return Promise.all([loadDownloads(), getDownloadsStorageStats()]).then(([items, stats]) => {
-          setDownloads(items);
-          setDownloadsStats(stats);
-        });
-      })
-      .catch((error) => setNotice(`Unable to clean up downloads: ${String(error)}`))
-      .finally(() => setClearingDownloads(false));
-  }
+  const handleOpenDownloadsFolder = useCallback(() => {
+    void openDownloadsFolder().catch((error) =>
+      setNotice(`Unable to open downloads folder: ${String(error)}`),
+    );
+  }, []);
+
+  const handleClearUnpinnedDownloads = useCallback(() => {
+    setClearingDownloads((busy) => {
+      if (busy) {
+        return busy;
+      }
+      void clearUnpinnedDownloads()
+        .then((result) => {
+          if (result.removedCount === 0) {
+            setNotice("No unpinned downloads to remove.");
+          } else {
+            setNotice(
+              `Removed ${result.removedCount} unpinned ${result.removedCount === 1 ? "file" : "files"} (${formatBytes(result.freedBytes)} freed).`,
+            );
+          }
+          return Promise.all([loadDownloads(), getDownloadsStorageStats()]).then(([items, stats]) => {
+            setDownloads(items);
+            setDownloadsStats(stats);
+          });
+        })
+        .catch((error) => setNotice(`Unable to clean up downloads: ${String(error)}`))
+        .finally(() => setClearingDownloads(false));
+      return true;
+    });
+  }, []);
 
   async function toggleSpellCheck() {
     await closeTopbarActionsMenu();
-    const spellCheck = !settings.spellCheck;
+    const current = settingsRef.current;
+    const spellCheck = !current.spellCheck;
     try {
-      const persisted = await saveSettings({ ...settings, spellCheck });
+      const persisted = await saveSettings({ ...current, spellCheck });
+      settingsRef.current = persisted;
       setSettings(persisted);
       setNotice(`Spell check ${persisted.spellCheck ? "enabled" : "disabled"}.`);
     } catch (error) {
@@ -1721,14 +1756,14 @@ export function App() {
     }
   }
 
-  async function testNotification() {
+  const testNotification = useCallback(async () => {
     try {
       await sendTestNotification();
       setNotice("Test notification sent.");
     } catch {
       setNotice("Unable to send a notification. Check Windows notification permissions.");
     }
-  }
+  }, []);
 
   async function openTopbarActionsMenu() {
     setIsTopbarActionsMenuOpen(true);
@@ -1955,7 +1990,8 @@ export function App() {
             </div>
           ) : appUpdate.phase === "available" &&
             appUpdate.latestVersion &&
-            !appUpdate.dismissedPrompt ? (
+            !appUpdate.dismissedPrompt &&
+            !showUpdateBanner ? (
             <div className="titlebar-session-toast titlebar-update-toast" role="status">
               <span>Update v{appUpdate.latestVersion} available</span>
               <span className="toast-actions">
@@ -2218,6 +2254,11 @@ export function App() {
             Copy link
           </button>
           <span className="menu-separator" />
+          <button onClick={() => void shareTab(menuTab)} role="menuitem">
+            <MaterialIcon kind="share" />
+            Share
+          </button>
+          <span className="menu-separator" />
           <button
             disabled={wrikeTabs.length <= 1}
             onClick={() => void closeTab(menuTab.id)}
@@ -2225,11 +2266,6 @@ export function App() {
           >
             <MaterialIcon kind="close" />
             Close tab
-          </button>
-          <span className="menu-separator" />
-          <button onClick={() => void shareTab(menuTab)} role="menuitem">
-            <MaterialIcon kind="share" />
-            Share
           </button>
         </div>
       ) : null}
@@ -2289,25 +2325,37 @@ export function App() {
                 const container = event.currentTarget.parentElement;
                 if (!container) return;
                 event.preventDefault();
+                filesDragCleanupRef.current?.();
                 setIsResizingFiles(true);
                 const rect = container.getBoundingClientRect();
+                let latestPct = filesSplitPercent;
                 const onMove = (moveEvent: PointerEvent) => {
                   const pct = ((moveEvent.clientX - rect.left) / rect.width) * 100;
-                  const clamped = Math.max(26, Math.min(70, pct));
-                  setFilesSplitPercent(clamped);
+                  latestPct = Math.max(26, Math.min(70, pct));
+                  container.style.setProperty("--files-split-percent", `${latestPct}%`);
+                };
+                const finish = () => {
+                  window.removeEventListener("pointermove", onMove);
+                  window.removeEventListener("pointerup", finish);
+                  window.removeEventListener("pointercancel", finish);
+                  filesDragCleanupRef.current = null;
+                  setIsResizingFiles(false);
+                  setFilesSplitPercent(latestPct);
                   try {
-                    window.localStorage.setItem("abw.filesSplitPercent", String(clamped));
+                    window.localStorage.setItem("abw.filesSplitPercent", String(latestPct));
                   } catch {
                     // ignore storage errors
                   }
                 };
-                const onUp = () => {
-                  setIsResizingFiles(false);
+                filesDragCleanupRef.current = () => {
                   window.removeEventListener("pointermove", onMove);
-                  window.removeEventListener("pointerup", onUp);
+                  window.removeEventListener("pointerup", finish);
+                  window.removeEventListener("pointercancel", finish);
+                  filesDragCleanupRef.current = null;
                 };
                 window.addEventListener("pointermove", onMove);
-                window.addEventListener("pointerup", onUp);
+                window.addEventListener("pointerup", finish);
+                window.addEventListener("pointercancel", finish);
               }}
               role="separator"
             />
@@ -2332,6 +2380,7 @@ export function App() {
               onCheckForUpdates={() => void runUpdateCheck(true)}
               onClearUnpinnedDownloads={handleClearUnpinnedDownloads}
               onInstallUpdate={() => void startUpdateInstall()}
+              onOpenDownloadsFolder={handleOpenDownloadsFolder}
               onResetApp={() => void handleResetApp()}
               onTestNotification={() => void testNotification()}
             />

@@ -1,4 +1,5 @@
-import { memo, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
+import { normalizedStartupUrls, normalizeUrlInput } from "../../lib/workspaceUtils";
 import {
   APP_THEMES,
   type AppThemeId,
@@ -17,6 +18,7 @@ interface Props {
   onCheckForUpdates: () => void;
   onClearUnpinnedDownloads: () => void;
   onInstallUpdate: () => void;
+  onOpenDownloadsFolder: () => void;
   onResetApp: () => void;
   onTestNotification: () => void;
 }
@@ -64,6 +66,7 @@ function AnimatedSettingItem({
     <div
       aria-hidden={!visible}
       className={`setting-filter-item ${visible ? "is-visible" : "is-hidden"} ${className}`.trim()}
+      inert={!visible ? true : undefined}
     >
       <div className="setting-filter-inner">{children}</div>
     </div>
@@ -80,12 +83,29 @@ export const SettingsPanel = memo(function SettingsPanel({
   onCheckForUpdates,
   onClearUnpinnedDownloads,
   onInstallUpdate,
+  onOpenDownloadsFolder,
   onResetApp,
   onTestNotification,
 }: Props) {
   const [searchQuery, setSearchQuery] = useState("");
   const [confirmResetOpen, setConfirmResetOpen] = useState(false);
+  const [confirmCleanupOpen, setConfirmCleanupOpen] = useState(false);
   const query = searchQuery.trim();
+
+  useEffect(() => {
+    if (!confirmResetOpen && !confirmCleanupOpen) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setConfirmResetOpen(false);
+        setConfirmCleanupOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [confirmCleanupOpen, confirmResetOpen]);
 
   const showUpdatesHeader = matchesSearch(query, "App updates", "version", "GitHub Releases", "install");
   const showAutoUpdateToggle = matchesSearch(
@@ -104,6 +124,11 @@ export const SettingsPanel = memo(function SettingsPanel({
     query,
     "Open ABW app at system startup",
     "Start ABW automatically when you sign in to Windows.",
+  );
+  const showStartMinimized = matchesSearch(
+    query,
+    "Start minimized to notification area",
+    "Launch ABW quietly in the Windows notification area when opened at system startup.",
   );
   const showCloseToTray = matchesSearch(
     query,
@@ -128,7 +153,7 @@ export const SettingsPanel = memo(function SettingsPanel({
   const showSuspendInactiveTabs = matchesSearch(
     query,
     "Suspend inactive background tabs",
-    "Close hidden Wrike tabs after inactivity to reclaim WebView2 memory. Clicking a suspended tab reloads it where you left off.",
+    "Suspend hidden Wrike tabs after inactivity to reclaim WebView2 memory while preserving your place.",
   );
   const showStartupTabs = matchesSearch(
     query,
@@ -145,6 +170,7 @@ export const SettingsPanel = memo(function SettingsPanel({
     showAbwPrefsHeader ||
     showLaunchWrike ||
     showSystemStartup ||
+    showStartMinimized ||
     showCloseToTray ||
     showConfirmClose ||
     showExternalLinks ||
@@ -157,20 +183,29 @@ export const SettingsPanel = memo(function SettingsPanel({
     "Download complete notifications",
     "Show a Windows notification when a file from Wrike has been saved into ABW Files.",
   );
+  const showWrikeNotifications = matchesSearch(
+    query,
+    "Wrike notifications",
+    "Comments, mentions and assignments use Wrike notifications in your live workspace tabs. Keep Wrike open and enable notifications when prompted.",
+    "Send test notification",
+  );
+  const showNotificationsHeader = matchesSearch(
+    query,
+    "Notifications",
+    "Configure Windows alerts for downloads and Wrike activity.",
+  );
+  const showNotificationsSection =
+    showNotificationsHeader || showDownloadNotifications || showWrikeNotifications;
+
   const showOpenDownloaded = matchesSearch(
     query,
     "Open downloaded files automatically",
     "Automatically open each downloaded file in its default Windows application as soon as it is saved into ABW Files.",
   );
-  const showWrikeNotifications = matchesSearch(
-    query,
-    "Wrike notifications",
-    "Comments, mentions and assignments use Wrike notifications in the live workspace tab. Keep it open and enable notifications when Wrike prompts you.",
-    "Send test notification",
-  );
   const showDownloadsCleanup = matchesSearch(
     query,
     "Downloads storage",
+    "Open downloads folder",
     "Clean up unpinned downloads",
     "Pinned files are kept during cleanup.",
   );
@@ -180,11 +215,7 @@ export const SettingsPanel = memo(function SettingsPanel({
     "ABW stores intercepted downloads in its per-user application data directory. Files can always be opened in Windows from the preview pane.",
   );
   const showFileManagementSection =
-    showFileManagementHeader ||
-    showDownloadNotifications ||
-    showOpenDownloaded ||
-    showWrikeNotifications ||
-    showDownloadsCleanup;
+    showFileManagementHeader || showOpenDownloaded || showDownloadsCleanup;
 
   const showThemeSection = matchesSearch(
     query,
@@ -202,7 +233,7 @@ export const SettingsPanel = memo(function SettingsPanel({
   );
   const showSpellCheckTopbar = matchesSearch(
     query,
-    "Show in topbar",
+    "Show spell check in topbar",
     "Show a quick spell check toggle button in the top window bar.",
   );
   const showDictionary = matchesSearch(
@@ -222,16 +253,21 @@ export const SettingsPanel = memo(function SettingsPanel({
   const hasAnyMatches =
     showUpdatesSection ||
     showAbwPrefsSection ||
+    showNotificationsSection ||
     showFileManagementSection ||
     showThemeSection ||
     showSpellSection;
+
+  const unpinnedCount = downloadsStats
+    ? Math.max(0, downloadsStats.totalFiles - downloadsStats.pinnedFiles)
+    : 0;
 
   return (
     <section className="settings-panel">
       <header className="settings-header-row">
         <div>
           <h1>Settings</h1>
-          <p>Preferences apply to ABW and the live Wrike workspace tab.</p>
+          <p>Preferences apply to ABW and your live Wrike workspace tabs.</p>
         </div>
         <div className="settings-search-box">
           <input
@@ -298,6 +334,15 @@ export const SettingsPanel = memo(function SettingsPanel({
               query={query}
             />
           </AnimatedSettingItem>
+          <AnimatedSettingItem visible={showStartMinimized || showAbwPrefsHeader}>
+            <SettingToggle
+              checked={settings.startMinimizedToTray}
+              description="Launch ABW quietly in the Windows notification area when opened at system startup."
+              label="Start minimized to notification area"
+              onChange={(startMinimizedToTray) => onChange({ ...settings, startMinimizedToTray })}
+              query={query}
+            />
+          </AnimatedSettingItem>
           <AnimatedSettingItem visible={showCloseToTray || showAbwPrefsHeader}>
             <SettingToggle
               checked={settings.closeToNotificationArea}
@@ -310,7 +355,7 @@ export const SettingsPanel = memo(function SettingsPanel({
           <AnimatedSettingItem visible={showConfirmClose || showAbwPrefsHeader}>
             <SettingToggle
               checked={settings.confirmBeforeClosingTabs}
-              description="Ask before quitting when more than one Wrike tab is open. Closing to the notification area keeps your tabs running."
+              description="Ask before quitting when more than one Wrike tab is open. Applies when quitting directly or when Close to notification area is off."
               label="Confirm before closing with multiple tabs open"
               onChange={(confirmBeforeClosingTabs) => onChange({ ...settings, confirmBeforeClosingTabs })}
               query={query}
@@ -345,7 +390,7 @@ export const SettingsPanel = memo(function SettingsPanel({
                 <small>
                   <HighlightText
                     query={query}
-                    text="Close hidden Wrike tabs after inactivity to reclaim WebView2 memory. Clicking a suspended tab reloads it where you left off."
+                    text="Suspend hidden Wrike tabs after inactivity to reclaim WebView2 memory while preserving your place."
                   />
                 </small>
               </span>
@@ -378,6 +423,40 @@ export const SettingsPanel = memo(function SettingsPanel({
         </div>
       </AnimatedSettingItem>
 
+      <AnimatedSettingItem className="setting-section-item" visible={showNotificationsSection}>
+        <div className="setting-group">
+          <div className="setting-group-header">
+            <h2><HighlightText query={query} text="Notifications" /></h2>
+            <p><HighlightText query={query} text="Configure Windows alerts for downloads and Wrike activity." /></p>
+          </div>
+          <AnimatedSettingItem visible={showDownloadNotifications || showNotificationsHeader}>
+            <SettingToggle
+              checked={settings.downloadNotifications}
+              description="Show a Windows notification when a file from Wrike has been saved into ABW Files."
+              label="Download complete notifications"
+              onChange={(downloadNotifications) => onChange({ ...settings, downloadNotifications })}
+              query={query}
+            />
+          </AnimatedSettingItem>
+          <AnimatedSettingItem visible={showWrikeNotifications || showNotificationsHeader}>
+            <div className="notification-note">
+              <div>
+                <h3><HighlightText query={query} text="Wrike notifications" /></h3>
+                <p>
+                  <HighlightText
+                    query={query}
+                    text="Comments, mentions and assignments use Wrike notifications in your live workspace tabs. Keep Wrike open and enable notifications when prompted."
+                  />
+                </p>
+              </div>
+              <button className="secondary-action" onClick={onTestNotification} type="button">
+                <HighlightText query={query} text="Send test notification" />
+              </button>
+            </div>
+          </AnimatedSettingItem>
+        </div>
+      </AnimatedSettingItem>
+
       <AnimatedSettingItem className="setting-section-item" visible={showFileManagementSection}>
         <div className="setting-group">
           <div className="setting-group-header">
@@ -389,15 +468,6 @@ export const SettingsPanel = memo(function SettingsPanel({
               />
             </p>
           </div>
-          <AnimatedSettingItem visible={showDownloadNotifications || showFileManagementHeader}>
-            <SettingToggle
-              checked={settings.downloadNotifications}
-              description="Show a Windows notification when a file from Wrike has been saved into ABW Files."
-              label="Download complete notifications"
-              onChange={(downloadNotifications) => onChange({ ...settings, downloadNotifications })}
-              query={query}
-            />
-          </AnimatedSettingItem>
           <AnimatedSettingItem visible={showOpenDownloaded || showFileManagementHeader}>
             <SettingToggle
               checked={settings.openDownloadedFilesAutomatically}
@@ -409,46 +479,36 @@ export const SettingsPanel = memo(function SettingsPanel({
               query={query}
             />
           </AnimatedSettingItem>
-          <AnimatedSettingItem visible={showWrikeNotifications || showFileManagementHeader}>
-            <div className="notification-note">
-              <div>
-                <h3><HighlightText query={query} text="Wrike notifications" /></h3>
-                <p>
-                  <HighlightText
-                    query={query}
-                    text="Comments, mentions and assignments use Wrike notifications in the live workspace tab. Keep it open and enable notifications when Wrike prompts you."
-                  />
-                </p>
-              </div>
-              <button className="secondary-action" onClick={onTestNotification}>
-                <HighlightText query={query} text="Send test notification" />
-              </button>
-            </div>
-          </AnimatedSettingItem>
           <AnimatedSettingItem visible={showDownloadsCleanup || showFileManagementHeader}>
             <div className="notification-note">
               <div>
                 <h3><HighlightText query={query} text="Downloads storage" /></h3>
                 <p>
                   {downloadsStats
-                    ? `${downloadsStats.totalFiles} downloaded ${downloadsStats.totalFiles === 1 ? "file" : "files"} (${formatBytes(downloadsStats.totalBytes)}) · ${downloadsStats.pinnedFiles} pinned · ${formatBytes(downloadsStats.unpinnedBytes)} unpinned.`
+                    ? `${downloadsStats.totalFiles} downloaded ${downloadsStats.totalFiles === 1 ? "file" : "files"} (${formatStorageBytes(downloadsStats.totalBytes)}) · ${downloadsStats.pinnedFiles} pinned · ${formatStorageBytes(downloadsStats.unpinnedBytes)} unpinned.`
                     : "ABW stores intercepted downloads in its per-user application data directory. Pinned files are kept during cleanup."}
                 </p>
               </div>
-              <button
-                className="secondary-action"
-                disabled={
-                  clearingDownloads ||
-                  !downloadsStats ||
-                  downloadsStats.totalFiles <= downloadsStats.pinnedFiles
-                }
-                onClick={onClearUnpinnedDownloads}
-              >
-                <HighlightText
-                  query={query}
-                  text={clearingDownloads ? "Cleaning up..." : "Clean up unpinned downloads"}
-                />
-              </button>
+              <div className="storage-actions">
+                <button
+                  className="secondary-action"
+                  onClick={onOpenDownloadsFolder}
+                  type="button"
+                >
+                  <HighlightText query={query} text="Open downloads folder" />
+                </button>
+                <button
+                  className="secondary-action"
+                  disabled={clearingDownloads || unpinnedCount === 0}
+                  onClick={() => setConfirmCleanupOpen(true)}
+                  type="button"
+                >
+                  <HighlightText
+                    query={query}
+                    text={clearingDownloads ? "Cleaning up..." : "Clean up unpinned downloads"}
+                  />
+                </button>
+              </div>
             </div>
           </AnimatedSettingItem>
         </div>
@@ -487,7 +547,7 @@ export const SettingsPanel = memo(function SettingsPanel({
             <SettingToggle
               checked={settings.showSpellCheckInTopbar}
               description="Show a quick spell check toggle button in the top window bar."
-              label="Show in topbar"
+              label="Show spell check in topbar"
               onChange={(showSpellCheckInTopbar) => onChange({ ...settings, showSpellCheckInTopbar })}
               query={query}
             />
@@ -515,6 +575,44 @@ export const SettingsPanel = memo(function SettingsPanel({
           Reset
         </button>
       </footer>
+      {confirmCleanupOpen ? (
+        <div
+          className="reset-confirm-backdrop"
+          onClick={() => setConfirmCleanupOpen(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirm downloads cleanup"
+        >
+          <div className="reset-confirm-modal" onClick={(event) => event.stopPropagation()}>
+            <h2>Clean up unpinned downloads?</h2>
+            <p>
+              This will permanently remove {unpinnedCount}{" "}
+              {unpinnedCount === 1 ? "unpinned file" : "unpinned files"} (
+              {formatStorageBytes(downloadsStats?.unpinnedBytes ?? 0)}) from ABW&apos;s downloads
+              folder. Pinned files will be kept.
+            </p>
+            <div className="reset-confirm-actions">
+              <button
+                className="secondary-action"
+                onClick={() => setConfirmCleanupOpen(false)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="reset-confirm-danger"
+                onClick={() => {
+                  setConfirmCleanupOpen(false);
+                  onClearUnpinnedDownloads();
+                }}
+                type="button"
+              >
+                Clean up
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {confirmResetOpen ? (
         <div
           className="reset-confirm-backdrop"
@@ -556,7 +654,10 @@ export const SettingsPanel = memo(function SettingsPanel({
   );
 });
 
-function formatBytes(bytes: number): string {
+function formatStorageBytes(bytes: number): string {
+  if (bytes <= 0) {
+    return "0 B";
+  }
   if (bytes < 1024 * 1024) {
     return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   }
@@ -638,7 +739,7 @@ function AppUpdateSettings({
   const checkedTime = checkedAt
     ? new Date(checkedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
     : null;
-  const releaseBullets = formatReleaseNotes(notes);
+  const releaseBullets = useMemo(() => formatReleaseNotes(notes), [notes]);
 
   let summary = `Running ABW v${appVersion}.`;
   if (phase === "checking") {
@@ -648,8 +749,8 @@ function AppUpdateSettings({
   } else if (phase === "downloading") {
     summary =
       progressPercent !== null && totalBytes
-        ? `Downloading ABW v${latestVersion ?? ""}: ${formatBytes(downloadedBytes)} of ${formatBytes(totalBytes)} (${progressPercent}%).`
-        : `Downloading ABW v${latestVersion ?? ""} (${formatBytes(downloadedBytes)})...`;
+        ? `Downloading ABW v${latestVersion ?? ""}: ${formatStorageBytes(downloadedBytes)} of ${formatStorageBytes(totalBytes)} (${progressPercent}%).`
+        : `Downloading ABW v${latestVersion ?? ""} (${formatStorageBytes(downloadedBytes)})...`;
   } else if (phase === "installing") {
     summary = `Verifying signature and installing ABW v${latestVersion ?? ""}. ABW will restart automatically.`;
   } else if (phase === "up-to-date") {
@@ -746,26 +847,53 @@ function StartupTabsSettings({
   onChange: (urls: string[]) => void;
 }) {
   const [draft, setDraft] = useState("");
-  const normalizedUrls = normalizeUrls(urls);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const normalizedUrls = useMemo(() => normalizedStartupUrls(urls), [urls]);
 
   function addUrl() {
-    const next = normalizeUrl(draft);
+    const next = normalizeUrlInput(draft);
     if (!next) {
+      setValidationError("Enter a valid https:// or http:// URL.");
       return;
     }
-    onChange(normalizeUrls([...normalizedUrls, next]));
+    setValidationError(null);
+    onChange(normalizedStartupUrls([...normalizedUrls, next]));
     setDraft("");
   }
 
-  function commitUrl(index: number, value: string) {
-    const next = normalizeUrl(value);
+  function commitUrl(index: number, value: string, input: HTMLInputElement) {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      if (normalizedUrls.length > 1) {
+        setValidationError(null);
+        onChange(normalizedStartupUrls(normalizedUrls.filter((_, i) => i !== index)));
+      } else {
+        input.value = normalizedUrls[index];
+        setValidationError("At least one startup tab URL is required.");
+      }
+      return;
+    }
+    const next = normalizeUrlInput(trimmed);
     if (!next) {
-      onChange(normalizeUrls(normalizedUrls.filter((_, candidateIndex) => candidateIndex !== index)));
+      input.value = normalizedUrls[index];
+      setValidationError("Invalid URL — reverted to previous value.");
+      return;
+    }
+    setValidationError(null);
+    const updated = [...normalizedUrls];
+    updated[index] = next;
+    onChange(normalizedStartupUrls(updated));
+  }
+
+  function moveUrl(index: number, delta: -1 | 1) {
+    const target = index + delta;
+    if (target < 0 || target >= normalizedUrls.length) {
       return;
     }
     const updated = [...normalizedUrls];
-    updated[index] = next;
-    onChange(normalizeUrls(updated));
+    [updated[index], updated[target]] = [updated[target], updated[index]];
+    setValidationError(null);
+    onChange(updated);
   }
 
   return (
@@ -776,31 +904,70 @@ function StartupTabsSettings({
       </div>
       <div className="startup-url-list">
         {normalizedUrls.map((url, index) => (
-          <div className="startup-url-row" key={`${url}-${index}`}>
+          <div className="startup-url-row" key={index}>
             <span className="startup-url-badge">{index === 0 ? "New tab" : `Tab ${index + 1}`}</span>
             <input
               aria-label={index === 0 ? "New tab default URL" : `Startup tab ${index + 1} URL`}
               defaultValue={url}
-              onBlur={(event) => commitUrl(index, event.target.value)}
+              key={`${index}:${url}`}
+              onBlur={(event) => commitUrl(index, event.target.value, event.currentTarget)}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
-                  commitUrl(index, event.currentTarget.value);
+                  commitUrl(index, event.currentTarget.value, event.currentTarget);
                 }
               }}
             />
+            {normalizedUrls.length > 1 ? (
+              <div className="startup-url-reorder">
+                <button
+                  aria-label={`Move tab ${index + 1} up`}
+                  disabled={index === 0}
+                  onClick={() => moveUrl(index, -1)}
+                  title="Move up"
+                  type="button"
+                >
+                  ↑
+                </button>
+                <button
+                  aria-label={`Move tab ${index + 1} down`}
+                  disabled={index === normalizedUrls.length - 1}
+                  onClick={() => moveUrl(index, 1)}
+                  title="Move down"
+                  type="button"
+                >
+                  ↓
+                </button>
+              </div>
+            ) : null}
             <button
               disabled={normalizedUrls.length <= 1}
-              onClick={() => onChange(normalizeUrls(normalizedUrls.filter((_, candidateIndex) => candidateIndex !== index)))}
+              onClick={() => {
+                setValidationError(null);
+                onChange(
+                  normalizedStartupUrls(
+                    normalizedUrls.filter((_, candidateIndex) => candidateIndex !== index),
+                  ),
+                );
+              }}
+              type="button"
             >
               Remove
             </button>
           </div>
         ))}
       </div>
+      {validationError ? (
+        <p className="startup-url-error" role="alert">
+          {validationError}
+        </p>
+      ) : null}
       <div className="startup-url-add">
         <input
           aria-label="Add startup tab URL"
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            if (validationError) setValidationError(null);
+          }}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               addUrl();
@@ -809,36 +976,12 @@ function StartupTabsSettings({
           placeholder="Paste a URL"
           value={draft}
         />
-        <button className="secondary-action" onClick={addUrl}>
+        <button className="secondary-action" onClick={addUrl} type="button">
           Add tab
         </button>
       </div>
     </div>
   );
-}
-
-function normalizeUrls(urls: string[]) {
-  const normalized = urls
-    .map(normalizeUrl)
-    .filter((url): url is string => Boolean(url));
-  return normalized.length ? [...new Set(normalized)] : ["https://www.wrike.com/workspace.htm"];
-}
-
-function normalizeUrl(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const candidate =
-    trimmed.includes("://") || trimmed === "about:blank" ? trimmed : `https://${trimmed}`;
-  try {
-    const url = new URL(candidate);
-    return url.protocol === "http:" || url.protocol === "https:" || url.href === "about:blank"
-      ? url.href
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 function ThemeSettings({

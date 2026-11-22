@@ -13,6 +13,7 @@
   --accent: #315de8;
   --accent-soft: #e7ecff;
   --border: #dde4ef;
+  --text: #14233a;
   --muted: #637188;
   --surface: #ffffff;
   --surface-soft: #f5f7fb;
@@ -576,7 +577,6 @@ input:focus-visible {
   font-weight: 550;
   outline: 0;
   transform-origin: left center;
-  will-change: transform, opacity, filter;
 }
 
 .workspace-tab .tab-title {
@@ -1106,21 +1106,6 @@ input:focus-visible {
   white-space: nowrap;
   animation: topbar-toast-slide 2800ms cubic-bezier(.18, .88, .24, 1) both;
   pointer-events: auto;
-}
-
-.session-toast {
-  height: auto;
-  min-height: 44px;
-  max-width: 360px;
-  width: 360px;
-  padding: 9px 9px 9px 14px;
-  white-space: normal;
-  animation: none;
-}
-
-.session-toast > span:first-child {
-  min-width: 0;
-  flex: 1;
 }
 
 .toast-actions {

@@ -280,7 +280,9 @@ test("createPreviewCache deduplicates in-flight loads, enforces limits, and evic
   assert.equal(cache.pdfCacheSize(), 1);
 
   await cache.loadPdfHead({ id: "streamed", sizeBytes: 2 * 1024 * 1024 });
-  assert.equal(cache.pdfCacheSize(), 1);
+  await cache.loadPdfHead({ id: "streamed", sizeBytes: 2 * 1024 * 1024 });
+  assert.equal(pdfCalls, 2);
+  assert.equal(cache.pdfCacheSize(), 2);
 
   await Promise.all([
     cache.loadSpreadsheetPreview({ id: "sheet-1", sizeBytes: 1024 }),
@@ -290,6 +292,7 @@ test("createPreviewCache deduplicates in-flight loads, enforces limits, and evic
   assert.equal(cache.spreadsheetCacheSize(), 1);
 
   cache.evictById("small");
+  cache.evictById("streamed");
   cache.evictById("sheet-1");
   assert.equal(cache.pdfCacheSize(), 0);
   assert.equal(cache.spreadsheetCacheSize(), 0);

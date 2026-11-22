@@ -24,11 +24,18 @@ fn enabled_under(root: &winreg::RegKey, run_key: &str) -> Result<bool, String> {
 }
 
 #[cfg(windows)]
-pub fn set_enabled(enabled: bool) -> Result<(), String> {
+pub fn set_enabled(enabled: bool, minimized: bool) -> Result<(), String> {
     use winreg::{enums::HKEY_CURRENT_USER, RegKey};
     let root = RegKey::predef(HKEY_CURRENT_USER);
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    set_enabled_under(&root, RUN_KEY, PREFERENCE_KEY, enabled, &executable)
+    set_enabled_under(
+        &root,
+        RUN_KEY,
+        PREFERENCE_KEY,
+        enabled,
+        minimized,
+        &executable,
+    )
 }
 
 #[cfg(windows)]
@@ -37,13 +44,19 @@ fn set_enabled_under(
     run_key: &str,
     preference_key: &str,
     enabled: bool,
+    minimized: bool,
     executable: &std::path::Path,
 ) -> Result<(), String> {
     let (key, _) = root
         .create_subkey(run_key)
         .map_err(|error| format!("Unable to update Windows startup: {error}"))?;
     if enabled {
-        key.set_value("ABW", &format!("\"{}\"", executable.display()))
+        let command = if minimized {
+            format!("\"{}\" --minimized", executable.display())
+        } else {
+            format!("\"{}\"", executable.display())
+        };
+        key.set_value("ABW", &command)
             .map_err(|error| format!("Unable to enable Windows startup: {error}"))?;
     } else if let Err(error) = key.delete_value("ABW") {
         if error.kind() != std::io::ErrorKind::NotFound {
@@ -64,7 +77,7 @@ pub fn enabled() -> Result<bool, String> {
 }
 
 #[cfg(not(windows))]
-pub fn set_enabled(_enabled: bool) -> Result<(), String> {
+pub fn set_enabled(_enabled: bool, _minimized: bool) -> Result<(), String> {
     Err("Windows startup is only available on Windows.".into())
 }
 
@@ -81,7 +94,8 @@ mod tests {
         let executable = std::path::Path::new("C:\\Users\\Test User\\ABW.exe");
         assert!(!enabled_under(&test_root, "Run").unwrap());
         for enabled in [true, false, false, true] {
-            set_enabled_under(&test_root, "Run", "Preferences", enabled, executable).unwrap();
+            set_enabled_under(&test_root, "Run", "Preferences", enabled, false, executable)
+                .unwrap();
             assert_eq!(enabled_under(&test_root, "Run").unwrap(), enabled);
             let preference: u32 = test_root
                 .open_subkey("Preferences")
@@ -96,6 +110,16 @@ mod tests {
             .get_value("ABW")
             .unwrap();
         assert_eq!(command, "\"C:\\Users\\Test User\\ABW.exe\"");
+        set_enabled_under(&test_root, "Run", "Preferences", true, true, executable).unwrap();
+        let minimized_command: String = test_root
+            .open_subkey("Run")
+            .unwrap()
+            .get_value("ABW")
+            .unwrap();
+        assert_eq!(
+            minimized_command,
+            "\"C:\\Users\\Test User\\ABW.exe\" --minimized"
+        );
         drop(test_root);
         assert!(sandbox.starts_with("Software\\ABW-Tests\\"));
         root.delete_subkey_all(sandbox).unwrap();

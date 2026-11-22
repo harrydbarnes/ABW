@@ -16,7 +16,7 @@ type PDFLoadingTask = ReturnType<PdfJs["getDocument"]>;
 let pdfJsPromise: Promise<PdfJs> | null = null;
 const MAX_CANVAS_DIMENSION = 8_192;
 const MAX_CANVAS_PIXELS = 16_777_216;
-const PDF_RANGE_CHUNK_BYTES = 65_536;
+const PDF_RANGE_CHUNK_BYTES = 131_072;
 const MIN_ZOOM_PERCENT = 40;
 const MAX_ZOOM_PERCENT = 260;
 
@@ -48,10 +48,15 @@ export default memo(function PdfPreview({
   const [fitMode, setFitMode] = useState<PdfFitMode>("width");
   const [rotation, setRotation] = useState(0);
   const [displayedZoom, setDisplayedZoom] = useState(100);
+  const fitModeRef = useRef<PdfFitMode>("width");
+  const displayedZoomRef = useRef(100);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [rendering, setRendering] = useState(!demo);
   const [problem, setProblem] = useState<string | null>(null);
+
+  fitModeRef.current = fitMode;
+  displayedZoomRef.current = displayedZoom;
 
   useEffect(() => {
     setPageDraft(String(page));
@@ -69,9 +74,10 @@ export default memo(function PdfPreview({
       event.preventDefault();
       const rawStep = Math.round(-event.deltaY * 0.14);
       const delta = rawStep === 0 ? (event.deltaY < 0 ? 6 : -6) : Math.max(-20, Math.min(20, rawStep));
+      const baseZoom = fitModeRef.current === "manual" ? null : displayedZoomRef.current;
       setFitMode("manual");
       setZoom((current) =>
-        Math.max(MIN_ZOOM_PERCENT, Math.min(MAX_ZOOM_PERCENT, current + delta)),
+        Math.max(MIN_ZOOM_PERCENT, Math.min(MAX_ZOOM_PERCENT, (baseZoom ?? current) + delta)),
       );
     };
     window.addEventListener("wheel", handleWheel, { passive: false });
@@ -93,15 +99,16 @@ export default memo(function PdfPreview({
           : current,
       );
     };
-    updateSize(element.clientWidth, element.clientHeight);
+    const rect = element.getBoundingClientRect();
+    updateSize(Math.round(rect.width) || element.clientWidth, Math.round(rect.height) || element.clientHeight);
     if (typeof ResizeObserver === "undefined") {
       return;
     }
     let timer = 0;
     const observer = new ResizeObserver((entries) => {
-      const rect = entries[0]?.contentRect;
-      const width = rect?.width ?? element.clientWidth;
-      const height = rect?.height ?? element.clientHeight;
+      const entryRect = entries[0]?.contentRect;
+      const width = entryRect?.width ?? element.clientWidth;
+      const height = entryRect?.height ?? element.clientHeight;
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
         updateSize(width, height);
@@ -171,7 +178,7 @@ export default memo(function PdfPreview({
               void pending
                 .then((chunk) => {
                   if (!this.aborted) {
-                    this.onDataRange(begin, chunk);
+                    this.onDataRange(begin, existing ? chunk.slice() : chunk);
                   }
                 })
                 .catch((error: unknown) => {
@@ -196,7 +203,7 @@ export default memo(function PdfPreview({
             }
           }
 
-          rangeTransport = new TauriPdfRangeTransport(head.totalSize, head.initialChunk);
+          rangeTransport = new TauriPdfRangeTransport(head.totalSize, head.initialChunk.slice());
           loadingTask = pdfjs.getDocument({
             range: rangeTransport,
             rangeChunkSize: PDF_RANGE_CHUNK_BYTES,
@@ -348,7 +355,13 @@ export default memo(function PdfPreview({
           return;
         }
         if (live) {
-          setProblem("PDF preview could not be rendered.");
+          const message =
+            error instanceof Error && error.message
+              ? error.message
+              : typeof error === "string" && error
+                ? error
+                : "PDF preview could not be rendered.";
+          setProblem(message);
           setRendering(false);
         }
       });

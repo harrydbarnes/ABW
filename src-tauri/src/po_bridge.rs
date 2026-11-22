@@ -7,6 +7,7 @@ use std::{
 };
 use uuid::Uuid;
 
+#[cfg(windows)]
 const HOST: &str = "net.insidemedia.abw.po_check";
 const MAX_AGE: Duration = Duration::from_secs(120);
 
@@ -69,28 +70,51 @@ fn write_new(path: &std::path::Path, value: &Value) -> io::Result<()> {
     Ok(())
 }
 
-pub fn run_job(booking: Value) -> &'static str {
+use std::collections::HashMap;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex, OnceLock,
+};
+
+fn tab_po_generations() -> &'static Mutex<HashMap<String, Arc<AtomicU64>>> {
+    static GENERATIONS: OnceLock<Mutex<HashMap<String, Arc<AtomicU64>>>> = OnceLock::new();
+    GENERATIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn run_job_for_tab(tab_id: &str, booking: Value) -> Option<&'static str> {
+    let counter = {
+        let mut map = tab_po_generations().lock().ok()?;
+        map.entry(tab_id.to_owned())
+            .or_insert_with(|| Arc::new(AtomicU64::new(0)))
+            .clone()
+    };
+    let generation = counter.fetch_add(1, Ordering::SeqCst) + 1;
+
     if paired_origin().is_none() {
-        return "unavailable";
+        return Some("unavailable");
     }
     let Ok(root) = folder() else {
-        return "unavailable";
+        return Some("unavailable");
     };
     let id = Uuid::new_v4().to_string();
     let pending = root.join(format!("{id}.job"));
     let completed = root.join(format!("{id}.result"));
     if write_new(&pending, &booking).is_err() {
-        return "unavailable";
+        return Some("unavailable");
     }
-    let mut verdict = "unavailable";
+    let mut verdict = Some("unavailable");
     for _ in 0..90 {
+        if counter.load(Ordering::SeqCst) != generation {
+            verdict = None;
+            break;
+        }
         if let Ok(result) = fs::read_to_string(&completed) {
-            verdict = match result.as_str() {
+            verdict = Some(match result.as_str() {
                 "\"checked\"" => "checked",
                 "\"review\"" => "review",
                 "\"signin\"" => "signin",
                 _ => "unavailable",
-            };
+            });
             break;
         }
         std::thread::sleep(Duration::from_secs(1));

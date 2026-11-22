@@ -18,7 +18,6 @@ import type {
 import { loadCachedSpreadsheetPreview, toColumnLabel } from "./previewCache";
 
 const ROW_HEADER_WIDTH_PX = 38;
-const COLUMN_HEADER_HEIGHT_PX = 28;
 
 type CellCoord = {
   row: number;
@@ -97,8 +96,6 @@ const SheetRow = memo(function SheetRow({
   activeMatchCol,
   selMinCol,
   selMaxCol,
-  onStartSelection,
-  onExtendSelection,
 }: {
   row: WorkbookSheet["rows"][number];
   rowIndex: number;
@@ -108,8 +105,6 @@ const SheetRow = memo(function SheetRow({
   activeMatchCol: number;
   selMinCol: number;
   selMaxCol: number;
-  onStartSelection: (rowIndex: number, cellIndex: number, shiftKey: boolean) => void;
-  onExtendSelection: (rowIndex: number, cellIndex: number) => void;
 }) {
   return (
     <tr style={{ height: row.heightPx }}>
@@ -132,14 +127,9 @@ const SheetRow = memo(function SheetRow({
             className={className || undefined}
             colSpan={cell.colSpan}
             data-cell-key={isMatch || isActiveMatch ? `${rowIndex}:${cellIndex}` : undefined}
+            data-col={cellIndex}
+            data-row={rowIndex}
             key={columns[cellIndex]?.index ?? cellIndex}
-            onMouseDown={(event) => {
-              if (event.button !== 0) {
-                return;
-              }
-              onStartSelection(rowIndex, cellIndex, event.shiftKey);
-            }}
-            onMouseEnter={() => onExtendSelection(rowIndex, cellIndex)}
             rowSpan={cell.rowSpan}
             style={
               cell.styleIndex !== undefined
@@ -147,7 +137,7 @@ const SheetRow = memo(function SheetRow({
                 : cell.style
             }
           >
-            {cell.value}
+            {cell.value ?? ""}
           </td>
         );
       })}
@@ -329,15 +319,12 @@ export default memo(function SpreadsheetPreview({
     let nonEmptyCount = 0;
     let numericCount = 0;
     let sum = 0;
-    const rowsText: string[] = [];
 
     for (let r = normalizedBounds.minRow; r <= normalizedBounds.maxRow; r += 1) {
       const row = sheet.rows[r];
-      const rowValues: string[] = [];
       for (let c = normalizedBounds.minCol; c <= normalizedBounds.maxCol; c += 1) {
         const cell = row?.cells[c];
-        const value = cell && !cell.coveredByMerge ? cell.value : "";
-        rowValues.push(value);
+        const value = cell && !cell.coveredByMerge ? cell.value ?? "" : "";
         if (value.trim() !== "") {
           nonEmptyCount += 1;
           const numeric = parseSpreadsheetNumber(value);
@@ -347,7 +334,6 @@ export default memo(function SpreadsheetPreview({
           }
         }
       }
-      rowsText.push(rowValues.join("\t"));
     }
 
     const startLabel = `${sheet.columns[normalizedBounds.minCol]?.label ?? toColumnLabel(normalizedBounds.minCol + 1)}${sheet.rows[normalizedBounds.minRow]?.index ?? normalizedBounds.minRow + 1}`;
@@ -359,21 +345,30 @@ export default memo(function SpreadsheetPreview({
       numericCount,
       sum,
       average: numericCount > 0 ? sum / numericCount : null,
-      tsv: rowsText.join("\n"),
     };
   }, [normalizedBounds, sheet]);
 
   const copySelection = useCallback(async () => {
-    if (!selectionSummary) {
+    if (!sheet || !normalizedBounds) {
       return;
     }
+    const rowsText: string[] = [];
+    for (let r = normalizedBounds.minRow; r <= normalizedBounds.maxRow; r += 1) {
+      const row = sheet.rows[r];
+      const rowValues: string[] = [];
+      for (let c = normalizedBounds.minCol; c <= normalizedBounds.maxCol; c += 1) {
+        const cell = row?.cells[c];
+        rowValues.push(cell && !cell.coveredByMerge ? cell.value ?? "" : "");
+      }
+      rowsText.push(rowValues.join("\t"));
+    }
     try {
-      await navigator.clipboard.writeText(selectionSummary.tsv);
+      await navigator.clipboard.writeText(rowsText.join("\n"));
       setCopiedNotice(true);
     } catch {
       // Clipboard API unavailable
     }
-  }, [selectionSummary]);
+  }, [normalizedBounds, sheet]);
 
   const startSelection = useCallback((rowIndex: number, cellIndex: number, shiftKey: boolean) => {
     isSelectingRef.current = true;
@@ -603,7 +598,36 @@ export default memo(function SpreadsheetPreview({
                 ))}
               </tr>
             </thead>
-            <tbody>
+            <tbody
+              onMouseDown={(event) => {
+                if (event.button !== 0) {
+                  return;
+                }
+                const cell = (event.target as HTMLElement | null)?.closest<HTMLTableCellElement>("td[data-row][data-col]");
+                if (!cell) {
+                  return;
+                }
+                const rowIndex = Number(cell.dataset.row);
+                const cellIndex = Number(cell.dataset.col);
+                if (Number.isFinite(rowIndex) && Number.isFinite(cellIndex)) {
+                  startSelection(rowIndex, cellIndex, event.shiftKey);
+                }
+              }}
+              onMouseOver={(event) => {
+                if (!isSelectingRef.current) {
+                  return;
+                }
+                const cell = (event.target as HTMLElement | null)?.closest<HTMLTableCellElement>("td[data-row][data-col]");
+                if (!cell) {
+                  return;
+                }
+                const rowIndex = Number(cell.dataset.row);
+                const cellIndex = Number(cell.dataset.col);
+                if (Number.isFinite(rowIndex) && Number.isFinite(cellIndex)) {
+                  extendSelection(rowIndex, cellIndex);
+                }
+              }}
+            >
               {sheet.rows.map((row, rowIndex) => {
                 const inSelectedRow = Boolean(
                   normalizedBounds &&
@@ -616,8 +640,6 @@ export default memo(function SpreadsheetPreview({
                     columns={sheet.columns}
                     key={row.index}
                     matchCols={matchesByRow.get(rowIndex)}
-                    onExtendSelection={extendSelection}
-                    onStartSelection={startSelection}
                     row={row}
                     rowIndex={rowIndex}
                     selMaxCol={inSelectedRow && normalizedBounds ? normalizedBounds.maxCol : -1}
@@ -628,20 +650,6 @@ export default memo(function SpreadsheetPreview({
               })}
             </tbody>
           </table>
-          {sheet.images?.map((image, index) => (
-            <img
-              alt=""
-              className="sheet-image"
-              key={`${index}-${image.leftPx}-${image.topPx}`}
-              src={image.dataUrl}
-              style={{
-                left: ROW_HEADER_WIDTH_PX + image.leftPx,
-                top: COLUMN_HEADER_HEIGHT_PX + image.topPx,
-                width: image.widthPx,
-                height: image.heightPx,
-              }}
-            />
-          ))}
         </div>
       </div>
       {selectionSummary ? (
@@ -675,7 +683,7 @@ export default memo(function SpreadsheetPreview({
           <button
             aria-selected={active === index}
             className={active === index ? "active" : ""}
-            key={item.name}
+            key={`${index}-${item.name}`}
             onClick={() => switchSheet(index)}
             role="tab"
           >

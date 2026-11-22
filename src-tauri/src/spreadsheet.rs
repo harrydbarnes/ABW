@@ -1,4 +1,3 @@
-use calamine::{open_workbook_auto, Reader};
 use quick_xml::{
     escape::resolve_xml_entity,
     events::{BytesStart, Event},
@@ -17,6 +16,7 @@ pub const MAX_SPREADSHEET_PREVIEW_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SPREADSHEET_EXPANDED_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_SPREADSHEET_ARCHIVE_ENTRIES: u16 = 2_048;
 const MAX_SPREADSHEET_COMPRESSION_RATIO: u64 = 100;
+const MIN_SPREADSHEET_RATIO_CHECK_BYTES: u64 = 256 * 1024;
 const MAX_SPREADSHEET_SHEETS: usize = 128;
 const MAX_SPREADSHEET_ROWS: usize = 250;
 const MAX_SPREADSHEET_COLUMNS: usize = 50;
@@ -65,6 +65,7 @@ pub struct WorkbookRow {
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkbookCell {
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub value: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style_index: Option<usize>,
@@ -133,24 +134,26 @@ pub fn preview_file(path: &Path) -> Result<WorkbookPreview, String> {
         return load_delimited_spreadsheet(path, extension == "tsv");
     }
 
-    if matches!(
-        extension.as_str(),
-        "xlsx" | "xlsm" | "xltx" | "xltm" | "xlsb" | "ods"
-    ) {
-        validate_spreadsheet_archive(path)?;
-    }
-
     if matches!(extension.as_str(), "xlsx" | "xlsm" | "xltx" | "xltm") {
-        match load_styled_ooxml(path) {
-            Ok(preview) => return Ok(preview),
-            Err(PreviewParseOutcome::Safety(message)) => return Err(message),
-            Err(PreviewParseOutcome::Fallback) => {
-                // Fall back to calamine for unusual or partially damaged OOXML workbooks.
-            }
-        }
+        let mut file =
+            File::open(path).map_err(|error| format!("Unable to open spreadsheet: {error}"))?;
+        validate_spreadsheet_archive_file(&mut file)?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|error| format!("Unable to read spreadsheet: {error}"))?;
+        return match load_styled_ooxml(file) {
+            Ok(preview) => Ok(preview),
+            Err(PreviewParseOutcome::Safety(message)) => Err(message),
+            Err(PreviewParseOutcome::Fallback) => Err(
+                "This spreadsheet uses an unsupported structure for in-app preview. Open it in Windows instead."
+                    .to_owned(),
+            ),
+        };
     }
 
-    load_calamine_fallback(path)
+    Err(
+        "In-app spreadsheet preview supports .xlsx, .xlsm, .csv, and .tsv files. Open this file in Windows instead."
+            .to_owned(),
+    )
 }
 
 fn load_delimited_spreadsheet(path: &Path, force_tab: bool) -> Result<WorkbookPreview, String> {
@@ -158,14 +161,15 @@ fn load_delimited_spreadsheet(path: &Path, force_tab: bool) -> Result<WorkbookPr
 
     let file = File::open(path).map_err(|error| format!("Unable to open spreadsheet: {error}"))?;
     let mut reader = BufReader::with_capacity(64 * 1024, file);
-    let mut sample = String::new();
     let mut probe_buf = Vec::with_capacity(2048);
     let bytes_read = reader
         .read_until(b'\n', &mut probe_buf)
         .map_err(|error| format!("Unable to read delimited spreadsheet: {error}"))?;
-    if bytes_read > 0 {
-        sample.push_str(&String::from_utf8_lossy(&probe_buf));
-    }
+    let sample = if bytes_read > 0 {
+        String::from_utf8_lossy(&probe_buf).into_owned()
+    } else {
+        String::new()
+    };
 
     let delimiter = if force_tab {
         b'\t'
@@ -173,21 +177,49 @@ fn load_delimited_spreadsheet(path: &Path, force_tab: bool) -> Result<WorkbookPr
         detect_csv_delimiter(sample.trim_start_matches('\u{feff}'))
     };
 
-    // Rewind to byte 0 so our RFC-4180 byte-streaming parser handles quoted multiline rows cleanly.
+    // Rewind to byte 0 and read incrementally until we have enough rows for the preview budget.
     reader
         .seek(SeekFrom::Start(0))
         .map_err(|error| format!("Unable to read delimited spreadsheet: {error}"))?;
 
-    let mut raw_bytes = Vec::with_capacity(64 * 1024);
     let max_read_bytes = (8 * 1024 * 1024_usize).min(MAX_SPREADSHEET_PREVIEW_BYTES as usize);
-    let mut limited = reader.take(max_read_bytes as u64);
-    limited
-        .read_to_end(&mut raw_bytes)
-        .map_err(|error| format!("Unable to read delimited spreadsheet: {error}"))?;
+    let mut raw_bytes = Vec::with_capacity(32 * 1024);
+    let mut line_buf = Vec::with_capacity(4096);
+    let mut approx_rows = 0usize;
+    let mut in_quotes = false;
+    let mut hit_byte_cap = false;
+
+    loop {
+        line_buf.clear();
+        let read = reader
+            .read_until(b'\n', &mut line_buf)
+            .map_err(|error| format!("Unable to read delimited spreadsheet: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        if raw_bytes.len().saturating_add(read) > max_read_bytes {
+            let remaining = max_read_bytes.saturating_sub(raw_bytes.len());
+            raw_bytes.extend_from_slice(&line_buf[..remaining]);
+            hit_byte_cap = true;
+            break;
+        }
+        for &byte in &line_buf {
+            if byte == b'"' {
+                in_quotes = !in_quotes;
+            }
+        }
+        raw_bytes.extend_from_slice(&line_buf);
+        if !in_quotes {
+            approx_rows += 1;
+            if approx_rows > MAX_SPREADSHEET_ROWS + 1 {
+                hit_byte_cap = true;
+                break;
+            }
+        }
+    }
 
     let decoded = String::from_utf8_lossy(&raw_bytes);
     let text = decoded.strip_prefix('\u{feff}').unwrap_or(&decoded);
-    let hit_byte_cap = raw_bytes.len() >= max_read_bytes;
 
     let (parsed_rows, max_cols, truncated_rows, truncated_columns) =
         parse_delimited_rows(text, delimiter as char, hit_byte_cap);
@@ -402,12 +434,16 @@ enum PreviewParseOutcome {
 }
 
 pub fn validate_spreadsheet_archive(path: &Path) -> Result<(), String> {
+    let mut file = File::open(path)
+        .map_err(|error| format!("Unable to inspect spreadsheet archive: {error}"))?;
+    validate_spreadsheet_archive_file(&mut file)
+}
+
+fn validate_spreadsheet_archive_file(file: &mut File) -> Result<(), String> {
     const EOCD_SIGNATURE: u32 = 0x0605_4b50;
     const CENTRAL_DIRECTORY_SIGNATURE: u32 = 0x0201_4b50;
     const MAX_EOCD_SEARCH: u64 = 65_557;
 
-    let mut file = File::open(path)
-        .map_err(|error| format!("Unable to inspect spreadsheet archive: {error}"))?;
     let length = file
         .metadata()
         .map_err(|error| format!("Unable to inspect spreadsheet archive: {error}"))?
@@ -458,7 +494,8 @@ pub fn validate_spreadsheet_archive(path: &Path) -> Result<(), String> {
         compressed_total = compressed_total.saturating_add(compressed as u64);
         expanded_total = expanded_total.saturating_add(expanded as u64);
         if expanded_total > MAX_SPREADSHEET_EXPANDED_BYTES
-            || (compressed_total > 0
+            || (expanded_total >= MIN_SPREADSHEET_RATIO_CHECK_BYTES
+                && compressed_total > 0
                 && expanded_total / compressed_total > MAX_SPREADSHEET_COMPRESSION_RATIO)
         {
             return Err("This spreadsheet expands beyond the safe in-app preview limit.".into());
@@ -475,88 +512,17 @@ pub fn validate_spreadsheet_archive(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn load_calamine_fallback(path: &Path) -> Result<WorkbookPreview, String> {
-    let mut workbook =
-        open_workbook_auto(path).map_err(|error| format!("Unable to open spreadsheet: {error}"))?;
-    let sheet_names = workbook.sheet_names().to_owned();
-    if sheet_names.len() > MAX_SPREADSHEET_SHEETS {
-        return Err(format!(
-            "This spreadsheet has {} sheets. In-app preview supports up to {MAX_SPREADSHEET_SHEETS}; open it in Windows instead.",
-            sheet_names.len()
-        ));
+fn optional_ooxml_part<T: Default>(
+    result: Result<T, PreviewParseOutcome>,
+) -> Result<T, PreviewParseOutcome> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(PreviewParseOutcome::Safety(message)) => Err(PreviewParseOutcome::Safety(message)),
+        Err(PreviewParseOutcome::Fallback) => Ok(T::default()),
     }
-    let sheets = sheet_names
-        .into_iter()
-        .map(|name| {
-            let mut truncated_rows = false;
-            let mut truncated_columns = false;
-            let mut rows = Vec::new();
-            let mut width = 0usize;
-            if let Ok(range) = workbook.worksheet_range(&name) {
-                rows.reserve(MAX_SPREADSHEET_ROWS.min(range.height()));
-                for (row_idx, row) in range.rows().enumerate() {
-                    if row_idx >= MAX_SPREADSHEET_ROWS {
-                        truncated_rows = true;
-                        break;
-                    }
-                    if row.len() > MAX_SPREADSHEET_COLUMNS {
-                        truncated_columns = true;
-                    }
-                    let row_width = row.len().min(MAX_SPREADSHEET_COLUMNS);
-                    width = width.max(row_width);
-                    let cells = row[..row_width]
-                        .iter()
-                        .map(|cell| WorkbookCell {
-                            value: cell.to_string(),
-                            style_index: None,
-                            col_span: None,
-                            row_span: None,
-                            covered_by_merge: false,
-                        })
-                        .collect();
-                    rows.push(WorkbookRow {
-                        index: row_idx + 1,
-                        height_px: 31,
-                        cells,
-                    });
-                }
-            }
-            for row in &mut rows {
-                if row.cells.len() < width {
-                    row.cells.resize_with(width, || WorkbookCell {
-                        value: String::new(),
-                        style_index: None,
-                        col_span: None,
-                        row_span: None,
-                        covered_by_merge: false,
-                    });
-                }
-            }
-            let columns = (1..=width)
-                .map(|index| WorkbookColumn {
-                    index,
-                    label: to_column_label(index),
-                    width_px: if index == 1 { 176 } else { 98 },
-                })
-                .collect();
-            WorkbookSheet {
-                name,
-                columns,
-                rows,
-                truncated_rows,
-                truncated_columns,
-            }
-        })
-        .collect();
-    Ok(WorkbookPreview {
-        sheets,
-        active_sheet: 0,
-        styles: Vec::new(),
-    })
 }
 
-fn load_styled_ooxml(path: &Path) -> Result<WorkbookPreview, PreviewParseOutcome> {
-    let file = File::open(path).map_err(|_| PreviewParseOutcome::Fallback)?;
+fn load_styled_ooxml(file: File) -> Result<WorkbookPreview, PreviewParseOutcome> {
     let mut archive =
         ZipArchive::new(BufReader::new(file)).map_err(|_| PreviewParseOutcome::Fallback)?;
     let mut entry_lookup = HashMap::with_capacity(archive.len());
@@ -577,25 +543,31 @@ fn load_styled_ooxml(path: &Path) -> Result<WorkbookPreview, PreviewParseOutcome
         )));
     }
 
-    let rels = entry_lookup
-        .get("xl/_rels/workbook.xml.rels")
-        .and_then(|&idx| parse_workbook_rels(&mut archive, idx).ok())
-        .unwrap_or_default();
+    let rels = match entry_lookup.get("xl/_rels/workbook.xml.rels").copied() {
+        Some(idx) => optional_ooxml_part(parse_workbook_rels(&mut archive, idx))?,
+        None => HashMap::new(),
+    };
 
-    let shared_strings = entry_lookup
-        .get("xl/sharedstrings.xml")
-        .and_then(|&idx| parse_shared_strings(&mut archive, idx).ok())
-        .unwrap_or_default();
+    let shared_strings = match entry_lookup.get("xl/sharedstrings.xml").copied() {
+        Some(idx) => optional_ooxml_part(parse_shared_strings(&mut archive, idx))?,
+        None => Vec::new(),
+    };
 
-    let theme_colors = entry_lookup
-        .get("xl/theme/theme1.xml")
-        .and_then(|&idx| parse_theme_colors(&mut archive, idx).ok())
-        .unwrap_or(DEFAULT_THEME_COLORS);
+    let theme_colors = match entry_lookup.get("xl/theme/theme1.xml").copied() {
+        Some(idx) => match parse_theme_colors(&mut archive, idx) {
+            Ok(colors) => colors,
+            Err(PreviewParseOutcome::Safety(message)) => {
+                return Err(PreviewParseOutcome::Safety(message))
+            }
+            Err(PreviewParseOutcome::Fallback) => DEFAULT_THEME_COLORS,
+        },
+        None => DEFAULT_THEME_COLORS,
+    };
 
-    let stylesheet = entry_lookup
-        .get("xl/styles.xml")
-        .and_then(|&idx| parse_styles(&mut archive, idx, &theme_colors).ok())
-        .unwrap_or_default();
+    let stylesheet = match entry_lookup.get("xl/styles.xml").copied() {
+        Some(idx) => optional_ooxml_part(parse_styles(&mut archive, idx, &theme_colors))?,
+        None => Stylesheet::default(),
+    };
     let (palette, xf_style_indices) = stylesheet.build_palette();
 
     let visible_sheets: Vec<(usize, &WorkbookSheetEntry)> = workbook_meta
@@ -630,10 +602,36 @@ fn load_styled_ooxml(path: &Path) -> Result<WorkbookPreview, PreviewParseOutcome
         sheets.push(sheet);
     }
 
+    // Prune styles not referenced by any rendered cell to minimize IPC payload size.
+    let mut remapped_styles = Vec::new();
+    let mut style_remap: Vec<Option<usize>> = vec![None; palette.len()];
+    for sheet in &mut sheets {
+        for row in &mut sheet.rows {
+            for cell in &mut row.cells {
+                if let Some(old_idx) = cell.style_index {
+                    if let Some(slot) = style_remap.get_mut(old_idx) {
+                        let new_idx = match *slot {
+                            Some(existing) => existing,
+                            None => {
+                                let idx = remapped_styles.len();
+                                remapped_styles.push(palette[old_idx].clone());
+                                *slot = Some(idx);
+                                idx
+                            }
+                        };
+                        cell.style_index = Some(new_idx);
+                    } else {
+                        cell.style_index = None;
+                    }
+                }
+            }
+        }
+    }
+
     Ok(WorkbookPreview {
         sheets,
         active_sheet,
-        styles: palette,
+        styles: remapped_styles,
     })
 }
 
@@ -1479,7 +1477,7 @@ fn resolve_ooxml_color(e: &BytesStart<'_>, theme: &[(u8, u8, u8); 12]) -> Option
                 let hex = val.trim_start_matches('#');
                 if hex.len() == 8 && hex.starts_with("00") {
                     transparent_rgb = true;
-                } else if hex.len() >= 6 {
+                } else if hex.is_ascii() && hex.len() >= 6 {
                     parsed_rgb = parse_hex_rgb(&hex[hex.len() - 6..]);
                 }
             }
@@ -1508,7 +1506,7 @@ fn resolve_ooxml_color(e: &BytesStart<'_>, theme: &[(u8, u8, u8); 12]) -> Option
 }
 
 fn parse_hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
-    if hex.len() < 6 {
+    if !hex.is_ascii() || hex.len() < 6 {
         return None;
     }
     let slice = &hex[hex.len() - 6..];
@@ -1911,6 +1909,9 @@ fn parse_row_cells<R: std::io::BufRead>(
                 }
                 "is" if current_col.is_some() => {
                     in_is = true;
+                }
+                "rPh" | "extLst" if current_col.is_some() && in_is => {
+                    skip_element_with_buf(reader, text_buf)?;
                 }
                 "t" if current_col.is_some() && in_is => {
                     append_text_until_end(reader, "t", text_buf, &mut current_value)?;
@@ -2375,6 +2376,38 @@ const INDEXED_COLORS: &[Option<(u8, u8, u8)>] = &[
     Some((0xff, 0x80, 0x80)),
     Some((0x00, 0x66, 0xcc)),
     Some((0xcc, 0xcc, 0xff)),
+    Some((0x00, 0x00, 0x80)),
+    Some((0xff, 0x00, 0xff)),
+    Some((0xff, 0xff, 0x00)),
+    Some((0x00, 0xff, 0xff)),
+    Some((0x80, 0x00, 0x80)),
+    Some((0x80, 0x00, 0x00)),
+    Some((0x00, 0x80, 0x80)),
+    Some((0x00, 0x00, 0xff)),
+    Some((0x00, 0xcc, 0xff)),
+    Some((0xcc, 0xff, 0xff)),
+    Some((0xcc, 0xff, 0xcc)),
+    Some((0xff, 0xff, 0x99)),
+    Some((0x99, 0xcc, 0xff)),
+    Some((0xff, 0x99, 0xcc)),
+    Some((0xcc, 0x99, 0xff)),
+    Some((0xff, 0xcc, 0x99)),
+    Some((0x33, 0x66, 0xff)),
+    Some((0x33, 0xcc, 0xcc)),
+    Some((0x99, 0xcc, 0x00)),
+    Some((0xff, 0xcc, 0x00)),
+    Some((0xff, 0x99, 0x00)),
+    Some((0xff, 0x66, 0x00)),
+    Some((0x66, 0x66, 0x99)),
+    Some((0x96, 0x96, 0x96)),
+    Some((0x00, 0x33, 0x66)),
+    Some((0x33, 0x99, 0x66)),
+    Some((0x00, 0x33, 0x00)),
+    Some((0x33, 0x33, 0x00)),
+    Some((0x99, 0x33, 0x00)),
+    Some((0x99, 0x33, 0x66)),
+    Some((0x33, 0x33, 0x99)),
+    Some((0x33, 0x33, 0x33)),
 ];
 
 #[cfg(test)]
@@ -2467,7 +2500,7 @@ mod tests {
             ("xl/worksheets/sheet1.xml", sheet1_xml),
             ("xl/worksheets/sheet2.xml", sheet2_xml),
         ]);
-        let preview = load_styled_ooxml(file.path()).unwrap();
+        let preview = load_styled_ooxml(File::open(file.path()).unwrap()).unwrap();
         assert_eq!(preview.active_sheet, 0);
         assert_eq!(preview.sheets.len(), 1);
         let sheet = &preview.sheets[0];
@@ -2548,14 +2581,14 @@ mod tests {
             ("xl/styles.xml", styles_xml),
             ("xl/worksheets/sheet1.xml", sheet1_xml),
         ]);
-        let preview = load_styled_ooxml(file.path()).unwrap();
-        assert_eq!(preview.styles.len(), 2);
+        let preview = load_styled_ooxml(File::open(file.path()).unwrap()).unwrap();
+        assert_eq!(preview.styles.len(), 1);
         let row = &preview.sheets[0].rows[0];
         assert_eq!(row.cells[0].value, "Hello World");
-        assert_eq!(row.cells[0].style_index, Some(1));
+        assert_eq!(row.cells[0].style_index, Some(0));
         assert_eq!(row.cells[1].value, "");
-        assert_eq!(row.cells[1].style_index, Some(1));
-        assert_eq!(preview.styles[1].font_weight, Some(700));
+        assert_eq!(row.cells[1].style_index, Some(0));
+        assert_eq!(preview.styles[0].font_weight, Some(700));
     }
 
     #[test]
@@ -2589,7 +2622,7 @@ mod tests {
             ("xl/_rels/workbook.xml.rels", rels_xml),
             ("xl/worksheets/sheet1.xml", &sheet1_xml),
         ]);
-        let preview = load_styled_ooxml(file.path()).unwrap();
+        let preview = load_styled_ooxml(File::open(file.path()).unwrap()).unwrap();
         let sheet = &preview.sheets[0];
         assert_eq!(sheet.rows.len(), MAX_SPREADSHEET_ROWS);
         assert_eq!(sheet.columns.len(), MAX_SPREADSHEET_COLUMNS);
