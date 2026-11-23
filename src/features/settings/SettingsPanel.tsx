@@ -679,34 +679,110 @@ function formatUpdateDate(value: string | null): string | null {
   });
 }
 
-function formatReleaseNotes(raw: string | null): string[] {
-  if (!raw) {
-    return [];
+type ReleaseNoteCategory = "new" | "fix" | "speed" | "polish" | "update";
+
+interface ReleaseNoteItem {
+  category: ReleaseNoteCategory;
+  icon: string;
+  label: string;
+  text: string;
+}
+
+interface ReleaseVersionSection {
+  version: string;
+  items: ReleaseNoteItem[];
+}
+
+function compareSemver(a: string, b: string): number {
+  const pa = a.replace(/^v/i, "").split(".").map((n) => Number.parseInt(n, 10) || 0);
+  const pb = b.replace(/^v/i, "").split(".").map((n) => Number.parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i += 1) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
   }
-  const bullets: string[] = [];
+  return 0;
+}
+
+function parseReleaseNoteItem(rawLine: string): ReleaseNoteItem | null {
+  let text = rawLine.trim();
+  if (!text) return null;
+  if (/^#{1,6}\s+what'?s changed/i.test(text)) return null;
+  if (/^\*\*full changelog\*\*/i.test(text) || /^full changelog:/i.test(text)) return null;
+  if (/^---+$/.test(text)) return null;
+
+  text = text.replace(/^[-*•]\s+/, "").trim();
+  text = text.replace(/\s+by\s+@[\w-]+\s+in\s+https?:\/\/\S+$/i, "");
+  text = text.replace(/\s*\(#\d+\)\s*$/, "");
+
+  // Match structured emoji + bold label format: "✨ **New:** ..."
+  const structured = text.match(/^([✨🐛⚡🎨🔧🚀])\s+\*\*(New|Fix|Speed|Polish|Update):\*\*\s*(.+)$/i);
+  if (structured) {
+    const label = structured[2];
+    const lower = label.toLowerCase();
+    const category: ReleaseNoteCategory =
+      lower === "new" || lower === "fix" || lower === "speed" || lower === "polish"
+        ? lower
+        : "update";
+    return {
+      category,
+      icon: structured[1],
+      label: label.charAt(0).toUpperCase() + label.slice(1).toLowerCase(),
+      text: structured[3].trim(),
+    };
+  }
+
+  const prefixMatch = text.match(/^(feat|fix|style|chore|ci|perf|refactor|docs)(?:\([^)]+\))?:\s*(.+)$/i);
+  const prefix = prefixMatch ? prefixMatch[1].toLowerCase() : "";
+  if (prefixMatch) {
+    text = prefixMatch[2].trim();
+  }
+  text = text.replace(/[;,]\s*(?:and\s+)?bump\s+(?:version\s+)?to\s+v?[\d.]+$/i, "").trim();
+  if (!text) return null;
+
+  text = text.charAt(0).toUpperCase() + text.slice(1);
+  if (!/[.!?]$/.test(text)) {
+    text += ".";
+  }
+
+  if (prefix === "fix" || /\b(?:fix|fixed|crash|bug|prevent|restore)\b/i.test(text)) {
+    return { category: "fix", icon: "🐛", label: "Fix", text };
+  }
+  if (prefix === "perf" || /\b(?:faster|speed|memory|cache|suspend|stream|smaller)\b/i.test(text)) {
+    return { category: "speed", icon: "⚡", label: "Speed", text };
+  }
+  if (prefix === "style" || /\b(?:hover|animation|corner|theme|dark|polish|align|layout)\b/i.test(text)) {
+    return { category: "polish", icon: "🎨", label: "Polish", text };
+  }
+  return { category: "new", icon: "✨", label: "New", text };
+}
+
+function parseReleaseSections(
+  raw: string | null,
+  fallbackVersion: string | null
+): ReleaseVersionSection[] {
+  if (!raw) return [];
+  const sections: ReleaseVersionSection[] = [];
+  let current: ReleaseVersionSection | null = null;
+
   for (const line of raw.split(/\r?\n/)) {
-    let text = line.trim();
-    if (!text) continue;
-    if (/^#{1,6}\s+what'?s changed/i.test(text)) continue;
-    if (/^\*\*full changelog\*\*/i.test(text) || /^full changelog:/i.test(text)) continue;
-    if (/^---+$/.test(text)) continue;
-    text = text.replace(/^[-*•]\s+/, "");
-    text = text.replace(/\s+by\s+@[\w-]+\s+in\s+https?:\/\/\S+$/i, "");
-    text = text.replace(/\s*\(#\d+\)\s*$/, "");
-    text = text.replace(/^(?:feat|fix|style|chore|ci|perf|refactor|docs)(?:\([^)]+\))?:\s*/i, "");
-    text = text.replace(/;\s*bump to v[\d.]+$/i, "");
-    text = text.replace(/,?\s*and bump to v[\d.]+$/i, "");
-    text = text.trim();
-    if (!text) continue;
-    text = text.charAt(0).toUpperCase() + text.slice(1);
-    if (!/[.!?]$/.test(text)) {
-      text += ".";
+    const headingMatch = line.trim().match(/^#{2,3}\s+(?:what'?s new in\s+)?v?(\d+\.\d+\.\d+)\b/i);
+    if (headingMatch) {
+      current = { version: headingMatch[1], items: [] };
+      sections.push(current);
+      continue;
     }
-    if (!bullets.includes(text)) {
-      bullets.push(text);
+    const item = parseReleaseNoteItem(line);
+    if (!item) continue;
+    if (!current) {
+      current = { version: fallbackVersion || "", items: [] };
+      sections.push(current);
+    }
+    if (!current.items.some((existing) => existing.text.toLowerCase() === item.text.toLowerCase())) {
+      current.items.push(item);
     }
   }
-  return bullets;
+
+  return sections.filter((section) => section.items.length > 0);
 }
 
 function AppUpdateSettings({
@@ -739,7 +815,21 @@ function AppUpdateSettings({
   const checkedTime = checkedAt
     ? new Date(checkedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
     : null;
-  const releaseBullets = useMemo(() => formatReleaseNotes(notes), [notes]);
+  const { upcomingSections, currentSection } = useMemo(() => {
+    const all = parseReleaseSections(notes, latestVersion);
+    const upcoming: ReleaseVersionSection[] = [];
+    let current: ReleaseVersionSection | null = null;
+    for (const section of all) {
+      if (!section.version) {
+        upcoming.push(section);
+      } else if (compareSemver(section.version, appVersion) > 0) {
+        upcoming.push(section);
+      } else if (compareSemver(section.version, appVersion) === 0 && !current) {
+        current = section;
+      }
+    }
+    return { upcomingSections: upcoming, currentSection: current };
+  }, [notes, latestVersion, appVersion]);
 
   let summary = `Running ABW v${appVersion}.`;
   if (phase === "checking") {
@@ -813,15 +903,56 @@ function AppUpdateSettings({
           </div>
         </div>
       ) : null}
-      {releaseBullets.length > 0 &&
+      {upcomingSections.length > 0 &&
       (phase === "available" || phase === "downloading" || phase === "installing") ? (
         <div className="update-notes-card">
-          <strong>What's new</strong>
-          <ul className="update-notes-list">
-            {releaseBullets.map((bullet, index) => (
-              <li key={index}>{bullet}</li>
+          <div className="update-notes-header">
+            <strong>What's new</strong>
+            {upcomingSections.length > 1 ? (
+              <span className="update-notes-span">
+                Includes {upcomingSections.length} releases since v{appVersion}
+              </span>
+            ) : null}
+          </div>
+          <div className="update-notes-sections">
+            {upcomingSections.map((section, sectionIndex) => (
+              <div className="update-version-block" key={section.version || sectionIndex}>
+                {section.version ? (
+                  <div className="update-version-heading">
+                    <span className="update-version-pill">v{section.version}</span>
+                    {sectionIndex === 0 ? (
+                      <span className="update-version-badge">Latest</span>
+                    ) : null}
+                  </div>
+                ) : null}
+                <ul className="update-notes-list">
+                  {section.items.map((item, itemIndex) => (
+                    <li key={itemIndex}>
+                      <span className={`update-note-tag is-${item.category}`}>
+                        <span aria-hidden="true">{item.icon}</span> {item.label}
+                      </span>
+                      <span className="update-note-text">{item.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             ))}
-          </ul>
+          </div>
+          {currentSection ? (
+            <details className="update-current-notes">
+              <summary>Currently installed (v{currentSection.version})</summary>
+              <ul className="update-notes-list">
+                {currentSection.items.map((item, itemIndex) => (
+                  <li key={itemIndex}>
+                    <span className={`update-note-tag is-${item.category}`}>
+                      <span aria-hidden="true">{item.icon}</span> {item.label}
+                    </span>
+                    <span className="update-note-text">{item.text}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          ) : null}
         </div>
       ) : null}
       <AnimatedSettingItem visible={showAutoUpdateToggle}>
