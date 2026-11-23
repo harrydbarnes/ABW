@@ -510,6 +510,20 @@
   background: #fff;
   font-size: 13px;
   font-weight: 550;
+  transition: transform 140ms ease, background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease, color 140ms ease, filter 140ms ease;
+}
+
+.secondary-action:hover:not(:disabled) {
+  background: #f5f8fc;
+  border-color: #c2cedf;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgb(16 29 53 / 10%);
+}
+
+.secondary-action:active:not(:disabled),
+.primary-action:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: none;
 }
 
 .secondary-action:disabled,
@@ -528,10 +542,13 @@
   background: var(--accent);
   font-size: 13px;
   font-weight: 600;
+  transition: transform 140ms ease, box-shadow 140ms ease, filter 140ms ease;
 }
 
 .primary-action:hover:not(:disabled) {
   filter: brightness(1.06);
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgb(16 29 53 / 14%);
 }
 
 .update-panel-header {
