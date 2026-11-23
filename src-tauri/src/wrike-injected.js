@@ -1324,9 +1324,11 @@
         openHtmObserver = null;
       }, 6000);
     }
+    const earlyCornerTimer = window.setTimeout(abwScheduleCornerSync, 900);
     const prevCleanup = window.__abwSpellCleanup;
     window.__abwSpellCleanup = () => {
       window.clearInterval(inboxPollTimer);
+      window.clearTimeout(earlyCornerTimer);
       window.clearInterval(openHtmTimer);
       window.clearTimeout(openHtmStopTimer);
       openHtmObserver?.disconnect();
@@ -1337,6 +1339,7 @@
       document.removeEventListener("transitionend", handleTransitionEndCornerSync, true);
       prevCleanup?.();
     };
+    abwScheduleCornerSync();
     abwScheduleThemeDetect(350);
     if (abwAutoDownload) {
       window.setTimeout(() => {
