@@ -217,13 +217,6 @@ jobs:
           $previewConfig = @{
             productName = 'ABW Preview'
             identifier = 'net.insidemedia.abw.preview'
-            app = @{
-              windows = @(
-                @{
-                  title = 'ABW Preview'
-                }
-              )
-            }
             bundle = @{
               createUpdaterArtifacts = $false
               windows = @{
