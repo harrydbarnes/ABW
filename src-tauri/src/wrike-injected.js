@@ -289,6 +289,11 @@
       return "";
     };
 
+    const isLightContentColor = (color) => {
+      const rgb = parseRgb(color);
+      return Boolean(rgb && rgb[0] >= 220 && rgb[1] >= 220 && rgb[2] >= 220);
+    };
+
     const isNearWhite = (color) => {
       const rgb = parseRgb(color);
       return Boolean(rgb && rgb[0] >= 235 && rgb[1] >= 235 && rgb[2] >= 235);
@@ -299,42 +304,49 @@
     let matchedContentEl = null;
     let matchedSidebarEl = null;
 
-    // 1. Primary: find the main white content container directly.
-    const contentProbeX = Math.round(viewportWidth * 0.6);
-    for (const py of [32, 80, 140]) {
-      const stack =
-        document.elementsFromPoint?.(contentProbeX, py) ||
-        [document.elementFromPoint?.(contentProbeX, py)].filter(Boolean);
-      for (const node of stack) {
-        if (!(node instanceof Element) || node.id === cornerId) continue;
-        if (node === document.body || node === document.documentElement) continue;
-        if (node.closest?.('[role="dialog"], [aria-modal="true"]')) continue;
-        const rect = node.getBoundingClientRect?.();
-        if (
-          !rect ||
-          rect.left < 44 ||
-          rect.left > Math.min(420, viewportWidth * 0.48) ||
-          rect.top < 0 ||
-          rect.top > 48 ||
-          rect.width < viewportWidth * 0.45 ||
-          rect.height < viewportHeight * 0.6
-        ) {
-          continue;
+    // 1. Primary: find the main light content container directly across multiple horizontal/vertical probes.
+    const probeXs = [0.6, 0.45, 0.35]
+      .map((ratio) => Math.round(viewportWidth * ratio))
+      .filter((x) => x > 48 && x < viewportWidth - 20);
+    const minContentWidth = Math.min(260, viewportWidth * 0.28);
+    for (const contentProbeX of probeXs) {
+      for (const py of [24, 48, 80, 140]) {
+        const stack =
+          document.elementsFromPoint?.(contentProbeX, py) ||
+          [document.elementFromPoint?.(contentProbeX, py)].filter(Boolean);
+        for (const node of stack) {
+          if (!(node instanceof Element) || node.id === cornerId) continue;
+          if (node === document.body || node === document.documentElement) continue;
+          if (node.closest?.('[role="dialog"], [aria-modal="true"]')) continue;
+          const rect = node.getBoundingClientRect?.();
+          if (
+            !rect ||
+            rect.left < 44 ||
+            rect.left > Math.min(440, viewportWidth * 0.48) ||
+            rect.top < 0 ||
+            rect.top > 96 ||
+            rect.width < minContentWidth ||
+            rect.height < viewportHeight * 0.55
+          ) {
+            continue;
+          }
+          const style = window.getComputedStyle(node);
+          if (style.visibility === "hidden" || style.display === "none") continue;
+          if (isLightContentColor(style.backgroundColor)) {
+            cornerLeft = rect.left;
+            cornerTop = Math.max(0, rect.top);
+            matchedContentEl = node;
+            break;
+          }
         }
-        const style = window.getComputedStyle(node);
-        if (style.visibility === "hidden" || style.display === "none") continue;
-        if (isNearWhite(style.backgroundColor)) {
-          cornerLeft = rect.left;
-          cornerTop = Math.max(0, rect.top);
-          matchedContentEl = node;
-          break;
-        }
+        if (cornerLeft !== null) break;
       }
       if (cornerLeft !== null) break;
     }
 
     // 2. Fallback: find the left sidebar column and use its right edge.
     let sidebarColor = "";
+    let sidebarRight = null;
     for (const [px, py] of [[18, 24], [18, 140], [18, Math.round(viewportHeight * 0.45)], [56, 140]]) {
       const stack =
         document.elementsFromPoint?.(px, py) ||
@@ -351,11 +363,11 @@
           const rect = current.getBoundingClientRect?.();
           if (
             !rect ||
-            rect.left > 8 ||
+            rect.left > 16 ||
             rect.top > 60 ||
             rect.width < 44 ||
-            rect.width > Math.min(420, viewportWidth * 0.48) ||
-            rect.height < viewportHeight * 0.6
+            rect.width > Math.min(440, viewportWidth * 0.48) ||
+            rect.height < viewportHeight * 0.55
           ) {
             continue;
           }
@@ -365,6 +377,7 @@
           if (!bg || isNearWhite(bg)) continue;
           sidebarColor = bg;
           matchedSidebarEl = current;
+          sidebarRight = rect.right;
           if (cornerLeft === null) {
             cornerLeft = rect.right;
             cornerTop = Math.max(0, rect.top);
@@ -376,12 +389,49 @@
       if (sidebarColor) break;
     }
 
+    // If we only found the sidebar edge (e.g., outer content container is transparent),
+    // refine cornerTop by checking the content container just to the right of sidebarRight.
+    if (matchedContentEl === null && sidebarRight !== null && sidebarRight < viewportWidth - 60) {
+      const adjacentX = Math.min(viewportWidth - 20, Math.round(sidebarRight + 24));
+      for (const py of [24, 48, 80]) {
+        const stack =
+          document.elementsFromPoint?.(adjacentX, py) ||
+          [document.elementFromPoint?.(adjacentX, py)].filter(Boolean);
+        for (const node of stack) {
+          if (!(node instanceof Element) || node.id === cornerId) continue;
+          if (node === document.body || node === document.documentElement) continue;
+          if (node.closest?.('[role="dialog"], [aria-modal="true"]')) continue;
+          const rect = node.getBoundingClientRect?.();
+          if (
+            !rect ||
+            Math.abs(rect.left - sidebarRight) > 8 ||
+            rect.top < 0 ||
+            rect.top > 96 ||
+            rect.width < minContentWidth ||
+            rect.height < viewportHeight * 0.55
+          ) {
+            continue;
+          }
+          const style = window.getComputedStyle(node);
+          if (style.visibility === "hidden" || style.display === "none") continue;
+          cornerLeft = rect.left;
+          cornerTop = Math.max(0, rect.top);
+          matchedContentEl = node;
+          break;
+        }
+        if (matchedContentEl) break;
+      }
+    }
+
     if (!sidebarColor) {
-      const topLeftNode = document.elementFromPoint?.(16, 16);
-      if (topLeftNode instanceof Element) {
-        const bg = resolveBackgroundColor(topLeftNode);
-        if (bg && !isNearWhite(bg)) {
-          sidebarColor = bg;
+      for (const [px, py] of [[4, 4], [16, 16]]) {
+        const topLeftNode = document.elementFromPoint?.(px, py);
+        if (topLeftNode instanceof Element) {
+          const bg = resolveBackgroundColor(topLeftNode);
+          if (bg && !isNearWhite(bg)) {
+            sidebarColor = bg;
+            break;
+          }
         }
       }
     }
