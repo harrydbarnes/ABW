@@ -2709,10 +2709,10 @@ fn read_sheet_layout_metrics<R: Read + Seek>(
                     }
                 }
                 "sheetData" | "cols" => {}
-                "mergeCells" | "drawing" | "extLst" => {
-                    if skip_element_with_buf(&mut reader, &mut skip_buf).is_err() {
-                        break;
-                    }
+                "mergeCells" | "drawing" | "extLst"
+                    if skip_element_with_buf(&mut reader, &mut skip_buf).is_err() =>
+                {
+                    break;
                 }
                 _ => {}
             },
