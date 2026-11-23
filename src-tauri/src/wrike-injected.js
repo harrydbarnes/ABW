@@ -5,6 +5,10 @@
   window.__abwSpellCleanup?.();
   let enabled = __ABW_SPELL_CHECK_ENABLED__;
   const abwAutoDownload = __ABW_AUTO_DOWNLOAD__;
+  const abwIsWrikeHost = () => {
+    const host = String(window.location?.hostname || "").toLowerCase();
+    return host === "wrike.com" || host.endsWith(".wrike.com");
+  };
   let abwSpellApplyTimer = 0;
   let abwThemeDetectTimer = 0;
   const abwWrikeThemeCatalog = [
@@ -232,14 +236,14 @@
     }
   };
   const abwScheduleCornerSync = () => {
-    if (abwAutoDownload || abwCornerRafId) return;
+    if (abwAutoDownload || !abwIsWrikeHost() || abwCornerRafId) return;
     abwCornerRafId = window.requestAnimationFrame(() => {
       abwCornerRafId = 0;
       abwSyncWrikeContentCorner(true);
     });
   };
   const abwSyncWrikeContentCorner = (fast = false) => {
-    if (abwAutoDownload || !document.body) return;
+    if (abwAutoDownload || !abwIsWrikeHost() || !document.body) return;
     const cornerId = "abw-wrike-corner";
     const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || 0;
     const viewportWidth = window.innerWidth || document.documentElement?.clientWidth || 0;
@@ -501,7 +505,7 @@
   let abwSchemeDrainTimer = 0;
   let abwSchemeLoadHooked = false;
   const abwEmitScheme = (url) => {
-    if (!url) return;
+    if (!url || !abwIsWrikeHost()) return;
     abwSchemeQueue.push(url);
     if (document.readyState && document.readyState !== "complete") {
       if (!abwSchemeLoadHooked) {
@@ -618,7 +622,7 @@
   };
   let abwLastFullReportAt = 0;
   const abwReportWrikeTheme = (force = false) => {
-    if (abwAutoDownload) return null;
+    if (abwAutoDownload || !abwIsWrikeHost()) return null;
     abwSyncWrikeContentCorner();
     if (document.readyState && document.readyState !== "complete") {
       window.addEventListener(
@@ -659,7 +663,7 @@
     return detected;
   };
   const abwScheduleThemeDetect = (delay = 250) => {
-    if (abwAutoDownload || abwThemeDetectTimer) return;
+    if (abwAutoDownload || !abwIsWrikeHost() || abwThemeDetectTimer) return;
     abwThemeDetectTimer = window.setTimeout(() => {
       abwThemeDetectTimer = 0;
       abwReportWrikeTheme(false);

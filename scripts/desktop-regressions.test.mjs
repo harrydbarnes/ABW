@@ -225,4 +225,64 @@ test('injected script exposes instant spellcheck toggle and gates open.htm obser
   assert.match(source, /document\.readyState && document\.readyState !== "complete"/);
 });
 
+test('injected theme, corner, and custom-scheme IPC are gated to wrike.com hosts', () => {
+  const hostStart = source.indexOf('const abwIsWrikeHost = () => {');
+  const hostEnd = source.indexOf('let abwSpellApplyTimer = 0;', hostStart);
+  assert.ok(hostStart >= 0 && hostEnd > hostStart, 'abwIsWrikeHost must exist in the injected script');
+
+  const schemeStart = source.indexOf('const abwSchemeQueue = [];');
+  const schemeEnd = source.indexOf('const abwDetectWrikeInboxUnread =', schemeStart);
+  assert.ok(schemeStart >= 0 && schemeEnd > schemeStart, 'abwEmitScheme must exist in the injected script');
+
+  const makeSandbox = (hostname) => {
+    const navigated = [];
+    const mockWindow = {
+      location: {
+        hostname,
+        set href(value) {
+          navigated.push(value);
+        },
+      },
+      setTimeout: (fn) => {
+        fn();
+        return 1;
+      },
+      addEventListener: () => {},
+    };
+    const mockDocument = { readyState: 'complete' };
+    const { abwIsWrikeHost, abwEmitScheme } = new Function(
+      'window',
+      'document',
+      `${source.slice(hostStart, hostEnd)}; ${source.slice(schemeStart, schemeEnd)}; return { abwIsWrikeHost, abwEmitScheme };`,
+    )(mockWindow, mockDocument);
+    return { abwIsWrikeHost, abwEmitScheme, navigated };
+  };
+
+  const okta = makeSandbox('wppmedia.okta.com');
+  assert.equal(okta.abwIsWrikeHost(), false);
+  okta.abwEmitScheme('abw-theme://detected?theme=default');
+  assert.deepEqual(okta.navigated, []);
+
+  assert.equal(makeSandbox('evilwrike.com').abwIsWrikeHost(), false);
+  assert.equal(makeSandbox('').abwIsWrikeHost(), false);
+
+  const wrike = makeSandbox('www.wrike.com');
+  assert.equal(wrike.abwIsWrikeHost(), true);
+  wrike.abwEmitScheme('abw-theme://detected?theme=default');
+  assert.deepEqual(wrike.navigated, ['abw-theme://detected?theme=default']);
+
+  assert.equal(makeSandbox('wrike.com').abwIsWrikeHost(), true);
+  assert.equal(makeSandbox('app-eu.wrike.com').abwIsWrikeHost(), true);
+
+  for (const fnMarker of [
+    'const abwScheduleCornerSync = () => {\n    if (abwAutoDownload || !abwIsWrikeHost()',
+    'const abwSyncWrikeContentCorner = (fast = false) => {\n    if (abwAutoDownload || !abwIsWrikeHost()',
+    'const abwReportWrikeTheme = (force = false) => {\n    if (abwAutoDownload || !abwIsWrikeHost()',
+    'const abwScheduleThemeDetect = (delay = 250) => {\n    if (abwAutoDownload || !abwIsWrikeHost()',
+  ]) {
+    const normalizedSource = source.replace(/\r\n/g, '\n');
+    assert.ok(normalizedSource.includes(fnMarker), `Expected host gate in: ${fnMarker}`);
+  }
+});
+
 
