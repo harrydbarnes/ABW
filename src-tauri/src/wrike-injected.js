@@ -1,5 +1,7 @@
 (() => {
-  __ABW_TASK_PO__
+  try {
+    __ABW_TASK_PO__
+  } catch {}
   window.__abwSpellCleanup?.();
   let enabled = __ABW_SPELL_CHECK_ENABLED__;
   const abwAutoDownload = __ABW_AUTO_DOWNLOAD__;

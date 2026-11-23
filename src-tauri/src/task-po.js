@@ -2,7 +2,6 @@
   if (window !== window.top || !/(^|\.)wrike\.com$/.test(location.hostname) || window.__abwPoObserver) return;
   const style = document.createElement('style');
   style.textContent = '.abw-check-po-btn{position:fixed;z-index:1000;padding:4px 12px;border:1px solid #aab4c5;border-radius:6px;background:Canvas;color:CanvasText;font:500 13px system-ui;cursor:pointer;transition:transform 140ms ease,background-color 140ms ease,border-color 140ms ease,box-shadow 140ms ease,color 140ms ease}.abw-check-po-btn:hover{transform:translateY(-1px);background:#f3f6fc;border-color:#7d95c4;box-shadow:0 3px 10px rgba(16,29,53,.12)}.abw-check-po-btn:active{transform:translateY(0);box-shadow:none}';
-  (document.head || document.documentElement).append(style);
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'abw-check-po-btn';
@@ -102,6 +101,7 @@
     }, 120);
   }
   function start() {
+    if (!style.isConnected) (document.head || document.documentElement)?.append(style);
     window.__abwPoObserver.observe(document.documentElement, { childList: true, subtree: true });
     addEventListener('resize', schedule, { passive: true });
     addEventListener('hashchange', schedule);
