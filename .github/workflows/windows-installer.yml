@@ -210,14 +210,55 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+      - name: Build side-by-side PR preview installer
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        shell: pwsh
+        run: |
+          $previewConfig = @{
+            productName = 'ABW Preview'
+            identifier = 'net.insidemedia.abw.preview'
+            app = @{
+              windows = @(
+                @{
+                  title = 'ABW Preview'
+                }
+              )
+            }
+            bundle = @{
+              createUpdaterArtifacts = $false
+              windows = @{
+                nsis = @{
+                  installerHooks = 'assets/installer-hooks-preview.nsh'
+                }
+              }
+            }
+          } | ConvertTo-Json -Depth 6
+          $previewConfigPath = Join-Path $env:RUNNER_TEMP 'tauri-preview.conf.json'
+          Set-Content -Path $previewConfigPath -Value $previewConfig -Encoding utf8NoBOM
+          npm run tauri -- build --bundles nsis --config $previewConfigPath -- --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $previewInstallers = @(Get-ChildItem "src-tauri/target/release/bundle/nsis/ABW Preview*-setup.exe" -File)
+          if ($previewInstallers.Count -ne 1) {
+            throw "Expected exactly one PR preview NSIS installer, found $($previewInstallers.Count)."
+          }
+          $previewInstaller = $previewInstallers[0]
+          $digest = (Get-FileHash $previewInstaller.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksum = "$digest *$($previewInstaller.Name)`n"
+          [System.IO.File]::WriteAllText(
+            "$($previewInstaller.FullName).sha256",
+            $checksum,
+            [System.Text.UTF8Encoding]::new($false)
+          )
+
       - name: Upload PR preview installer
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ABW-Windows-installer-pr${{ github.event.pull_request.number }}-v${{ steps.metadata.outputs.version }}-${{ steps.metadata.outputs.short_sha }}
+          name: ABW-Preview-Windows-installer-pr${{ github.event.pull_request.number }}-v${{ steps.metadata.outputs.version }}-${{ steps.metadata.outputs.short_sha }}
           path: |
-            src-tauri/target/release/bundle/nsis/*-setup.exe
-            src-tauri/target/release/bundle/nsis/*-setup.exe.sha256
+            src-tauri/target/release/bundle/nsis/ABW Preview*-setup.exe
+            src-tauri/target/release/bundle/nsis/ABW Preview*-setup.exe.sha256
           if-no-files-found: error
           retention-days: 14
 
