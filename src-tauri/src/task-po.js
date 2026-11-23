@@ -10,6 +10,8 @@
   let lastBooking = '';
   let pendingId;
   let nextCheck = 0;
+  let expandedMoreFor = '';
+  const requiredKeys = ['client', 'product', 'po', 'start', 'end', 'total', 'plan'];
   const handoff = 'https://go.mediaocean.com/robots.txt#abw-check-po?';
   function setStatus(status) {
     const states = {
@@ -35,20 +37,18 @@
   function sync() {
     let anchor = null;
     panel = null;
-    if (/(?:[?&#](?:id|taskId|itemId|entityId|panel)=\d+|\/(?:tasks?|items?)\/\d+)/i.test(location.href) || document.querySelector('[data-test-id*="task-view"],[data-testid*="task-view"],task-view,work-item-view')) {
-      for (const close of [...document.querySelectorAll(actionSelector)].reverse()) {
-        if (!/close/i.test(name(close)) || !close.getBoundingClientRect().width) continue;
-        for (let header=close.parentElement; header && header !== document.body && header.getBoundingClientRect().height < 160; header=header.parentElement) {
-          if (![...header.querySelectorAll(actionSelector)].some(el => /permalink|copy.{0,12}link|share/i.test(name(el)))) continue;
-          panel=header;
-          while (panel.parentElement && panel.getBoundingClientRect().height < 300) panel=panel.parentElement;
-          anchor=close;
-          break;
-        }
-        if (anchor) break;
+    for (const close of [...document.querySelectorAll(actionSelector)].reverse()) {
+      if (!/close/i.test(name(close)) || !close.getBoundingClientRect().width) continue;
+      for (let header=close.parentElement; header && header !== document.body && header.getBoundingClientRect().height < 160; header=header.parentElement) {
+        if (![...header.querySelectorAll(actionSelector)].some(el => /permalink|copy.{0,12}link|share/i.test(name(el)))) continue;
+        panel=header;
+        while (panel.parentElement && panel.getBoundingClientRect().height < 300) panel=panel.parentElement;
+        anchor=close;
+        break;
       }
+      if (anchor) break;
     }
-    if (!anchor) {button.remove(); lastBooking = ''; pendingId = undefined; return;}
+    if (!anchor) {button.remove(); lastBooking = ''; pendingId = undefined; expandedMoreFor = ''; return;}
     const r = anchor.getBoundingClientRect();
     button.style.zIndex = '2147483647';
     button.style.top = (r.bottom + 8) + 'px';
@@ -66,6 +66,23 @@
     }
     return values;
   }
+  function hasRequiredValues(values) {
+    return requiredKeys.every(key => values.get(key));
+  }
+  function expandMoreIfNeeded(values) {
+    if (!panel || hasRequiredValues(values)) return false;
+    const taskKey = location.href + ' ' + (panel.innerText.split(/\n/)[0] || '').trim();
+    if (expandedMoreFor === taskKey) return false;
+    const moreBtn = [...panel.querySelectorAll('button,[role="button"]')].find(el => {
+      const text = (el.textContent || '').trim();
+      return /^more$/i.test(text) && el.getAttribute('aria-expanded') !== 'true' && el.getBoundingClientRect().width > 0;
+    });
+    if (!moreBtn) return false;
+    expandedMoreFor = taskKey;
+    moreBtn.click();
+    setTimeout(schedule, 250);
+    return true;
+  }
   function queueCheck() {
     const values = bookingValues();
     const booking = location.href + ' ' + values.toString();
@@ -77,7 +94,10 @@
       setTimeout(schedule, 750);
     }
     if (pendingId || Date.now() < nextCheck) return;
-    if (!['client', 'product', 'po', 'start', 'end', 'total', 'plan'].every(key => values.get(key))) return;
+    if (!hasRequiredValues(values)) {
+      expandMoreIfNeeded(values);
+      return;
+    }
     pendingId = crypto.randomUUID();
     values.set('automatic', pendingId);
     setStatus('checking');
@@ -86,7 +106,15 @@
   button.onclick = event => {
     event.preventDefault();
     event.stopPropagation();
-    if (panel) location.assign(handoff + bookingValues());
+    if (!panel) return;
+    const values = bookingValues();
+    if (!hasRequiredValues(values) && expandMoreIfNeeded(values)) {
+      setTimeout(() => {
+        if (panel) location.assign(handoff + bookingValues());
+      }, 250);
+      return;
+    }
+    location.assign(handoff + values);
   };
   let scheduleTimer = 0;
   let rafId = 0;
