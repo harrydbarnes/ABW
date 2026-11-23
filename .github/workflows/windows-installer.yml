@@ -225,6 +225,13 @@ jobs:
       RELEASE_VERSION: ${{ needs.nsis.outputs.version }}
       ARTIFACT_NAME: ABW-Windows-installer-v${{ needs.nsis.outputs.version }}-${{ needs.nsis.outputs.short_sha }}
     steps:
+      - name: Checkout release notes formatter
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/format-release-notes.mjs
+
       - name: Download tested installer
         run: gh run download "$GITHUB_RUN_ID" --name "$ARTIFACT_NAME" --dir installer
 
@@ -241,33 +248,46 @@ jobs:
             exit 1
           fi
 
-          notes=$(gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$RELEASE_TAG" -f target_commitish="$GITHUB_SHA" --jq '.body' || true)
-          clean_notes=$(RELEASE_NOTES="$notes" node -e '
-            const raw = process.env.RELEASE_NOTES || "";
-            const lines = [];
-            for (const line of raw.split(/\r?\n/)) {
-              let t = line.trim();
-              if (!t || /^#{1,6}\s+what'\''?s changed/i.test(t) || /^\*\*full changelog\*\*/i.test(t) || /^---+$/.test(t)) continue;
-              t = t.replace(/^[-*•]\s+/, "")
-                   .replace(/\s+by\s+@[\w-]+\s+in\s+https?:\/\/\S+$/i, "")
-                   .replace(/\s*\(#\d+\)\s*$/, "")
-                   .replace(/^(?:feat|fix|style|chore|ci|perf|refactor|docs)(?:\([^)]+\))?:\s*/i, "")
-                   .replace(/[;,]\s*(?:and\s+)?bump to v[\d.]+$/i, "")
-                   .trim();
-              if (!t) continue;
-              t = t.charAt(0).toUpperCase() + t.slice(1);
-              if (!/[.!?]$/.test(t)) t += ".";
-              if (!lines.includes(`- ${t}`)) lines.push(`- ${t}`);
-            }
-            process.stdout.write(lines.join("\n"));
-          ')
-          if [ -z "$clean_notes" ]; then
-            clean_notes="- Performance improvements and bug fixes."
+          prev_tag=$(gh api "repos/$GH_REPO/releases?per_page=15" --jq "[.[] | select(.draft == false and .prerelease == false and .tag_name != \"$RELEASE_TAG\")][0].tag_name // empty" || true)
+          commit_subjects=""
+          if [ -n "$prev_tag" ]; then
+            commit_subjects=$(gh api "repos/$GH_REPO/compare/${prev_tag}...${GITHUB_SHA}" --jq '.commits[].commit.message | split("\n")[0]' || true)
           fi
+          pr_notes=$(gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$RELEASE_TAG" -f target_commitish="$GITHUB_SHA" --jq '.body' || true)
+
+          clean_notes=$(printf '%s\n%s\n' "$commit_subjects" "$pr_notes" | node ../scripts/format-release-notes.mjs --stdin)
+
+          recent_releases_json=$(gh api "repos/$GH_REPO/releases?per_page=8" || echo "[]")
+          manifest_notes=$(
+            RELEASE_TAG="$RELEASE_TAG" \
+            CURRENT_NOTES="$clean_notes" \
+            RECENT_RELEASES="$recent_releases_json" \
+            node -e '
+              const currentTag = process.env.RELEASE_TAG;
+              const sections = [`## ${currentTag}\n${process.env.CURRENT_NOTES}`];
+              try {
+                const releases = JSON.parse(process.env.RECENT_RELEASES || "[]");
+                let added = 0;
+                for (const rel of releases) {
+                  if (!rel || rel.draft || rel.prerelease || rel.tag_name === currentTag) continue;
+                  const body = String(rel.body || "").split(/\r?\n---\r?\n/)[0];
+                  const lines = body
+                    .split(/\r?\n/)
+                    .map((l) => l.trim())
+                    .filter((l) => l.startsWith("- ") || l.startsWith("* "));
+                  if (lines.length === 0) continue;
+                  sections.push(`## ${rel.tag_name}\n${lines.slice(0, 6).join("\n")}`);
+                  added += 1;
+                  if (added >= 5) break;
+                }
+              } catch {}
+              process.stdout.write(sections.join("\n\n"));
+            '
+          )
 
           INSTALLER_NAME="${installer[0]}" \
           SIG_FILE="$sig_file" \
-          RELEASE_NOTES="$clean_notes" \
+          RELEASE_NOTES="$manifest_notes" \
           node -e '
             const fs = require("node:fs");
             const signature = fs.readFileSync(process.env.SIG_FILE, "utf8").trim();
@@ -288,7 +308,11 @@ jobs:
             fs.writeFileSync("latest.json", `${JSON.stringify(manifest, null, 2)}\n`);
           '
 
-          release_body="$(printf '%s\n\n---\nCurrent-user Windows installer (no administrator rights required). In-app updates are cryptographically signed via Tauri minisign; Windows SmartScreen may still prompt for unsigned executables. Verify the `.sha256` checksum before manual installation.' "$notes")"
+          compare_line=""
+          if [ -n "$prev_tag" ]; then
+            compare_line="$(printf '\n\n**Full Changelog**: https://github.com/%s/compare/%s...%s' "$GH_REPO" "$prev_tag" "$RELEASE_TAG")"
+          fi
+          release_body="$(printf '### What'\''s new in %s\n\n%s%s\n\n---\nCurrent-user Windows installer (no administrator rights required). In-app updates are cryptographically signed via Tauri minisign; Windows SmartScreen may still prompt for unsigned executables. Verify the `.sha256` checksum before manual installation.' "$RELEASE_TAG" "$clean_notes" "$compare_line")"
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "${installer[0]}" "$sig_file" "${installer[0]}.sha256" latest.json --clobber
