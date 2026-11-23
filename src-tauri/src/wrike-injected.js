@@ -248,13 +248,14 @@
       const rect = abwCornerObservedContent.getBoundingClientRect?.();
       if (
         existingCorner &&
+        existingCorner.firstElementChild &&
         rect &&
         rect.left >= 44 &&
-        rect.left <= Math.min(420, viewportWidth * 0.48) &&
-        rect.top >= 0 &&
-        rect.top <= 48 &&
-        rect.width >= viewportWidth * 0.45 &&
-        rect.height >= viewportHeight * 0.6
+        rect.left <= Math.min(440, viewportWidth * 0.48) &&
+        rect.top >= -4 &&
+        rect.top <= 96 &&
+        rect.width >= Math.min(260, viewportWidth * 0.28) &&
+        rect.height >= viewportHeight * 0.55
       ) {
         const nextLeft = `${Math.floor(rect.left) - 1}px`;
         const nextTop = `${Math.floor(Math.max(0, rect.top)) - 1}px`;
@@ -265,10 +266,15 @@
     }
 
     const parseRgb = (color) => {
-      const match = String(color || "").match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\)/i);
+      const match = String(color || "").match(
+        /rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)(?:[\s,/]+([\d.]+%?))?\s*\)/i
+      );
       if (!match) return null;
-      const alpha = match[4] === undefined ? 1 : Number(match[4]);
-      if (alpha <= 0.05) return null;
+      let alpha = 1;
+      if (match[4] !== undefined) {
+        alpha = match[4].endsWith("%") ? parseFloat(match[4]) / 100 : Number(match[4]);
+      }
+      if (!(alpha > 0.05)) return null;
       return [Number(match[1]), Number(match[2]), Number(match[3])];
     };
 
@@ -436,6 +442,15 @@
       }
     }
 
+    if (!sidebarColor && window.__abwLastDetectedWrikeTheme) {
+      const themeEntry = abwWrikeThemeCatalog.find(
+        (entry) => entry.id === window.__abwLastDetectedWrikeTheme
+      );
+      if (themeEntry) {
+        sidebarColor = `rgb(${themeEntry.rgb[0]}, ${themeEntry.rgb[1]}, ${themeEntry.rgb[2]})`;
+      }
+    }
+
     abwObserveCornerTargets(matchedContentEl, matchedSidebarEl);
 
     const existing = document.getElementById(cornerId);
@@ -456,7 +471,21 @@
         zIndex: "2147483646",
         lineHeight: "0"
       });
-      corner.innerHTML = `<svg width="13" height="13" viewBox="-1 -1 13 13" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M-1 -1H12V0A12 12 0 0 0 0 12H-1Z" fill="currentColor"/></svg>`;
+    }
+    if (!corner.firstElementChild) {
+      const svgNs = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(svgNs, "svg");
+      svg.setAttribute("width", "13");
+      svg.setAttribute("height", "13");
+      svg.setAttribute("viewBox", "-1 -1 13 13");
+      svg.setAttribute("fill", "none");
+      const path = document.createElementNS(svgNs, "path");
+      path.setAttribute("d", "M-1 -1H12V0A12 12 0 0 0 0 12H-1Z");
+      path.setAttribute("fill", "currentColor");
+      svg.append(path);
+      corner.append(svg);
+    }
+    if (!corner.isConnected) {
       document.body.append(corner);
     }
     abwCornerLastSidebarColor = sidebarColor;
