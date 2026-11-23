@@ -156,13 +156,33 @@ export default memo(function PdfPreview({
           class TauriPdfRangeTransport extends pdfjs.PDFDataRangeTransport {
             private aborted = false;
             private readonly inFlight = new Map<string, Promise<Uint8Array>>();
+            private readonly tailOffset: number;
+            private readonly tailChunk: Uint8Array | undefined;
 
-            constructor(length: number, initialData: Uint8Array) {
+            constructor(
+              length: number,
+              initialData: Uint8Array,
+              tailOffset?: number,
+              tailChunk?: Uint8Array,
+            ) {
               super(length, initialData, false);
+              this.tailOffset = tailOffset ?? length;
+              this.tailChunk = tailChunk;
             }
 
             override requestDataRange(begin: number, end: number) {
               if (this.aborted) {
+                return;
+              }
+              if (
+                this.tailChunk &&
+                begin >= this.tailOffset &&
+                end <= this.tailOffset + this.tailChunk.byteLength
+              ) {
+                this.onDataRange(
+                  begin,
+                  this.tailChunk.slice(begin - this.tailOffset, end - this.tailOffset),
+                );
                 return;
               }
               const key = `${begin}:${end}`;
@@ -203,7 +223,12 @@ export default memo(function PdfPreview({
             }
           }
 
-          rangeTransport = new TauriPdfRangeTransport(head.totalSize, head.initialChunk.slice());
+          rangeTransport = new TauriPdfRangeTransport(
+            head.totalSize,
+            head.initialChunk.slice(),
+            head.tailOffset,
+            head.tailChunk?.slice(),
+          );
           loadingTask = pdfjs.getDocument({
             range: rangeTransport,
             rangeChunkSize: PDF_RANGE_CHUNK_BYTES,

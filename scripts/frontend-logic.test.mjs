@@ -297,3 +297,19 @@ test("createPreviewCache deduplicates in-flight loads, enforces limits, and evic
   assert.equal(cache.pdfCacheSize(), 0);
   assert.equal(cache.spreadsheetCacheSize(), 0);
 });
+
+test("createPreviewCache accounts for tailChunk byteLength when enforcing PDF cache entry budget", async () => {
+  const cache = createPreviewCache({
+    readPdfHead: async () => ({
+      totalSize: 10 * 1024 * 1024,
+      initialChunk: new Uint8Array(2.5 * 1024 * 1024),
+      tailOffset: 7.5 * 1024 * 1024,
+      tailChunk: new Uint8Array(2.5 * 1024 * 1024),
+      complete: false,
+    }),
+    readSpreadsheet: async () => null,
+  });
+
+  await cache.loadPdfHead({ id: "oversized-chunks", sizeBytes: 4 * 1024 * 1024 });
+  assert.equal(cache.pdfCacheSize(), 0);
+});

@@ -250,6 +250,13 @@
   z-index: 2;
 }
 
+.sheet-virtual-spacer,
+.sheet-virtual-spacer td {
+  border: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+}
+
 .sheet {
   table-layout: fixed;
   border-collapse: collapse;

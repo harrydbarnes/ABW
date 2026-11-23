@@ -52,6 +52,7 @@ const PDF_HEAD_CHUNK_BYTES: u64 = 131_072;
 const PDF_INLINE_THRESHOLD_BYTES: u64 = 512 * 1024;
 const MAX_PDF_RANGE_BYTES: u64 = 8 * 1024 * 1024;
 const TASKBAR_HEIGHT: f64 = 50.0;
+const WRIKE_SPLIT_GAP: f64 = 8.0;
 const TRAY_ICON_ID: &str = "abw-tray";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -305,10 +306,13 @@ struct SettingsFileStamp {
 
 struct AppState {
     wrike_tabs: Mutex<HashMap<String, Arc<CaptureContext>>>,
+    suspended_tabs: Mutex<HashSet<String>>,
+    visible_wrike_tabs: Mutex<HashSet<String>>,
     tracked_paths: Mutex<HashMap<String, PathBuf>>,
     detected_wrike_theme: Mutex<Option<String>>,
     cached_settings: RwLock<Option<(Settings, Option<SettingsFileStamp>)>>,
     top_inset: Mutex<f64>,
+    wrike_split_ratio: Mutex<f64>,
     quit_prompt_open: AtomicBool,
     wrike_inbox_unread: AtomicBool,
     update_available_badge: AtomicBool,
@@ -319,10 +323,13 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             wrike_tabs: Mutex::new(HashMap::new()),
+            suspended_tabs: Mutex::new(HashSet::new()),
+            visible_wrike_tabs: Mutex::new(HashSet::new()),
             tracked_paths: Mutex::new(HashMap::new()),
             detected_wrike_theme: Mutex::new(None),
             cached_settings: RwLock::new(None),
             top_inset: Mutex::new(0.0),
+            wrike_split_ratio: Mutex::new(0.5),
             quit_prompt_open: AtomicBool::new(false),
             wrike_inbox_unread: AtomicBool::new(false),
             update_available_badge: AtomicBool::new(false),
@@ -442,11 +449,26 @@ async fn read_download_head(app: AppHandle, id: String) -> Result<Response, Stri
         } else {
             size.min(PDF_HEAD_CHUNK_BYTES)
         } as usize;
-        let mut out = Vec::with_capacity(8 + head_len);
+        let tail_offset = if size <= PDF_INLINE_THRESHOLD_BYTES {
+            size
+        } else {
+            size.saturating_sub(PDF_HEAD_CHUNK_BYTES)
+                .max(head_len as u64)
+        };
+        let tail_len = size.saturating_sub(tail_offset) as usize;
+        let mut out = Vec::with_capacity(20 + head_len + tail_len);
         out.extend_from_slice(&size.to_le_bytes());
-        out.resize(8 + head_len, 0);
-        file.read_exact(&mut out[8..])
+        out.extend_from_slice(&(head_len as u32).to_le_bytes());
+        out.extend_from_slice(&tail_offset.to_le_bytes());
+        out.resize(20 + head_len + tail_len, 0);
+        file.read_exact(&mut out[20..20 + head_len])
             .map_err(|error| format!("Unable to read PDF header: {error}"))?;
+        if tail_len > 0 {
+            file.seek(SeekFrom::Start(tail_offset))
+                .map_err(|error| format!("Unable to seek PDF trailer: {error}"))?;
+            file.read_exact(&mut out[20 + head_len..])
+                .map_err(|error| format!("Unable to read PDF trailer: {error}"))?;
+        }
         Ok(Response::new(out))
     })
     .await
@@ -510,6 +532,27 @@ async fn preview_spreadsheet(
     })
     .await
     .map_err(|error| format!("Unable to preview spreadsheet: {error}"))?
+}
+
+#[tauri::command]
+async fn load_spreadsheet_images(
+    app: AppHandle,
+    id: String,
+    sheet_index: usize,
+) -> Result<Vec<spreadsheet::WorkbookImage>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = resolve_tracked_path(&app, &id)?;
+        match spreadsheet::load_sheet_images(&path, sheet_index) {
+            Err(_) if !path.exists() => {
+                invalidate_tracked_paths(&app, Some(&id));
+                let refreshed = resolve_tracked_path(&app, &id)?;
+                spreadsheet::load_sheet_images(&refreshed, sheet_index)
+            }
+            result => result,
+        }
+    })
+    .await
+    .map_err(|error| format!("Unable to load spreadsheet images: {error}"))?
 }
 
 #[tauri::command]
@@ -1148,23 +1191,66 @@ fn resume_native_webview(webview: &Webview) {
 #[cfg(not(windows))]
 fn resume_native_webview(_webview: &Webview) {}
 
+#[cfg(windows)]
+fn set_native_memory_target_level(webview: &Webview, low: bool) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+    };
+    use windows_core::Interface;
+
+    let level = if low {
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+    } else {
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
+    };
+    let _ = webview.with_webview(move |platform_webview| unsafe {
+        if let Ok(core) = platform_webview.controller().CoreWebView2() {
+            if let Ok(webview19) = core.cast::<ICoreWebView2_19>() {
+                let _ = webview19.SetMemoryUsageTargetLevel(level);
+            }
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn set_native_memory_target_level(_webview: &Webview, _low: bool) {}
+
 #[tauri::command]
-fn suspend_wrike_tab(app: AppHandle, tab_id: String) -> Result<bool, String> {
+fn suspend_wrike_tab(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    tab_id: String,
+) -> Result<bool, String> {
     let label = wrike_tab_label(&tab_id)?;
     let Some(webview) = app.get_webview(&label) else {
         return Ok(false);
     };
+    if let Ok(mut suspended) = state.suspended_tabs.lock() {
+        suspended.insert(tab_id.clone());
+    }
+    if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
+        visible.remove(&tab_id);
+    }
     suspend_native_webview(&webview)?;
     Ok(true)
 }
 
 #[tauri::command]
-fn resume_wrike_tab(app: AppHandle, tab_id: String) -> Result<bool, String> {
+fn resume_wrike_tab(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    tab_id: String,
+) -> Result<bool, String> {
     let label = wrike_tab_label(&tab_id)?;
     let Some(webview) = app.get_webview(&label) else {
         return Ok(false);
     };
+    if let Ok(mut suspended) = state.suspended_tabs.lock() {
+        suspended.remove(&tab_id);
+    }
     resume_native_webview(&webview);
+    set_native_memory_target_level(&webview, false);
     Ok(true)
 }
 
@@ -1192,13 +1278,25 @@ fn resize_wrike_tabs(
     state: State<'_, AppState>,
     layouts: Option<Vec<WrikeTabLayout>>,
     top_inset: Option<f64>,
+    split_ratio: Option<f64>,
 ) -> Result<(), String> {
     if let Some(inset) = top_inset {
         if let Ok(mut stored) = state.top_inset.lock() {
             *stored = inset.max(0.0);
         }
     }
+    if let Some(ratio) = split_ratio.filter(|value| value.is_finite()) {
+        if let Ok(mut stored) = state.wrike_split_ratio.lock() {
+            *stored = ratio.clamp(0.25, 0.75);
+        }
+    }
     if let Some(layouts) = layouts.filter(|layouts| !layouts.is_empty()) {
+        if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
+            visible.clear();
+            for layout in &layouts {
+                visible.insert(layout.tab_id.clone());
+            }
+        }
         for layout in layouts {
             if let Some(webview) = app.get_webview(&wrike_tab_label(&layout.tab_id)?) {
                 sync_wrike_bounds(&app, &webview, layout.pane)?;
@@ -1221,13 +1319,30 @@ fn resize_wrike_tabs(
 }
 
 #[tauri::command]
-fn hide_wrike_tabs(app: AppHandle, tab_ids: Vec<String>) -> Result<(), String> {
+fn hide_wrike_tabs(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    tab_ids: Vec<String>,
+) -> Result<(), String> {
+    let suspended_snapshot = state
+        .suspended_tabs
+        .lock()
+        .map(|tabs| tabs.clone())
+        .unwrap_or_default();
+    if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
+        for tab_id in &tab_ids {
+            visible.remove(tab_id);
+        }
+    }
     for tab_id in tab_ids {
         let label = wrike_tab_label(&tab_id)?;
         if let Some(webview) = app.get_webview(&label) {
             webview
                 .hide()
                 .map_err(|error| format!("Unable to hide the Wrike workspace: {error}"))?;
+            if !suspended_snapshot.contains(&tab_id) {
+                set_native_memory_target_level(&webview, true);
+            }
         }
     }
     Ok(())
@@ -1243,7 +1358,14 @@ fn focus_wrike_tab(
     let webview = app
         .get_webview(&label)
         .ok_or_else(|| "This Wrike tab is not open yet.".to_owned())?;
+    if let Ok(mut suspended) = state.suspended_tabs.lock() {
+        suspended.remove(&tab_id);
+    }
+    if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
+        visible.insert(tab_id.clone());
+    }
     resume_native_webview(&webview);
+    set_native_memory_target_level(&webview, false);
     webview
         .show()
         .map_err(|error| format!("Unable to display the Wrike workspace: {error}"))?;
@@ -1308,6 +1430,12 @@ fn close_wrike_tab(
     };
     if let Ok(mut tabs) = state.wrike_tabs.lock() {
         tabs.remove(&tab_id);
+    }
+    if let Ok(mut suspended) = state.suspended_tabs.lock() {
+        suspended.remove(&tab_id);
+    }
+    if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
+        visible.remove(&tab_id);
     }
     close_result
 }
@@ -1374,6 +1502,9 @@ fn open_wrike_at(
         return Err("Only HTTPS or about:blank URLs may be opened inside ABW.".into());
     }
     if let Some(webview) = app.get_webview(&label) {
+        if let Ok(mut suspended) = state.suspended_tabs.lock() {
+            suspended.remove(tab_id);
+        }
         resume_native_webview(&webview);
         if navigate_existing {
             webview
@@ -1385,6 +1516,10 @@ fn open_wrike_at(
             }
         }
         if !start_hidden {
+            set_native_memory_target_level(&webview, false);
+            if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
+                visible.insert(tab_id.to_owned());
+            }
             webview
                 .show()
                 .map_err(|error| format!("Unable to display the Wrike workspace: {error}"))?;
@@ -1709,6 +1844,8 @@ fn open_wrike_at(
     };
     if start_hidden {
         let _ = webview.hide();
+    } else if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
+        visible.insert(tab_id.to_owned());
     }
     emit_wrike_tab_update(app, &context);
     Ok(())
@@ -1731,13 +1868,24 @@ fn wrike_content_geometry(
         .and_then(|state| state.top_inset.lock().ok().map(|value| *value))
         .unwrap_or(0.0)
         .max(0.0);
+    let split_ratio = app
+        .try_state::<AppState>()
+        .and_then(|state| state.wrike_split_ratio.lock().ok().map(|value| *value))
+        .filter(|value| value.is_finite())
+        .unwrap_or(0.5)
+        .clamp(0.25, 0.75);
     let top_offset = TASKBAR_HEIGHT + top_inset;
     let content_height = (host_size.height - top_offset).max(1.0);
-    let half_width = (host_size.width / 2.0).max(1.0);
+    let usable_width = (host_size.width - WRIKE_SPLIT_GAP).max(2.0);
+    let left_width = (usable_width * split_ratio)
+        .round()
+        .clamp(1.0, (usable_width - 1.0).max(1.0));
+    let right_x = left_width + WRIKE_SPLIT_GAP;
+    let right_width = (host_size.width - right_x).max(1.0);
     let (x, width) = match pane {
         WrikePane::Full => (0.0, host_size.width),
-        WrikePane::Left => (0.0, half_width),
-        WrikePane::Right => (half_width, (host_size.width - half_width).max(1.0)),
+        WrikePane::Left => (0.0, left_width),
+        WrikePane::Right => (right_x, right_width),
     };
     Ok((
         LogicalPosition::new(x, top_offset),
@@ -2029,6 +2177,28 @@ fn save_main_window_bounds(app: &AppHandle) {
 }
 
 fn show_main_window(app: &AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        let suspended = state
+            .suspended_tabs
+            .lock()
+            .map(|tabs| tabs.clone())
+            .unwrap_or_default();
+        let visible = state
+            .visible_wrike_tabs
+            .lock()
+            .map(|tabs| tabs.clone())
+            .unwrap_or_default();
+        for tab_id in visible {
+            if suspended.contains(&tab_id) {
+                continue;
+            }
+            if let Ok(label) = wrike_tab_label(&tab_id) {
+                if let Some(webview) = app.get_webview(&label) {
+                    set_native_memory_target_level(&webview, false);
+                }
+            }
+        }
+    }
     if let Some(window) = app.get_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -2058,6 +2228,26 @@ fn request_quit(app: &AppHandle, explicit: bool) {
     if action == close_policy::CloseAction::Hide {
         if let Some(window) = app.get_window("main") {
             let _ = window.hide();
+        }
+        let suspended = state
+            .suspended_tabs
+            .lock()
+            .map(|tabs| tabs.clone())
+            .unwrap_or_default();
+        let tab_ids = state
+            .wrike_tabs
+            .lock()
+            .map(|tabs| tabs.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for tab_id in tab_ids {
+            if suspended.contains(&tab_id) {
+                continue;
+            }
+            if let Ok(label) = wrike_tab_label(&tab_id) {
+                if let Some(webview) = app.get_webview(&label) {
+                    set_native_memory_target_level(&webview, true);
+                }
+            }
         }
         return;
     }
@@ -2898,6 +3088,7 @@ pub fn run() {
             updater::install_update,
             launch_wrike,
             list_downloads,
+            load_spreadsheet_images,
             notify_update_available,
             open_download,
             open_downloads_folder,

@@ -5,11 +5,16 @@ const PREFERENCE_KEY: &str = "Software\\net.insidemedia.abw";
 
 #[cfg(windows)]
 fn startup_identity(executable: Option<&std::path::Path>) -> (&'static str, &'static str) {
-    let is_preview = executable
+    let is_preview_stem = executable
         .and_then(|path| path.file_stem())
         .and_then(|stem| stem.to_str())
         .is_some_and(|stem| stem.eq_ignore_ascii_case("ABW Preview"));
-    if is_preview {
+    let is_preview_dir = executable
+        .and_then(|path| path.parent())
+        .and_then(|dir| dir.file_name())
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("ABW Preview"));
+    if is_preview_stem || is_preview_dir {
         ("ABW Preview", "Software\\net.insidemedia.abw.preview")
     } else {
         ("ABW", PREFERENCE_KEY)
@@ -113,6 +118,12 @@ mod tests {
         assert_eq!(startup_identity(Some(executable)), ("ABW", PREFERENCE_KEY));
         assert_eq!(
             startup_identity(Some(std::path::Path::new("C:\\Apps\\ABW Preview.exe"))),
+            ("ABW Preview", "Software\\net.insidemedia.abw.preview")
+        );
+        assert_eq!(
+            startup_identity(Some(std::path::Path::new(
+                "C:\\Users\\Test User\\AppData\\Local\\ABW Preview\\abw.exe"
+            ))),
             ("ABW Preview", "Software\\net.insidemedia.abw.preview")
         );
         assert!(!enabled_under(&test_root, "Run", "ABW").unwrap());

@@ -10,6 +10,7 @@ import {
   type DragEvent,
   type KeyboardEvent,
   type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Menu } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -198,6 +199,18 @@ export function App() {
     return 45;
   });
   const [isResizingFiles, setIsResizingFiles] = useState(false);
+  const [wrikeSplitRatio, setWrikeSplitRatio] = useState<number>(() => {
+    try {
+      const saved = Number(window.localStorage.getItem("abw.wrikeSplitRatio"));
+      if (Number.isFinite(saved) && saved >= 0.25 && saved <= 0.75) {
+        return saved;
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return 0.5;
+  });
+  const [isResizingWrikeSplit, setIsResizingWrikeSplit] = useState(false);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [suspendedTabIds, setSuspendedTabIds] = useState<string[]>([]);
   const suspendedTabIdsRef = useRef<Set<string>>(new Set());
@@ -224,6 +237,9 @@ export function App() {
   const wrikeTabsRef = useRef(wrikeTabs);
   const activeWrikeTabIdRef = useRef(activeWrikeTabId);
   const wrikeSplitRef = useRef(wrikeSplit);
+  const wrikeSplitRatioRef = useRef(wrikeSplitRatio);
+  wrikeSplitRatioRef.current = wrikeSplitRatio;
+  const wrikeSurfaceRef = useRef<HTMLElement>(null);
   const screenRef = useRef(screen);
   screenRef.current = screen;
   const settingsRef = useRef(settings);
@@ -231,6 +247,7 @@ export function App() {
   const tabLastActiveAtRef = useRef<Map<string, number>>(new Map());
   const lastRecordedVisitRef = useRef<Map<string, string>>(new Map());
   const filesDragCleanupRef = useRef<(() => void) | null>(null);
+  const wrikeSplitDragCleanupRef = useRef<(() => void) | null>(null);
   const canPersistSessionRef = useRef(false);
   const updateRequestInFlightRef = useRef(false);
   const appUpdatePhaseRef = useRef(appUpdate.phase);
@@ -262,7 +279,11 @@ export function App() {
     if (!isDesktopRuntime()) {
       return;
     }
-    void resizeWrikeTabs(currentWrikeLayouts(), topBannerInset).catch(() => undefined);
+    void resizeWrikeTabs(
+      currentWrikeLayouts(),
+      topBannerInset,
+      wrikeSplitRatioRef.current,
+    ).catch(() => undefined);
   }, [topBannerInset]);
 
   useEffect(() => {
@@ -298,6 +319,7 @@ export function App() {
       window.clearTimeout(reloadAnimationTimerRef.current);
       window.clearTimeout(sessionSaveTimerRef.current);
       filesDragCleanupRef.current?.();
+      wrikeSplitDragCleanupRef.current?.();
     };
   }, []);
 
@@ -921,7 +943,11 @@ export function App() {
         launchWrike(tab.id, tab.mode === "readOnly" ? READ_ONLY_URL : tab.url ?? WRIKE_HOME),
       ),
     );
-    await resizeWrikeTabs(currentWrikeLayouts(nextSplit, nextActiveTabId)).catch(() => undefined);
+    await resizeWrikeTabs(
+      currentWrikeLayouts(nextSplit, nextActiveTabId),
+      topBannerInsetRef.current,
+      wrikeSplitRatioRef.current,
+    ).catch(() => undefined);
     await hideWrike(nextTabs.filter((tab) => !visibleIds.includes(tab.id)).map((tab) => tab.id));
     if (visibleIds.includes(nextActiveTabId)) {
       await focusWrikeTab(nextActiveTabId).catch(() => undefined);
@@ -1009,7 +1035,11 @@ export function App() {
   }
 
   async function resizeCurrentWrikeTabs() {
-    await resizeWrikeTabs(currentWrikeLayouts(), topBannerInsetRef.current);
+    await resizeWrikeTabs(
+      currentWrikeLayouts(),
+      topBannerInsetRef.current,
+      wrikeSplitRatioRef.current,
+    );
   }
 
   function companionTabId(tabId: string, preferred?: string | null) {
@@ -1044,7 +1074,11 @@ export function App() {
         return launchWrike(tabId, tab?.mode === "readOnly" ? READ_ONLY_URL : undefined);
       }),
     );
-    await resizeWrikeTabs(currentWrikeLayouts(nextSplit, focusTabId)).catch(() => undefined);
+    await resizeWrikeTabs(
+      currentWrikeLayouts(nextSplit, focusTabId),
+      topBannerInsetRef.current,
+      wrikeSplitRatioRef.current,
+    ).catch(() => undefined);
     await hideWrike(wrikeTabsRef.current.filter((tab) => !visibleIds.includes(tab.id)).map((tab) => tab.id));
   }
 
@@ -1144,6 +1178,7 @@ export function App() {
     await resizeWrikeTabs(
       currentWrikeLayouts(null, targetTab.id),
       topBannerInsetRef.current,
+      wrikeSplitRatioRef.current,
     ).catch(() => undefined);
     await launchWrike(targetTab.id, url);
     await hideWrike(tabs.filter((tab) => tab.id !== targetTab.id).map((tab) => tab.id));
@@ -1219,13 +1254,121 @@ export function App() {
     await showWrike(focusTabId);
   }
 
+  async function swapWrikeSplit() {
+    const split = wrikeSplitRef.current;
+    if (!split) {
+      return;
+    }
+    const nextSplit: WrikeSplit = {
+      leftTabId: split.rightTabId,
+      rightTabId: split.leftTabId,
+    };
+    await showWrikeSplit(nextSplit, activeWrikeTabIdRef.current);
+  }
+
+  async function resetWrikeSplitRatio() {
+    wrikeSplitRatioRef.current = 0.5;
+    setWrikeSplitRatio(0.5);
+    wrikeSurfaceRef.current?.style.setProperty("--wrike-split-ratio", "0.5");
+    try {
+      window.localStorage.setItem("abw.wrikeSplitRatio", "0.5");
+    } catch {
+      // ignore storage errors
+    }
+    if (isDesktopRuntime()) {
+      await resizeWrikeTabs(currentWrikeLayouts(), topBannerInsetRef.current, 0.5).catch(
+        () => undefined,
+      );
+    }
+  }
+
+  function startWrikeSplitResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || !wrikeSplitRef.current) {
+      return;
+    }
+    event.preventDefault();
+    wrikeSplitDragCleanupRef.current?.();
+    const divider = event.currentTarget;
+    const pointerId = event.pointerId;
+    try {
+      divider.setPointerCapture(pointerId);
+    } catch {
+      // ignore if capture is unavailable
+    }
+    let latest = wrikeSplitRatioRef.current;
+    let rafId = 0;
+    setIsResizingWrikeSplit(true);
+
+    const applyRatio = (ratio: number) => {
+      if (isDesktopRuntime()) {
+        void resizeWrikeTabs(currentWrikeLayouts(), topBannerInsetRef.current, ratio).catch(
+          () => undefined,
+        );
+      }
+    };
+
+    const onMove = (moveEvent: PointerEvent) => {
+      const usableWidth = Math.max(200, window.innerWidth - 8);
+      const raw = (moveEvent.clientX - 4) / usableWidth;
+      latest = Math.round(Math.min(0.75, Math.max(0.25, raw)) * 10000) / 10000;
+      wrikeSplitRatioRef.current = latest;
+      wrikeSurfaceRef.current?.style.setProperty("--wrike-split-ratio", String(latest));
+      if (!rafId) {
+        rafId = window.requestAnimationFrame(() => {
+          rafId = 0;
+          applyRatio(latest);
+        });
+      }
+    };
+
+    const cleanup = () => {
+      if (rafId) {
+        window.cancelAnimationFrame(rafId);
+        rafId = 0;
+      }
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      try {
+        if (divider.hasPointerCapture(pointerId)) {
+          divider.releasePointerCapture(pointerId);
+        }
+      } catch {
+        // ignore release failures
+      }
+      wrikeSplitDragCleanupRef.current = null;
+    };
+
+    const finish = () => {
+      cleanup();
+      setIsResizingWrikeSplit(false);
+      setWrikeSplitRatio(latest);
+      wrikeSplitRatioRef.current = latest;
+      try {
+        window.localStorage.setItem("abw.wrikeSplitRatio", String(latest));
+      } catch {
+        // ignore storage errors
+      }
+      applyRatio(latest);
+    };
+
+    wrikeSplitDragCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+  }
+
   async function showWrike(tabId = activeWrikeTabId) {
     const tabs = wrikeTabsRef.current;
     const tab = tabs.find((candidate) => candidate.id === tabId);
     const split = wrikeSplitRef.current;
     if (split && (split.leftTabId === tabId || split.rightTabId === tabId)) {
       syncActiveWrikeTabId(tabId);
-      await resizeWrikeTabs(currentWrikeLayouts(split, tabId)).catch(() => undefined);
+      await resizeWrikeTabs(
+        currentWrikeLayouts(split, tabId),
+        topBannerInsetRef.current,
+        wrikeSplitRatioRef.current,
+      ).catch(() => undefined);
       await focusWrikeTab(tabId);
       await hideWrike(tabs.filter((tab) => tab.id !== split.leftTabId && tab.id !== split.rightTabId).map((tab) => tab.id));
       setScreen("wrike");
@@ -1233,7 +1376,11 @@ export function App() {
     }
     syncWrikeSplitRef(null);
     syncActiveWrikeTabId(tabId);
-    await resizeWrikeTabs(currentWrikeLayouts(null, tabId)).catch(() => undefined);
+    await resizeWrikeTabs(
+      currentWrikeLayouts(null, tabId),
+      topBannerInsetRef.current,
+      wrikeSplitRatioRef.current,
+    ).catch(() => undefined);
     await launchWrike(tabId, tab?.mode === "readOnly" ? READ_ONLY_URL : undefined);
     await hideWrike(tabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
     const update = await getWrikeTabState(tabId);
@@ -1253,7 +1400,11 @@ export function App() {
     setWrikeTabs((current) =>
       current.map((tab) => (tab.id === tabId ? { ...tab, mode: "standard" } : tab)),
     );
-    await resizeWrikeTabs(currentWrikeLayouts(null, tabId)).catch(() => undefined);
+    await resizeWrikeTabs(
+      currentWrikeLayouts(null, tabId),
+      topBannerInsetRef.current,
+      wrikeSplitRatioRef.current,
+    ).catch(() => undefined);
     await launchWrike(tabId, WRIKE_HOME);
     await hideWrike(wrikeTabsRef.current.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
     const update = await getWrikeTabState(tabId);
@@ -1294,7 +1445,11 @@ export function App() {
             : tab,
         ),
       );
-      await resizeWrikeTabs(currentWrikeLayouts(null, targetTab.id)).catch(() => undefined);
+      await resizeWrikeTabs(
+        currentWrikeLayouts(null, targetTab.id),
+        topBannerInsetRef.current,
+        wrikeSplitRatioRef.current,
+      ).catch(() => undefined);
       await openSourceTask(record, targetTab.id);
       await hideWrike(tabs.filter((tab) => tab.id !== targetTab.id).map((tab) => tab.id));
       const update = await getWrikeTabState(targetTab.id);
@@ -1880,6 +2035,23 @@ export function App() {
           {wrikeTabs.map((tab, index) => {
             const selected = screen === "wrike" && activeWrikeTabId === tab.id;
             const suspended = suspendedTabIds.includes(tab.id);
+            const splitSide =
+              wrikeSplit?.leftTabId === tab.id
+                ? "left"
+                : wrikeSplit?.rightTabId === tab.id
+                  ? "right"
+                  : null;
+            const splitHint =
+              splitSide === "left"
+                ? "Left pane"
+                : splitSide === "right"
+                  ? "Right pane"
+                  : null;
+            const tabTitleParts = [
+              tab.title,
+              splitHint ? `(${splitHint})` : null,
+              suspended ? "(suspended to save memory)" : null,
+            ].filter(Boolean);
             return (
               <div
                 aria-selected={selected}
@@ -1888,8 +2060,8 @@ export function App() {
                   selected ? "selected" : "",
                   suspended ? "suspended" : "",
                   tab.mode === "readOnly" ? "read-only" : "",
-                  wrikeSplit?.leftTabId === tab.id ? "split-left" : "",
-                  wrikeSplit?.rightTabId === tab.id ? "split-right" : "",
+                  splitSide === "left" ? "split-left" : "",
+                  splitSide === "right" ? "split-right" : "",
                   newWrikeTabId === tab.id ? "entering" : "",
                   draggedTabId === tab.id ? "dragging" : "",
                 ].join(" ")}
@@ -1907,8 +2079,16 @@ export function App() {
                 onKeyDown={(event) => handleTabKeyDown(event, tab.id)}
                 role="tab"
                 tabIndex={0}
-                title={suspended ? `${tab.title} (suspended to save memory)` : tab.title}
+                title={tabTitleParts.join(" ")}
               >
+                {splitSide ? (
+                  <span
+                    aria-label={splitSide === "left" ? "Left split pane" : "Right split pane"}
+                    className={`tab-split-badge ${splitSide}`}
+                  >
+                    {splitSide === "left" ? "L" : "R"}
+                  </span>
+                ) : null}
                 <span className={`tab-title ${tab.isTitleLoading ? "loading" : ""}`}>{tab.title}</span>
                 {index === 0 ? <span className="external-dot" /> : null}
                 <span className="tab-actions" aria-label={`${tab.title} controls`}>
@@ -1964,6 +2144,41 @@ export function App() {
               <span>Read Only</span>
             </button>
           </span>
+          {screen === "wrike" && wrikeSplit ? (
+            <div
+              className="split-controls"
+              onPointerDown={(event) => event.stopPropagation()}
+              role="group"
+              aria-label="Split view controls"
+            >
+              <button
+                className="split-ratio-btn"
+                onClick={() => void resetWrikeSplitRatio()}
+                title="Reset split ratio to 50/50"
+                type="button"
+              >
+                {Math.round(wrikeSplitRatio * 100)}/{Math.round((1 - wrikeSplitRatio) * 100)}
+              </button>
+              <button
+                aria-label="Swap left and right tabs"
+                className="split-icon-btn"
+                onClick={() => void swapWrikeSplit()}
+                title="Swap left and right tabs"
+                type="button"
+              >
+                ⇄
+              </button>
+              <button
+                aria-label="Exit split view"
+                className="split-icon-btn"
+                onClick={() => void exitSplitView()}
+                title="Exit split view"
+                type="button"
+              >
+                <MaterialIcon kind="close" />
+              </button>
+            </div>
+          ) : null}
           <span className="tab-space" aria-hidden="true" />
         </div>
         <div className="titlebar-session-slot" aria-live="polite">
@@ -2277,9 +2492,29 @@ export function App() {
       >
         {screen === "wrike" ? (
           <section
-            className={`wrike-surface ${draggedTabId ? "split-drop-active" : ""}`}
             aria-label="Wrike workspace"
+            className={`wrike-surface ${draggedTabId ? "split-drop-active" : ""}`}
+            ref={wrikeSurfaceRef}
+            style={
+              wrikeSplit
+                ? ({ "--wrike-split-ratio": String(wrikeSplitRatio) } as React.CSSProperties)
+                : undefined
+            }
           >
+            {wrikeSplit && !draggedTabId ? (
+              <div
+                aria-label="Resize split view"
+                aria-orientation="vertical"
+                aria-valuemax={75}
+                aria-valuemin={25}
+                aria-valuenow={Math.round(wrikeSplitRatio * 100)}
+                className={`wrike-split-divider ${isResizingWrikeSplit ? "dragging" : ""}`}
+                onDoubleClick={() => void resetWrikeSplitRatio()}
+                onPointerDown={startWrikeSplitResize}
+                role="separator"
+                title="Drag to resize split · Double-click to reset 50/50"
+              />
+            ) : null}
             {draggedTabId && wrikeTabs.length > 1 ? (
               <div className="split-drop-zones" aria-hidden="true">
                 <span className={`split-drop-zone left ${splitDropSide === "left" ? "active" : ""}`}>

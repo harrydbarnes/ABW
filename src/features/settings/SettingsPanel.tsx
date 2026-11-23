@@ -153,7 +153,7 @@ export const SettingsPanel = memo(function SettingsPanel({
   const showSuspendInactiveTabs = matchesSearch(
     query,
     "Suspend inactive background tabs",
-    "Suspend hidden Wrike tabs after inactivity to reclaim WebView2 memory while preserving your place.",
+    "Suspend hidden Wrike tabs after inactivity to reclaim WebView2 memory (~600 MB per tab) while keeping your place intact.",
   );
   const showStartupTabs = matchesSearch(
     query,
@@ -390,7 +390,7 @@ export const SettingsPanel = memo(function SettingsPanel({
                 <small>
                   <HighlightText
                     query={query}
-                    text="Suspend hidden Wrike tabs after inactivity to reclaim WebView2 memory while preserving your place."
+                    text="Suspend hidden Wrike tabs after inactivity to reclaim WebView2 memory (~600 MB per tab) while keeping your place intact."
                   />
                 </small>
               </span>
@@ -407,7 +407,7 @@ export const SettingsPanel = memo(function SettingsPanel({
               >
                 <option value={0}>Off</option>
                 <option value={5}>5 minutes</option>
-                <option value={15}>15 minutes</option>
+                <option value={15}>15 minutes (Recommended)</option>
                 <option value={30}>30 minutes</option>
                 <option value={60}>60 minutes</option>
               </select>

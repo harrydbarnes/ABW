@@ -143,6 +143,8 @@ export function evictLruEntries<T extends LruCacheEntry>(
 export interface PdfHeadLike {
   totalSize: number;
   initialChunk: Uint8Array;
+  tailOffset?: number;
+  tailChunk?: Uint8Array;
   complete: boolean;
 }
 
@@ -204,13 +206,15 @@ export function createPreviewCache<
     };
     entry.promise = entry.promise
       .then((head) => {
-        if (!head || head.initialChunk.byteLength > PDF_CACHE_ENTRY_BYTE_LIMIT) {
+        const totalChunkBytes =
+          (head?.initialChunk.byteLength ?? 0) + (head?.tailChunk?.byteLength ?? 0);
+        if (!head || totalChunkBytes > PDF_CACHE_ENTRY_BYTE_LIMIT) {
           pdfCache.delete(record.id);
           return head;
         }
         entry.head = head;
         entry.ready = true;
-        entry.sizeBytes = head.initialChunk.byteLength;
+        entry.sizeBytes = totalChunkBytes;
         evictLruEntries(pdfCache, PDF_CACHE_BYTE_LIMIT);
         return head;
       })

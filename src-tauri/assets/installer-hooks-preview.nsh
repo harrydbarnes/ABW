@@ -9,7 +9,7 @@ Function AbwCaptureStartup
     WriteRegDWORD HKCU "${ABW_PREF_KEY}" "StartupEnabled" 1
     Return
   abw_capture_disabled:
-  IfFileExists "$INSTDIR\ABW Preview.exe" 0 abw_capture_done
+  IfFileExists "$INSTDIR\abw.exe" 0 abw_capture_done
     WriteRegDWORD HKCU "${ABW_PREF_KEY}" "StartupEnabled" 0
   abw_capture_done:
 FunctionEnd
@@ -40,7 +40,7 @@ FunctionEnd
     DeleteRegValue HKCU "${ABW_RUN_KEY}" "ABW Preview"
     Goto abw_startup_done
   abw_startup_enable:
-    WriteRegStr HKCU "${ABW_RUN_KEY}" "ABW Preview" '"$INSTDIR\ABW Preview.exe"'
+    WriteRegStr HKCU "${ABW_RUN_KEY}" "ABW Preview" '"$INSTDIR\abw.exe"'
   abw_startup_done:
 !macroend
 

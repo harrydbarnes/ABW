@@ -118,12 +118,21 @@ export interface WrikeSession {
   savedAt: string;
 }
 
+export interface WorkbookImage {
+  dataUrl: string;
+  leftPx: number;
+  topPx: number;
+  widthPx: number;
+  heightPx: number;
+}
+
 export interface WorkbookSheet {
   name: string;
   columns: WorkbookColumn[];
   rows: WorkbookRow[];
   truncatedRows?: boolean;
   truncatedColumns?: boolean;
+  hasImages?: boolean;
 }
 
 export interface WorkbookColumn {

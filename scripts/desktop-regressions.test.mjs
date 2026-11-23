@@ -291,6 +291,17 @@ test('task-po script detects task panels without URL id gate and auto-expands Mo
   assert.match(poSource, /function expandMoreIfNeeded\(/);
   assert.match(poSource, /expandedMoreFor/);
   assert.match(poSource, /\/\^more\$\/i\.test/);
+  assert.match(poSource, /if \(document\.hidden\) return;/);
+  assert.match(poSource, /panel\.textContent/);
+});
+
+test('preview installer hooks target abw.exe and injected script gates hidden tabs and drag corner sync', () => {
+  const previewHooks = readFileSync(new URL('../src-tauri/assets/installer-hooks-preview.nsh', import.meta.url), 'utf8');
+  assert.match(previewHooks, /\$INSTDIR\\abw\.exe/);
+  assert.doesNotMatch(previewHooks, /ABW Preview\.exe/);
+
+  assert.match(source, /document\.hidden/);
+  assert.match(source, /abwCornerDragActive/);
 });
 
 
