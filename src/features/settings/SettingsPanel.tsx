@@ -614,7 +614,7 @@ function parseReleaseNoteItem(rawLine: string): ReleaseNoteItem | null {
   text = text.replace(/\s*\(#\d+\)\s*$/, "");
 
   // Match structured emoji + bold label format: "✨ **New:** ..."
-  const structured = text.match(/^([✨🐛⚡🎨🔧🚀])\s+\*\*(New|Fix|Speed|Polish|Update):\*\*\s*(.+)$/i);
+  const structured = text.match(/^([✨🐛⚡🎨🔧🚀])\s+\*\*(New|Fix|Speed|Polish|Update):\*\*\s*(.+)$/iu);
   if (structured) {
     const label = structured[2];
     const lower = label.toLowerCase();
