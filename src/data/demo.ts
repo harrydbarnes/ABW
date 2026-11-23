@@ -53,6 +53,7 @@ export const DEFAULT_SETTINGS: Settings = {
   launchWrikeOnStart: true,
   downloadNotifications: true,
   openAbwAtSystemStartup: false,
+  startMinimizedToTray: false,
   closeToNotificationArea: true,
   confirmBeforeClosingTabs: false,
   openDownloadedFilesAutomatically: false,

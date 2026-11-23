@@ -76,6 +76,12 @@ Assert-Startup $false
 if ((Get-FileHash $executable -Algorithm SHA256).Hash -ne $ExpectedExecutableHash) {
     throw 'Startup-disabled upgrade executable differs from the verified fresh current installation.'
 }
+Remove-Item -LiteralPath $preferenceKey -Recurse -Force
+Invoke-Setup @('/P', '/UPDATE', "/D=$directory")
+Assert-Startup $false
+if ((Get-FileHash $executable -Algorithm SHA256).Hash -ne $ExpectedExecutableHash) {
+    throw 'Passive upgrade executable differs from the verified fresh current installation.'
+}
 ./scripts/native-workflow-smoke.ps1 -Executable $executable -DataDirectory $dataDirectory
 node ./scripts/po-bridge-smoke.mjs $executable
 if ($LASTEXITCODE -ne 0) { throw 'Automatic PO native messaging smoke test failed.' }
@@ -85,8 +91,9 @@ $process = Start-Process $uninstaller -ArgumentList @('/S', "_?=$directory") -Wi
 if (-not $process.WaitForExit(180000)) { throw 'Uninstaller timed out.' }
 if ($process.ExitCode -ne 0 -or (Test-Path $executable)) { throw 'Uninstall failed.' }
 Assert-Startup $false
+if (Test-Path $preferenceKey) { throw 'Uninstall did not remove the StartupEnabled preference key.' }
 if (-not (Test-Path $sentinel)) { throw 'Uninstall unexpectedly removed local user data.' }
-Write-Output 'Fresh silent install, running-app upgrade, startup preservation and uninstall passed.'
+Write-Output 'Fresh silent install, running-app upgrade, passive upgrade, startup preservation and uninstall passed.'
 $resolvedDirectory = [IO.Path]::GetFullPath($directory)
 $runnerRoot = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
 if (-not $resolvedDirectory.StartsWith($runnerRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe installer cleanup path.' }
@@ -94,4 +101,3 @@ Remove-Item -LiteralPath $resolvedDirectory -Recurse -Force
 if ([IO.Path]::GetFullPath($dataDirectory) -ne [IO.Path]::GetFullPath((Join-Path $env:APPDATA 'net.insidemedia.abw')) -or
     -not (Test-Path $sentinel)) { throw 'Unsafe application-data cleanup path.' }
 Remove-Item -LiteralPath $dataDirectory -Recurse -Force
-Remove-Item -LiteralPath $preferenceKey -Recurse

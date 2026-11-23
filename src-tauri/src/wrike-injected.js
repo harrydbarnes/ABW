@@ -3,7 +3,7 @@
     __ABW_TASK_PO__
   } catch {}
   window.__abwSpellCleanup?.();
-  const enabled = __ABW_SPELL_CHECK_ENABLED__;
+  let enabled = __ABW_SPELL_CHECK_ENABLED__;
   const abwAutoDownload = __ABW_AUTO_DOWNLOAD__;
   const abwIsWrikeHost = () => {
     const host = String(window.location?.hostname || "").toLowerCase();
@@ -236,14 +236,14 @@
     }
   };
   const abwScheduleCornerSync = () => {
-    if (abwAutoDownload || !abwIsWrikeHost() || abwCornerRafId) return;
+    if (abwAutoDownload || !abwIsWrikeHost() || document.hidden || abwCornerRafId) return;
     abwCornerRafId = window.requestAnimationFrame(() => {
       abwCornerRafId = 0;
       abwSyncWrikeContentCorner(true);
     });
   };
   const abwSyncWrikeContentCorner = (fast = false) => {
-    if (abwAutoDownload || !abwIsWrikeHost() || !document.body) return;
+    if (abwAutoDownload || !abwIsWrikeHost() || document.hidden || !document.body) return;
     const cornerId = "abw-wrike-corner";
     const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || 0;
     const viewportWidth = window.innerWidth || document.documentElement?.clientWidth || 0;
@@ -544,32 +544,45 @@
     if (/\binbox\s*\(\s*\d+\+?\s*\)/i.test(document.title || "")) {
       return true;
     }
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    while (walker.nextNode()) {
-      const node = walker.currentNode;
-      const raw = (node.textContent || "").trim();
-      if (!/^inbox$/i.test(raw)) continue;
-      const parent = node.parentElement;
-      if (!parent) continue;
-      const rect = parent.getBoundingClientRect?.();
-      if (!rect || rect.width === 0 || rect.height === 0 || rect.left > 420) continue;
+    const scanRoot = (root) => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        const raw = (node.textContent || "").trim();
+        if (!/^inbox$/i.test(raw)) continue;
+        const parent = node.parentElement;
+        if (!parent) continue;
+        const rect = parent.getBoundingClientRect?.();
+        if (!rect || rect.width === 0 || rect.height === 0 || rect.left > 420) continue;
 
-      let row = parent;
-      for (let depth = 0; depth < 6 && row.parentElement; depth += 1) {
-        const next = row.parentElement;
-        const nextRect = next.getBoundingClientRect?.();
-        if (!nextRect || nextRect.height > 76 || nextRect.width > 440 || nextRect.left > 420) {
-          break;
+        let row = parent;
+        for (let depth = 0; depth < 6 && row.parentElement; depth += 1) {
+          const next = row.parentElement;
+          const nextRect = next.getBoundingClientRect?.();
+          if (!nextRect || nextRect.height > 76 || nextRect.width > 440 || nextRect.left > 420) {
+            break;
+          }
+          row = next;
+          const rowText = (row.textContent || "").replace(/\s+/g, " ").trim();
+          const match = rowText.match(/(?:inbox\s*|\b)(\d+)\+?(?:\s|$)/i);
+          if (match && Number.parseInt(match[1], 10) > 0) {
+            return true;
+          }
         }
-        row = next;
-        const rowText = (row.textContent || "").replace(/\s+/g, " ").trim();
-        const match = rowText.match(/(?:inbox\s*|\b)(\d+)\+?(?:\s|$)/i);
-        if (match && Number.parseInt(match[1], 10) > 0) {
+      }
+      return false;
+    };
+    const sidebarRoots = document.querySelectorAll('nav, aside, [class*="sidebar" i], [class*="navigation" i]');
+    if (sidebarRoots.length) {
+      for (const root of sidebarRoots) {
+        const rect = root.getBoundingClientRect?.();
+        if (rect && rect.width > 0 && rect.left < 420 && scanRoot(root)) {
           return true;
         }
       }
+      return false;
     }
-    return false;
+    return scanRoot(document.body);
   };
   const abwDetectActiveTaskTitle = () => {
     if (abwAutoDownload || !document.body) return "";
@@ -607,8 +620,9 @@
     }
     return "";
   };
+  let abwLastFullReportAt = 0;
   const abwReportWrikeTheme = (force = false) => {
-    if (abwAutoDownload || !abwIsWrikeHost()) return null;
+    if (abwAutoDownload || !abwIsWrikeHost() || (!force && document.hidden)) return null;
     abwSyncWrikeContentCorner();
     if (document.readyState && document.readyState !== "complete") {
       window.addEventListener(
@@ -618,6 +632,11 @@
       );
       return null;
     }
+    const now = Date.now();
+    if (!force && now - abwLastFullReportAt < 350) {
+      return window.__abwLastDetectedWrikeTheme || null;
+    }
+    abwLastFullReportAt = now;
     const activeTaskTitle = abwDetectActiveTaskTitle();
     if (window.__abwLastActiveTaskTitle !== activeTaskTitle) {
       const wasUnset = typeof window.__abwLastActiveTaskTitle === "undefined";
@@ -643,8 +662,8 @@
     abwEmitScheme(`abw-theme://detected?theme=${encodeURIComponent(detected)}`);
     return detected;
   };
-  const abwScheduleThemeDetect = (delay = 180) => {
-    if (abwAutoDownload || !abwIsWrikeHost() || abwThemeDetectTimer) return;
+  const abwScheduleThemeDetect = (delay = 250) => {
+    if (abwAutoDownload || !abwIsWrikeHost() || document.hidden || abwThemeDetectTimer) return;
     abwThemeDetectTimer = window.setTimeout(() => {
       abwThemeDetectTimer = 0;
       abwReportWrikeTheme(false);
@@ -656,14 +675,18 @@
       .forEach((element) => {
         if (element.spellcheck !== enabled) element.spellcheck = enabled;
       });
-    abwScheduleThemeDetect(150);
+    abwScheduleThemeDetect(450);
+  };
+  window.__abwSetSpellCheck = (nextEnabled) => {
+    enabled = Boolean(nextEnabled);
+    apply();
   };
   const scheduleApply = () => {
     if (abwSpellApplyTimer) return;
     abwSpellApplyTimer = window.setTimeout(() => {
       abwSpellApplyTimer = 0;
       apply();
-    }, 50);
+    }, 150);
   };
   const findEditable = (element) => {
     const active = document.activeElement;
@@ -866,59 +889,98 @@
     }
     return null;
   };
-  const showLinkContextMenu = (url, event) => {
-    closeDictionaryMenu();
-    const shareTarget = url || window.location.href;
+  const abwIsDarkSurface = () => {
+    try {
+      const bg = window.getComputedStyle(document.body || document.documentElement).backgroundColor;
+      const parsed = abwParseCssColor(bg);
+      if (parsed) {
+        const luma = 0.2126 * parsed.r + 0.7152 * parsed.g + 0.0722 * parsed.b;
+        return luma < 128;
+      }
+    } catch {}
+    return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches || false;
+  };
+  const abwMenuPalette = () =>
+    abwIsDarkSurface()
+      ? {
+          bg: "#1e2430",
+          border: "#343e52",
+          text: "#e6ecf7",
+          hover: "#2a3344",
+          sep: "#313b4f",
+          shadow: "0 12px 32px rgba(0, 0, 0, .45)",
+        }
+      : {
+          bg: "#fff",
+          border: "#d6dce8",
+          text: "#17233a",
+          hover: "#f1f5fb",
+          sep: "#e5ebf4",
+          shadow: "0 12px 32px rgba(17, 29, 59, .18)",
+        };
+  const abwBuildMenuContainer = (id, event, widthGuess = 210, heightGuess = 210) => {
+    const palette = abwMenuPalette();
     const menu = document.createElement("div");
-    menu.id = "abw-link-menu";
+    menu.id = id;
     menu.setAttribute("role", "menu");
     Object.assign(menu.style, {
       position: "fixed",
-      left: `${Math.min(window.innerWidth - 210, Math.max(8, event.clientX))}px`,
-      top: `${Math.min(window.innerHeight - 210, Math.max(8, event.clientY))}px`,
+      left: `${Math.min(window.innerWidth - widthGuess, Math.max(8, event.clientX))}px`,
+      top: `${Math.min(window.innerHeight - heightGuess, Math.max(8, event.clientY))}px`,
       zIndex: "2147483647",
       minWidth: "196px",
       padding: "6px",
-      border: "1px solid #d6dce8",
+      border: `1px solid ${palette.border}`,
       borderRadius: "8px",
-      background: "#fff",
-      color: "#17233a",
-      boxShadow: "0 12px 32px rgba(17, 29, 59, .18)",
+      background: palette.bg,
+      color: palette.text,
+      boxShadow: palette.shadow,
       font: "13px Segoe UI, sans-serif",
       display: "flex",
       flexDirection: "column",
-      gap: "2px"
+      gap: "2px",
     });
-    const addMenuItem = (label, onClick) => {
+    const addMenuItem = (label, onClick, disabled = false) => {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.textContent = label;
+      btn.disabled = disabled;
       Object.assign(btn.style, {
         textAlign: "left",
         padding: "7px 10px",
         border: "0",
         borderRadius: "6px",
         background: "transparent",
-        color: "#17233a",
+        color: palette.text,
+        opacity: disabled ? "0.45" : "1",
         font: "13px Segoe UI, sans-serif",
-        cursor: "pointer"
+        cursor: disabled ? "default" : "pointer",
       });
-      btn.addEventListener("mouseenter", () => { btn.style.background = "#f1f5fb"; });
-      btn.addEventListener("mouseleave", () => { btn.style.background = "transparent"; });
-      btn.addEventListener("click", () => {
-        closeDictionaryMenu();
-        onClick();
-      });
+      if (!disabled) {
+        btn.addEventListener("mouseenter", () => { btn.style.background = palette.hover; });
+        btn.addEventListener("mouseleave", () => { btn.style.background = "transparent"; });
+        btn.addEventListener("mousedown", (e) => e.preventDefault());
+        btn.addEventListener("click", () => {
+          closeDictionaryMenu();
+          onClick();
+        });
+      }
       menu.append(btn);
     };
     const addSeparator = () => {
       const sep = document.createElement("div");
-      Object.assign(sep.style, { height: "1px", background: "#e5ebf4", margin: "4px 6px" });
+      Object.assign(sep.style, { height: "1px", background: palette.sep, margin: "4px 6px" });
       menu.append(sep);
     };
+    return { menu, addMenuItem, addSeparator };
+  };
+  const showLinkContextMenu = (url, event) => {
+    closeDictionaryMenu();
+    const shareTarget = url || window.location.href;
+    const { menu, addMenuItem, addSeparator } = abwBuildMenuContainer("abw-link-menu", event, 210, 210);
     if (url) {
       addMenuItem("Open in new tab", () => {
-        window.location.href = `abw-new-tab://open?url=${encodeURIComponent(url)}`;
+        abwEmitScheme(`abw-new-tab://open?url=${encodeURIComponent(url)}`);
       });
       addMenuItem("Copy link", () => {
         navigator.clipboard?.writeText(url).catch(() => undefined);
@@ -929,7 +991,7 @@
       addMenuItem("Refresh", () => window.location.reload());
       addSeparator();
       addMenuItem("Open current page in new tab", () => {
-        window.location.href = `abw-new-tab://open?url=${encodeURIComponent(window.location.href)}`;
+        abwEmitScheme(`abw-new-tab://open?url=${encodeURIComponent(window.location.href)}`);
       });
       addMenuItem("Copy link", () => {
         navigator.clipboard?.writeText(window.location.href).catch(() => undefined);
@@ -937,7 +999,7 @@
       addSeparator();
     }
     addMenuItem("Share", () => {
-      window.location.href = `abw-share://open?url=${encodeURIComponent(shareTarget)}`;
+      abwEmitScheme(`abw-share://open?url=${encodeURIComponent(shareTarget)}`);
     });
     document.body.append(menu);
     window.setTimeout(() => {
@@ -945,29 +1007,45 @@
       window.addEventListener("blur", closeDictionaryMenu, { once: true });
     }, 0);
   };
-  const showDictionaryMenu = (word, event) => {
+  const showDictionaryMenu = (word, event, editable) => {
     closeDictionaryMenu();
-    const menu = document.createElement("button");
-    menu.id = "abw-dictionary-menu";
-    menu.type = "button";
-    menu.textContent = `Add "${word}" to dictionary`;
-    Object.assign(menu.style, {
-      position: "fixed",
-      left: `${Math.max(8, event.clientX)}px`,
-      top: `${Math.max(8, event.clientY)}px`,
-      zIndex: "2147483647",
-      padding: "9px 12px",
-      border: "1px solid #d6dce8",
-      borderRadius: "8px",
-      background: "#fff",
-      color: "#17233a",
-      boxShadow: "0 12px 32px rgba(17, 29, 59, .18)",
-      font: "13px Segoe UI, sans-serif",
-      cursor: "pointer"
-    });
-    menu.addEventListener("click", () => {
-      window.location.href = `abw-dictionary://add?word=${encodeURIComponent(word)}`;
-      closeDictionaryMenu();
+    const { menu, addMenuItem, addSeparator } = abwBuildMenuContainer("abw-dictionary-menu", event, 224, 190);
+    const hasSelection = selectionIsActive();
+    if (word) {
+      addMenuItem(`Add "${word}" to dictionary`, () => {
+        abwEmitScheme(`abw-dictionary://add?word=${encodeURIComponent(word)}`);
+      });
+      addSeparator();
+    }
+    addMenuItem("Cut", () => {
+      editable?.focus?.();
+      document.execCommand?.("cut");
+    }, !hasSelection);
+    addMenuItem("Copy", () => {
+      const sel = window.getSelection()?.toString() || "";
+      if (sel && navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(sel).catch(() => document.execCommand?.("copy"));
+      } else {
+        document.execCommand?.("copy");
+      }
+    }, !hasSelection);
+    addMenuItem("Paste", () => {
+      editable?.focus?.();
+      if (navigator.clipboard?.readText) {
+        navigator.clipboard.readText().then((text) => {
+          if (!text) return;
+          if (editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement) {
+            const startPos = editable.selectionStart ?? editable.value.length;
+            const endPos = editable.selectionEnd ?? editable.value.length;
+            editable.setRangeText(text, startPos, endPos, "end");
+            editable.dispatchEvent(new Event("input", { bubbles: true }));
+          } else {
+            document.execCommand?.("insertText", false, text);
+          }
+        }).catch(() => document.execCommand?.("paste"));
+      } else {
+        document.execCommand?.("paste");
+      }
     });
     document.body.append(menu);
     window.setTimeout(() => {
@@ -984,7 +1062,7 @@
     const word = wordFromPoint(event, editable);
     if (word || selectionIsActive()) {
       event.preventDefault();
-      if (word) showDictionaryMenu(word, event);
+      showDictionaryMenu(word, event, editable);
     }
   };
   const handleLinkContextMenu = (event) => {
@@ -1128,7 +1206,12 @@
   };
   const abwSendShortcut = (action, index = null) => {
     const query = index !== null ? `&index=${index}` : "";
-    window.location.href = `abw-shortcut://trigger?action=${encodeURIComponent(action)}${query}`;
+    const url = `abw-shortcut://trigger?action=${encodeURIComponent(action)}${query}`;
+    if (typeof abwEmitScheme === "function") {
+      abwEmitScheme(url);
+    } else {
+      window.location.href = url;
+    }
   };
   const abwHandleKeyboardShortcuts = (event) => {
     if (event.isComposing || event.metaKey || event.altKey || !event.ctrlKey) {
@@ -1162,7 +1245,7 @@
         subtree: true
       });
     }
-    const themeObserver = new MutationObserver(() => abwScheduleThemeDetect(150));
+    const themeObserver = new MutationObserver(() => abwScheduleThemeDetect(200));
     const themeObserverOptions = {
       attributes: true,
       attributeFilter: ["class", "style", "data-theme"]
@@ -1174,6 +1257,8 @@
     window.__abwSpellCleanup = () => {
       window.clearTimeout(abwSpellApplyTimer);
       window.clearTimeout(abwThemeDetectTimer);
+      window.clearTimeout(abwSchemeDrainTimer);
+      abwSchemeDrainTimer = 0;
       if (abwCornerRafId) {
         window.cancelAnimationFrame(abwCornerRafId);
         abwCornerRafId = 0;
@@ -1196,7 +1281,7 @@
         if (!linkUrl) return;
         event.preventDefault();
         event.stopPropagation();
-        window.location.href = `abw-new-tab://open?url=${encodeURIComponent(linkUrl)}`;
+        abwEmitScheme(`abw-new-tab://open?url=${encodeURIComponent(linkUrl)}`);
       }, true);
       document.addEventListener('click', (event) => {
         if (event.button !== 0 || !(event.ctrlKey || event.metaKey) || event.altKey) return;
@@ -1204,7 +1289,7 @@
         if (!linkUrl) return;
         event.preventDefault();
         event.stopPropagation();
-        window.location.href = `abw-new-tab://open?url=${encodeURIComponent(linkUrl)}`;
+        abwEmitScheme(`abw-new-tab://open?url=${encodeURIComponent(linkUrl)}`);
       }, true);
       window.__abwContextMenuGuard = true;
     }
@@ -1219,35 +1304,59 @@
     }
     const handleResizeCornerSync = () => {
       abwScheduleCornerSync();
-      abwScheduleThemeDetect(80);
+      abwScheduleThemeDetect(120);
+    };
+    let abwCornerDragActive = false;
+    const handlePointerDownCornerSync = (event) => {
+      abwCornerDragActive = event.button === 0 && event.clientX <= 460;
     };
     const handlePointerMoveCornerSync = (event) => {
-      if (event.buttons & 1) {
+      if (abwCornerDragActive && (event.buttons & 1)) {
         abwScheduleCornerSync();
       }
+    };
+    const handlePointerUpCornerSync = () => {
+      abwCornerDragActive = false;
     };
     const handleTransitionEndCornerSync = () => {
       abwScheduleCornerSync();
     };
     window.addEventListener("load", () => abwScheduleThemeDetect(120), { once: true });
     window.addEventListener("resize", handleResizeCornerSync);
+    document.addEventListener("pointerdown", handlePointerDownCornerSync, { passive: true, capture: true });
     document.addEventListener("pointermove", handlePointerMoveCornerSync, { passive: true, capture: true });
+    document.addEventListener("pointerup", handlePointerUpCornerSync, { passive: true, capture: true });
+    document.addEventListener("pointercancel", handlePointerUpCornerSync, { passive: true, capture: true });
     document.addEventListener("transitionend", handleTransitionEndCornerSync, true);
-    document.addEventListener("click", () => abwScheduleThemeDetect(220), true);
     const inboxPollTimer = window.setInterval(() => {
       if (!document.hidden) abwScheduleThemeDetect(80);
     }, 8000);
     const handleWindowBlur = () => {
       closeDictionaryMenu();
-      const target = document.activeElement || document.body || document;
+      const active = document.activeElement;
+      if (active && findEditable(active)) {
+        return;
+      }
+      if (active instanceof Element && active.closest('[role="dialog"], dialog')) {
+        return;
+      }
+      const hasOpenMenu = Boolean(
+        document.querySelector('[role="menu"], [role="listbox"], [class*="context-menu" i], [class*="dropdown-menu" i]')
+      );
+      if (!hasOpenMenu) {
+        return;
+      }
+      const target = active || document.body || document;
       try {
         target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, which: 27, bubbles: true, cancelable: true }));
       } catch {}
     };
     window.addEventListener("blur", handleWindowBlur);
-    const isWrikeOpenInterstitial = () =>
+    const isLikelyOpenInterstitialPage = () =>
       /open(?:\.htm|-in-app)/i.test(window.location.pathname) ||
-      /opening a link in wrike/i.test(document.title || "") ||
+      /opening a link in wrike/i.test(document.title || "");
+    const isWrikeOpenInterstitial = () =>
+      isLikelyOpenInterstitialPage() ||
       /opening a link in wrike app/i.test(document.body?.innerText || "");
     let openHtmHandled = false;
     const clickBrowserLink = () => {
@@ -1283,23 +1392,29 @@
       return false;
     };
     let openHtmObserver = null;
-    if (!clickBrowserLink()) {
+    let openHtmTimer = 0;
+    let openHtmStopTimer = 0;
+    if (isLikelyOpenInterstitialPage() && !clickBrowserLink()) {
       openHtmObserver = new MutationObserver(() => {
         if (clickBrowserLink()) {
           openHtmObserver?.disconnect();
           openHtmObserver = null;
+          window.clearInterval(openHtmTimer);
+          openHtmTimer = 0;
         }
       });
       openHtmObserver.observe(document.documentElement, { childList: true, subtree: true });
-      const openHtmTimer = window.setInterval(() => {
+      openHtmTimer = window.setInterval(() => {
         if (clickBrowserLink()) {
           window.clearInterval(openHtmTimer);
+          openHtmTimer = 0;
           openHtmObserver?.disconnect();
           openHtmObserver = null;
         }
       }, 100);
-      window.setTimeout(() => {
+      openHtmStopTimer = window.setTimeout(() => {
         window.clearInterval(openHtmTimer);
+        openHtmTimer = 0;
         openHtmObserver?.disconnect();
         openHtmObserver = null;
       }, 6000);
@@ -1309,9 +1424,16 @@
     window.__abwSpellCleanup = () => {
       window.clearInterval(inboxPollTimer);
       window.clearTimeout(earlyCornerTimer);
+      window.clearInterval(openHtmTimer);
+      window.clearTimeout(openHtmStopTimer);
+      openHtmObserver?.disconnect();
+      openHtmObserver = null;
       window.removeEventListener("blur", handleWindowBlur);
       window.removeEventListener("resize", handleResizeCornerSync);
+      document.removeEventListener("pointerdown", handlePointerDownCornerSync, true);
       document.removeEventListener("pointermove", handlePointerMoveCornerSync, true);
+      document.removeEventListener("pointerup", handlePointerUpCornerSync, true);
+      document.removeEventListener("pointercancel", handlePointerUpCornerSync, true);
       document.removeEventListener("transitionend", handleTransitionEndCornerSync, true);
       prevCleanup?.();
     };

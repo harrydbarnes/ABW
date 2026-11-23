@@ -1,13 +1,12 @@
 pub mod po_bridge;
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
-    io::{Read, Seek, SeekFrom},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock, RwLock},
 };
 use tauri::{
     ipc::Response,
@@ -17,7 +16,8 @@ use tauri::{
         DownloadEvent, NewWindowResponse, PageLoadEvent, Webview, WebviewBuilder,
         WebviewWindowBuilder,
     },
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, WebviewUrl, WindowEvent,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalPosition, PhysicalSize,
+    State, WebviewUrl, WindowEvent,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_notification::NotificationExt;
@@ -31,22 +31,29 @@ mod startup;
 mod updater;
 
 #[tauri::command]
-fn storage_health(app: AppHandle) -> Result<Vec<String>, String> {
-    Ok([
-        persistence::health::<Settings>(&settings_path(&app)?),
-        persistence::health::<Vec<DownloadRecord>>(&records_path(&app)?),
-    ]
-    .into_iter()
-    .flatten()
-    .collect())
+async fn storage_health(app: AppHandle) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok([
+            persistence::health::<Settings>(&settings_path(&app)?),
+            persistence::health::<WorkspaceState>(&workspace_state_path(&app)?),
+            persistence::health::<Vec<DownloadRecord>>(&records_path(&app)?),
+        ]
+        .into_iter()
+        .flatten()
+        .collect())
+    })
+    .await
+    .map_err(|error| format!("Unable to inspect storage health: {error}"))?
 }
 
 const WRIKE_HOME: &str = "https://www.wrike.com/workspace.htm";
 const MAX_PDF_PREVIEW_BYTES: u64 = 128 * 1024 * 1024;
-const PDF_HEAD_CHUNK_BYTES: u64 = 65_536;
+const PDF_HEAD_CHUNK_BYTES: u64 = 131_072;
 const PDF_INLINE_THRESHOLD_BYTES: u64 = 512 * 1024;
 const MAX_PDF_RANGE_BYTES: u64 = 8 * 1024 * 1024;
 const TASKBAR_HEIGHT: f64 = 50.0;
+const WRIKE_SPLIT_GAP: f64 = 8.0;
+const TRAY_ICON_ID: &str = "abw-tray";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,7 +68,7 @@ struct DownloadRecord {
     source_label: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct FavoriteTicket {
     id: String,
@@ -74,7 +81,7 @@ struct FavoriteTicket {
     added_at: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct VisitHistoryEntry {
     id: String,
@@ -88,6 +95,26 @@ struct VisitHistoryEntry {
     visit_count: u32,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct WindowBounds {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    maximized: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+struct WorkspaceState {
+    pinned_download_ids: Vec<String>,
+    favorite_tickets: Vec<FavoriteTicket>,
+    visit_history: Vec<VisitHistoryEntry>,
+    last_wrike_session: Option<WrikeSession>,
+    window_bounds: Option<WindowBounds>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct Settings {
@@ -97,6 +124,8 @@ struct Settings {
     launch_wrike_on_start: bool,
     download_notifications: bool,
     open_abw_at_system_startup: bool,
+    #[serde(default)]
+    start_minimized_to_tray: bool,
     close_to_notification_area: bool,
     confirm_before_closing_tabs: bool,
     open_downloaded_files_automatically: bool,
@@ -125,7 +154,7 @@ struct Settings {
     last_wrike_session: Option<WrikeSession>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct WrikeSessionTab {
     id: String,
@@ -134,14 +163,14 @@ struct WrikeSessionTab {
     mode: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct WrikeSessionSplit {
     left_tab_id: String,
     right_tab_id: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct WrikeSession {
     tabs: Vec<WrikeSessionTab>,
@@ -170,6 +199,7 @@ impl Default for Settings {
             launch_wrike_on_start: true,
             download_notifications: true,
             open_abw_at_system_startup: false,
+            start_minimized_to_tray: false,
             close_to_notification_area: true,
             confirm_before_closing_tabs: false,
             open_downloaded_files_automatically: false,
@@ -186,6 +216,45 @@ impl Default for Settings {
             visit_history: Vec::new(),
             last_wrike_session: None,
         }
+    }
+}
+
+impl Settings {
+    fn preferences_only(&self) -> Self {
+        Self {
+            pinned_download_ids: Vec::new(),
+            favorite_tickets: Vec::new(),
+            visit_history: Vec::new(),
+            last_wrike_session: None,
+            ..self.clone()
+        }
+    }
+
+    fn preferences_equal(&self, other: &Self) -> bool {
+        self.spell_check == other.spell_check
+            && self.show_spell_check_in_topbar == other.show_spell_check_in_topbar
+            && self.launch_wrike_on_start == other.launch_wrike_on_start
+            && self.download_notifications == other.download_notifications
+            && self.open_abw_at_system_startup == other.open_abw_at_system_startup
+            && self.start_minimized_to_tray == other.start_minimized_to_tray
+            && self.close_to_notification_area == other.close_to_notification_area
+            && self.confirm_before_closing_tabs == other.confirm_before_closing_tabs
+            && self.open_downloaded_files_automatically == other.open_downloaded_files_automatically
+            && self.open_external_links_in_browser == other.open_external_links_in_browser
+            && self.auto_check_for_updates == other.auto_check_for_updates
+            && self.auto_match_wrike_theme == other.auto_match_wrike_theme
+            && self.suspend_inactive_tabs_minutes == other.suspend_inactive_tabs_minutes
+            && self.custom_context_menu == other.custom_context_menu
+            && self.theme == other.theme
+            && self.custom_dictionary == other.custom_dictionary
+            && self.startup_tab_urls == other.startup_tab_urls
+    }
+
+    fn merge_workspace_state(&mut self, state: &WorkspaceState) {
+        self.pinned_download_ids = state.pinned_download_ids.clone();
+        self.favorite_tickets = state.favorite_tickets.clone();
+        self.visit_history = state.visit_history.clone();
+        self.last_wrike_session = state.last_wrike_session.clone();
     }
 }
 
@@ -229,11 +298,21 @@ enum WrikePane {
     Right,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct SettingsFileStamp {
+    modified: Option<std::time::SystemTime>,
+    len: u64,
+}
+
 struct AppState {
     wrike_tabs: Mutex<HashMap<String, Arc<CaptureContext>>>,
+    suspended_tabs: Mutex<HashSet<String>>,
+    visible_wrike_tabs: Mutex<HashSet<String>>,
     tracked_paths: Mutex<HashMap<String, PathBuf>>,
     detected_wrike_theme: Mutex<Option<String>>,
+    cached_settings: RwLock<Option<(Settings, Option<SettingsFileStamp>)>>,
     top_inset: Mutex<f64>,
+    wrike_split_ratio: Mutex<f64>,
     quit_prompt_open: AtomicBool,
     wrike_inbox_unread: AtomicBool,
     update_available_badge: AtomicBool,
@@ -244,9 +323,13 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             wrike_tabs: Mutex::new(HashMap::new()),
+            suspended_tabs: Mutex::new(HashSet::new()),
+            visible_wrike_tabs: Mutex::new(HashSet::new()),
             tracked_paths: Mutex::new(HashMap::new()),
             detected_wrike_theme: Mutex::new(None),
+            cached_settings: RwLock::new(None),
             top_inset: Mutex::new(0.0),
+            wrike_split_ratio: Mutex::new(0.5),
             quit_prompt_open: AtomicBool::new(false),
             wrike_inbox_unread: AtomicBool::new(false),
             update_available_badge: AtomicBool::new(false),
@@ -297,8 +380,16 @@ impl NavigationHistory {
     }
 
     fn record(&mut self, url: &str) {
-        if let Some(index) = self.entries.iter().rposition(|entry| entry == url) {
-            self.position = index;
+        if self.entries.get(self.position).map(String::as_str) == Some(url) {
+            return;
+        }
+        if self.position > 0 && self.entries.get(self.position - 1).map(String::as_str) == Some(url)
+        {
+            self.position -= 1;
+            return;
+        }
+        if self.entries.get(self.position + 1).map(String::as_str) == Some(url) {
+            self.position += 1;
             return;
         }
         if !self.entries.is_empty() && self.position + 1 < self.entries.len() {
@@ -318,8 +409,10 @@ impl NavigationHistory {
 }
 
 #[tauri::command]
-fn list_downloads(app: AppHandle) -> Result<Vec<DownloadRecord>, String> {
-    read_records(&app)
+async fn list_downloads(app: AppHandle) -> Result<Vec<DownloadRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || read_records(&app))
+        .await
+        .map_err(|error| format!("Unable to load downloads: {error}"))?
 }
 
 fn open_tracked_file(app: &AppHandle, id: &str) -> Result<(PathBuf, fs::File), String> {
@@ -335,29 +428,6 @@ fn open_tracked_file(app: &AppHandle, id: &str) -> Result<(PathBuf, fs::File), S
         }
         Err(error) => Err(format!("Unable to open download: {error}")),
     }
-}
-
-#[tauri::command]
-async fn read_download(app: AppHandle, id: String) -> Result<Response, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let (_, mut file) = open_tracked_file(&app, &id)?;
-        let size = file
-            .metadata()
-            .map_err(|error| format!("Unable to inspect download: {error}"))?
-            .len();
-        if size > MAX_PDF_PREVIEW_BYTES {
-            return Err(format!(
-                "This PDF is {} MB. In-app PDF preview currently supports files up to 128 MB; open it in Windows instead.",
-                size.div_ceil(1024 * 1024)
-            ));
-        }
-        let mut bytes = Vec::with_capacity(size as usize);
-        file.read_to_end(&mut bytes)
-            .map_err(|error| format!("Unable to read download: {error}"))?;
-        Ok(Response::new(bytes))
-    })
-    .await
-    .map_err(|error| format!("Unable to read download: {error}"))?
 }
 
 #[tauri::command]
@@ -379,11 +449,26 @@ async fn read_download_head(app: AppHandle, id: String) -> Result<Response, Stri
         } else {
             size.min(PDF_HEAD_CHUNK_BYTES)
         } as usize;
-        let mut out = Vec::with_capacity(8 + head_len);
+        let tail_offset = if size <= PDF_INLINE_THRESHOLD_BYTES {
+            size
+        } else {
+            size.saturating_sub(PDF_HEAD_CHUNK_BYTES)
+                .max(head_len as u64)
+        };
+        let tail_len = size.saturating_sub(tail_offset) as usize;
+        let mut out = Vec::with_capacity(20 + head_len + tail_len);
         out.extend_from_slice(&size.to_le_bytes());
-        out.resize(8 + head_len, 0);
-        file.read_exact(&mut out[8..])
+        out.extend_from_slice(&(head_len as u32).to_le_bytes());
+        out.extend_from_slice(&tail_offset.to_le_bytes());
+        out.resize(20 + head_len + tail_len, 0);
+        file.read_exact(&mut out[20..20 + head_len])
             .map_err(|error| format!("Unable to read PDF header: {error}"))?;
+        if tail_len > 0 {
+            file.seek(SeekFrom::Start(tail_offset))
+                .map_err(|error| format!("Unable to seek PDF trailer: {error}"))?;
+            file.read_exact(&mut out[20 + head_len..])
+                .map_err(|error| format!("Unable to read PDF trailer: {error}"))?;
+        }
         Ok(Response::new(out))
     })
     .await
@@ -447,6 +532,27 @@ async fn preview_spreadsheet(
     })
     .await
     .map_err(|error| format!("Unable to preview spreadsheet: {error}"))?
+}
+
+#[tauri::command]
+async fn load_spreadsheet_images(
+    app: AppHandle,
+    id: String,
+    sheet_index: usize,
+) -> Result<Vec<spreadsheet::WorkbookImage>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = resolve_tracked_path(&app, &id)?;
+        match spreadsheet::load_sheet_images(&path, sheet_index) {
+            Err(_) if !path.exists() => {
+                invalidate_tracked_paths(&app, Some(&id));
+                let refreshed = resolve_tracked_path(&app, &id)?;
+                spreadsheet::load_sheet_images(&refreshed, sheet_index)
+            }
+            result => result,
+        }
+    })
+    .await
+    .map_err(|error| format!("Unable to load spreadsheet images: {error}"))?
 }
 
 #[tauri::command]
@@ -531,62 +637,78 @@ async fn clear_unpinned_downloads(app: AppHandle) -> Result<ClearDownloadsResult
             .canonicalize()
             .map_err(|error| format!("Unable to validate downloads directory: {error}"))?;
 
-        let (kept_records, removed_entries) =
-            persistence::update::<Vec<DownloadRecord>, _>(&records_path(&app)?, |records| {
-                let all_records = std::mem::take(records);
-                let mut removed = Vec::new();
-                for record in all_records {
-                    let disk_path = root
-                        .join(&record.file_name)
-                        .canonicalize()
-                        .ok()
-                        .filter(|resolved| resolved.starts_with(&root));
-                    if pinned.contains(&record.id) && disk_path.is_some() {
-                        records.push(record);
-                    } else {
-                        removed.push((record.id, disk_path, record.size_bytes));
-                    }
-                }
-                Ok(removed)
-            })?;
-
+        let existing_records = read_records(&app)?;
         let mut freed_bytes = 0_u64;
-        let mut removed_ids = Vec::with_capacity(removed_entries.len());
-        for (id, disk_path, fallback_size) in removed_entries {
-            invalidate_tracked_paths(&app, Some(&id));
+        let mut removed_ids = HashSet::new();
+        let mut locked_error: Option<String> = None;
+
+        for record in &existing_records {
+            let disk_path = root
+                .join(&record.file_name)
+                .canonicalize()
+                .ok()
+                .filter(|resolved| resolved.starts_with(&root));
+            if pinned.contains(&record.id) && disk_path.is_some() {
+                continue;
+            }
             if let Some(resolved) = disk_path {
                 let actual_size = fs::metadata(&resolved)
                     .map(|meta| meta.len())
-                    .unwrap_or(fallback_size);
+                    .unwrap_or(record.size_bytes);
                 match fs::remove_file(&resolved) {
-                    Ok(()) => freed_bytes = freed_bytes.saturating_add(actual_size),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Ok(()) => {
+                        freed_bytes = freed_bytes.saturating_add(actual_size);
+                        removed_ids.insert(record.id.clone());
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        removed_ids.insert(record.id.clone());
+                    }
                     Err(error) => {
-                        return Err(format!("Unable to remove downloaded file: {error}"));
+                        if locked_error.is_none() {
+                            locked_error =
+                                Some(format!("Unable to remove {}: {error}", record.file_name));
+                        }
                     }
                 }
+            } else {
+                removed_ids.insert(record.id.clone());
             }
-            removed_ids.push(id);
         }
 
+        for id in &removed_ids {
+            invalidate_tracked_paths(&app, Some(id));
+        }
+
+        let (kept_records, _) =
+            persistence::update::<Vec<DownloadRecord>, _>(&records_path(&app)?, |records| {
+                records.retain(|record| !removed_ids.contains(&record.id));
+                Ok(())
+            })?;
+
         let kept_ids: HashSet<&str> = kept_records.iter().map(|r| r.id.as_str()).collect();
-        let (updated_settings, settings_changed) =
-            persistence::update::<Settings, _>(&settings_path(&app)?, |stored| {
-                let before = stored.pinned_download_ids.len();
-                stored
+        let (_, pins_changed) =
+            persistence::update::<WorkspaceState, _>(&workspace_state_path(&app)?, |workspace| {
+                let before = workspace.pinned_download_ids.len();
+                workspace
                     .pinned_download_ids
                     .retain(|pinned_id| kept_ids.contains(pinned_id.as_str()));
-                stored.open_abw_at_system_startup = startup::enabled()?;
-                Ok(stored.pinned_download_ids.len() != before)
+                Ok(workspace.pinned_download_ids.len() != before)
             })?;
-        if settings_changed {
-            let _ = app.emit("settings-updated", updated_settings);
+        if pins_changed {
+            if let Ok(updated_settings) = refresh_cached_settings(&app) {
+                let _ = app.emit("settings-updated", updated_settings);
+            }
         }
         let removed_count = removed_ids.len();
         app.emit("downloads-updated", ())
             .map_err(|error| format!("Unable to refresh Files view: {error}"))?;
         for removed_id in removed_ids {
             let _ = app.emit("download-deleted", removed_id);
+        }
+        if let Some(error) = locked_error {
+            if removed_count == 0 {
+                return Err(error);
+            }
         }
         Ok(ClearDownloadsResult {
             removed_count,
@@ -595,6 +717,16 @@ async fn clear_unpinned_downloads(app: AppHandle) -> Result<ClearDownloadsResult
     })
     .await
     .map_err(|error| format!("Unable to clear downloads: {error}"))?
+}
+
+#[tauri::command]
+async fn open_downloads_folder(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = downloads_dir(&app)?;
+        open::that(dir).map_err(|error| format!("Unable to open downloads folder: {error}"))
+    })
+    .await
+    .map_err(|error| format!("Unable to open downloads folder: {error}"))?
 }
 
 #[tauri::command]
@@ -625,44 +757,50 @@ async fn reveal_download(app: AppHandle, id: String) -> Result<(), String> {
 #[tauri::command]
 async fn delete_download(app: AppHandle, id: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        invalidate_tracked_paths(&app, Some(&id));
-        let removed =
-            persistence::update::<Vec<DownloadRecord>, _>(&records_path(&app)?, |records| {
-                let Some(index) = records.iter().position(|record| record.id == id) else {
-                    return Ok(None);
-                };
-                Ok(Some(records.remove(index)))
-            })?
-            .1
+        let records = read_records(&app)?;
+        let target = records
+            .into_iter()
+            .find(|record| record.id == id)
             .ok_or_else(|| "This download is no longer in the Files library.".to_owned())?;
 
         if let Ok(root) = downloads_dir(&app)?.canonicalize() {
             if let Some(resolved) = root
-                .join(&removed.file_name)
+                .join(&target.file_name)
                 .canonicalize()
                 .ok()
                 .filter(|resolved| resolved.starts_with(&root))
             {
                 match fs::remove_file(&resolved) {
                     Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                        return Err(format!("Unable to remove downloaded file: {error}"));
+                        return Err(format!(
+                            "Unable to remove downloaded file (close it if open in another app): {error}"
+                        ));
                     }
                     _ => {}
                 }
             }
         }
 
-        let (settings, had_pin) =
-            persistence::update::<Settings, _>(&settings_path(&app)?, |stored| {
-                let before = stored.pinned_download_ids.len();
-                stored
+        invalidate_tracked_paths(&app, Some(&id));
+        persistence::update::<Vec<DownloadRecord>, _>(&records_path(&app)?, |stored| {
+            stored.retain(|record| record.id != id);
+            Ok(())
+        })?;
+
+        let (_, had_pin) = persistence::update::<WorkspaceState, _>(
+            &workspace_state_path(&app)?,
+            |workspace| {
+                let before = workspace.pinned_download_ids.len();
+                workspace
                     .pinned_download_ids
                     .retain(|pinned_id| pinned_id != &id);
-                stored.open_abw_at_system_startup = startup::enabled()?;
-                Ok(stored.pinned_download_ids.len() != before)
-            })?;
+                Ok(workspace.pinned_download_ids.len() != before)
+            },
+        )?;
         if had_pin {
-            let _ = app.emit("settings-updated", settings);
+            if let Ok(settings) = refresh_cached_settings(&app) {
+                let _ = app.emit("settings-updated", settings);
+            }
         }
         app.emit("downloads-updated", ())
             .map_err(|error| format!("Unable to refresh Files view: {error}"))?;
@@ -673,149 +811,208 @@ async fn delete_download(app: AppHandle, id: String) -> Result<(), String> {
     .map_err(|error| format!("Unable to remove download: {error}"))?
 }
 
-#[tauri::command]
-fn get_settings(app: AppHandle, state: State<'_, AppState>) -> Result<Settings, String> {
-    let settings = read_settings(&app)?;
-    state
-        .open_external_links_in_browser
-        .store(settings.open_external_links_in_browser, Ordering::Relaxed);
-    Ok(settings)
-}
-
-#[tauri::command]
-fn update_settings(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    mut settings: Settings,
-) -> Result<Settings, String> {
-    settings.custom_dictionary = normalize_dictionary(settings.custom_dictionary);
-    settings.startup_tab_urls = normalize_startup_tab_urls(settings.startup_tab_urls);
-    settings.pinned_download_ids = normalize_string_ids(settings.pinned_download_ids);
-    if settings.theme.trim().is_empty() {
-        settings.theme = default_theme();
-    }
-    let detected_theme = state
-        .detected_wrike_theme
-        .lock()
-        .ok()
-        .and_then(|theme| theme.clone());
-    let (settings, previous) =
-        persistence::update::<Settings, _>(&settings_path(&app)?, |stored| {
-            let previous = stored.clone();
-            settings.last_wrike_session = stored.last_wrike_session.clone();
-            if settings.auto_match_wrike_theme && !previous.auto_match_wrike_theme {
-                if let Some(detected) = detected_theme.as_ref() {
-                    settings.theme = detected.clone();
-                }
-            }
-            if settings.open_abw_at_system_startup != startup::enabled()? {
-                startup::set_enabled(settings.open_abw_at_system_startup)?;
-            }
-            *stored = settings;
-            Ok(previous)
-        })?;
-    state
-        .open_external_links_in_browser
-        .store(settings.open_external_links_in_browser, Ordering::Relaxed);
-    if previous.custom_dictionary != settings.custom_dictionary {
-        sync_windows_spelling_dictionary(&previous.custom_dictionary, &settings.custom_dictionary);
-    }
-    if previous.spell_check != settings.spell_check {
-        let script = apply_spell_check_script(settings.spell_check, false);
-        let tab_ids = state
-            .wrike_tabs
-            .lock()
-            .map(|tabs| tabs.keys().cloned().collect::<Vec<_>>())
-            .unwrap_or_else(|_| vec!["home".to_owned()]);
-        for tab_id in tab_ids {
-            if let Some(webview) = app.get_webview(&wrike_tab_label(&tab_id)?) {
-                webview
-                    .eval(script)
-                    .map_err(|error| format!("Unable to apply spell-check preference: {error}"))?;
-            }
-        }
-    }
-    if previous.custom_context_menu != settings.custom_context_menu {
-        let context_script = if settings.custom_context_menu {
-            "window.__abwCustomContextMenuEnabled = true;"
-        } else {
-            "window.__abwCustomContextMenuEnabled = false;"
-        };
-        let tab_ids = state
-            .wrike_tabs
-            .lock()
-            .map(|tabs| tabs.keys().cloned().collect::<Vec<_>>())
-            .unwrap_or_else(|_| vec!["home".to_owned()]);
-        for tab_id in tab_ids {
-            if let Some(webview) = app.get_webview(&wrike_tab_label(&tab_id)?) {
-                let _ = webview.eval(context_script);
-            }
-        }
-    }
-    if settings.auto_match_wrike_theme && !previous.auto_match_wrike_theme {
-        let tab_ids = state
-            .wrike_tabs
-            .lock()
-            .map(|tabs| tabs.keys().cloned().collect::<Vec<_>>())
-            .unwrap_or_default();
-        for tab_id in tab_ids {
-            if let Some(webview) = app.get_webview(&wrike_tab_label(&tab_id)?) {
-                let _ = webview.eval("window.__abwDetectWrikeTheme?.(true);");
-            }
-        }
-    }
-    app.emit("settings-updated", settings.clone())
-        .map_err(|error| format!("Unable to refresh settings: {error}"))?;
-    Ok(settings)
-}
-
-#[tauri::command]
-fn update_last_wrike_session(app: AppHandle, session: WrikeSession) -> Result<(), String> {
-    persistence::update::<Settings, _>(&settings_path(&app)?, |settings| {
-        settings.last_wrike_session = Some(normalize_wrike_session(session));
-        Ok(())
-    })
-    .map(|_| ())
-}
-
-#[tauri::command]
-fn reset_app(app: AppHandle, state: State<'_, AppState>) -> Result<Settings, String> {
-    let (defaults, previous) =
-        persistence::update::<Settings, _>(&settings_path(&app)?, |stored| {
-            let previous = stored.clone();
-            let defaults = Settings::default();
-            if startup::enabled()? != defaults.open_abw_at_system_startup {
-                let _ = startup::set_enabled(defaults.open_abw_at_system_startup);
-            }
-            *stored = defaults;
-            Ok(previous)
-        })?;
-    state
-        .open_external_links_in_browser
-        .store(defaults.open_external_links_in_browser, Ordering::Relaxed);
-    if !previous.custom_dictionary.is_empty() {
-        sync_windows_spelling_dictionary(&previous.custom_dictionary, &defaults.custom_dictionary);
-    }
-    let script = apply_spell_check_script(defaults.spell_check, false);
-    let context_script = if defaults.custom_context_menu {
-        "window.__abwCustomContextMenuEnabled = true;"
-    } else {
-        "window.__abwCustomContextMenuEnabled = false;"
-    };
+fn broadcast_to_wrike_webviews(app: &AppHandle, state: &AppState, script: &str) {
     let tab_ids = state
         .wrike_tabs
         .lock()
         .map(|tabs| tabs.keys().cloned().collect::<Vec<_>>())
-        .unwrap_or_default();
+        .unwrap_or_else(|_| vec!["home".to_owned()]);
     for tab_id in tab_ids {
-        if let Some(webview) = app.get_webview(&wrike_tab_label(&tab_id)?) {
-            let _ = webview.eval(script);
-            let _ = webview.eval(context_script);
+        if let Ok(label) = wrike_tab_label(&tab_id) {
+            if let Some(webview) = app.get_webview(&label) {
+                let _ = webview.eval(script);
+            }
         }
     }
-    app.emit("settings-updated", defaults.clone())
-        .map_err(|error| format!("Unable to refresh settings: {error}"))?;
-    Ok(defaults)
+    for (label, webview) in app.webviews() {
+        if label.starts_with("wrike-popup-") {
+            let _ = webview.eval(script);
+        }
+    }
+}
+
+#[tauri::command]
+async fn get_settings(app: AppHandle) -> Result<Settings, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let settings = refresh_cached_settings(&app)?;
+        if let Some(state) = app.try_state::<AppState>() {
+            state
+                .open_external_links_in_browser
+                .store(settings.open_external_links_in_browser, Ordering::Relaxed);
+        }
+        Ok(settings)
+    })
+    .await
+    .map_err(|error| format!("Unable to load settings: {error}"))?
+}
+
+#[tauri::command]
+async fn update_settings(app: AppHandle, mut settings: Settings) -> Result<Settings, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        settings.custom_dictionary = normalize_dictionary(settings.custom_dictionary);
+        settings.startup_tab_urls = normalize_startup_tab_urls(settings.startup_tab_urls);
+        settings.pinned_download_ids = normalize_string_ids(settings.pinned_download_ids);
+        if settings.theme.trim().is_empty() {
+            settings.theme = default_theme();
+        }
+        let state = app.state::<AppState>();
+        let detected_theme = state
+            .detected_wrike_theme
+            .lock()
+            .ok()
+            .and_then(|theme| theme.clone());
+        let previous = get_cached_settings(&app)?;
+        if settings.auto_match_wrike_theme && !previous.auto_match_wrike_theme {
+            if let Some(detected) = detected_theme.as_ref() {
+                settings.theme = detected.clone();
+            }
+        }
+        settings.last_wrike_session = previous.last_wrike_session.clone();
+
+        let startup_changed = settings.open_abw_at_system_startup != startup::enabled()?
+            || (settings.open_abw_at_system_startup
+                && settings.start_minimized_to_tray != previous.start_minimized_to_tray);
+        if startup_changed {
+            startup::set_enabled(
+                settings.open_abw_at_system_startup,
+                settings.start_minimized_to_tray,
+            )?;
+        }
+
+        if !settings.preferences_equal(&previous) || !settings_path(&app)?.exists() {
+            let prefs_only = settings.preferences_only();
+            persistence::update::<Settings, _>(&settings_path(&app)?, |stored| {
+                *stored = prefs_only;
+                Ok(())
+            })?;
+        }
+
+        let workspace_changed = settings.pinned_download_ids != previous.pinned_download_ids
+            || settings.favorite_tickets != previous.favorite_tickets
+            || settings.visit_history != previous.visit_history;
+        if workspace_changed {
+            let pins = settings.pinned_download_ids.clone();
+            let favorites = settings.favorite_tickets.clone();
+            let history = settings.visit_history.clone();
+            persistence::update::<WorkspaceState, _>(&workspace_state_path(&app)?, |workspace| {
+                workspace.pinned_download_ids = pins;
+                workspace.favorite_tickets = favorites;
+                workspace.visit_history = history;
+                Ok(())
+            })?;
+        }
+
+        store_cached_settings(&app, &settings);
+        state
+            .open_external_links_in_browser
+            .store(settings.open_external_links_in_browser, Ordering::Relaxed);
+        if previous.custom_dictionary != settings.custom_dictionary {
+            sync_windows_spelling_dictionary(
+                &previous.custom_dictionary,
+                &settings.custom_dictionary,
+            );
+        }
+        if previous.spell_check != settings.spell_check {
+            let toggle_script = if settings.spell_check {
+                "window.__abwSetSpellCheck?.(true);"
+            } else {
+                "window.__abwSetSpellCheck?.(false);"
+            };
+            broadcast_to_wrike_webviews(&app, state.inner(), toggle_script);
+        }
+        if previous.custom_context_menu != settings.custom_context_menu {
+            let context_script = if settings.custom_context_menu {
+                "window.__abwCustomContextMenuEnabled = true;"
+            } else {
+                "window.__abwCustomContextMenuEnabled = false;"
+            };
+            broadcast_to_wrike_webviews(&app, state.inner(), context_script);
+        }
+        if settings.auto_match_wrike_theme && !previous.auto_match_wrike_theme {
+            broadcast_to_wrike_webviews(
+                &app,
+                state.inner(),
+                "window.__abwDetectWrikeTheme?.(true);",
+            );
+        }
+        app.emit("settings-updated", settings.clone())
+            .map_err(|error| format!("Unable to refresh settings: {error}"))?;
+        Ok(settings)
+    })
+    .await
+    .map_err(|error| format!("Unable to save settings: {error}"))?
+}
+
+#[tauri::command]
+async fn update_last_wrike_session(app: AppHandle, session: WrikeSession) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let normalized = normalize_wrike_session(session);
+        persistence::update::<WorkspaceState, _>(&workspace_state_path(&app)?, |workspace| {
+            workspace.last_wrike_session = Some(normalized.clone());
+            Ok(())
+        })?;
+        if let Some(state) = app.try_state::<AppState>() {
+            if let Ok(mut cached) = state.cached_settings.write() {
+                if let Some((settings, _)) = cached.as_mut() {
+                    settings.last_wrike_session = Some(normalized);
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|error| format!("Unable to save Wrike session: {error}"))?
+}
+
+#[tauri::command]
+async fn reset_app(app: AppHandle) -> Result<Settings, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let previous = get_cached_settings(&app).unwrap_or_default();
+        let defaults = Settings::default();
+        if startup::enabled()? != defaults.open_abw_at_system_startup {
+            let _ = startup::set_enabled(
+                defaults.open_abw_at_system_startup,
+                defaults.start_minimized_to_tray,
+            );
+        }
+        let prefs_only = defaults.preferences_only();
+        persistence::update::<Settings, _>(&settings_path(&app)?, |stored| {
+            *stored = prefs_only;
+            Ok(())
+        })?;
+        persistence::update::<WorkspaceState, _>(&workspace_state_path(&app)?, |workspace| {
+            *workspace = WorkspaceState::default();
+            Ok(())
+        })?;
+        store_cached_settings(&app, &defaults);
+        let state = app.state::<AppState>();
+        state
+            .open_external_links_in_browser
+            .store(defaults.open_external_links_in_browser, Ordering::Relaxed);
+        if !previous.custom_dictionary.is_empty() {
+            sync_windows_spelling_dictionary(
+                &previous.custom_dictionary,
+                &defaults.custom_dictionary,
+            );
+        }
+        let spell_script = if defaults.spell_check {
+            "window.__abwSetSpellCheck?.(true);"
+        } else {
+            "window.__abwSetSpellCheck?.(false);"
+        };
+        let context_script = if defaults.custom_context_menu {
+            "window.__abwCustomContextMenuEnabled = true;"
+        } else {
+            "window.__abwCustomContextMenuEnabled = false;"
+        };
+        broadcast_to_wrike_webviews(&app, state.inner(), spell_script);
+        broadcast_to_wrike_webviews(&app, state.inner(), context_script);
+        app.emit("settings-updated", defaults.clone())
+            .map_err(|error| format!("Unable to refresh settings: {error}"))?;
+        Ok(defaults)
+    })
+    .await
+    .map_err(|error| format!("Unable to reset ABW: {error}"))?
 }
 
 #[tauri::command]
@@ -903,21 +1100,36 @@ fn taskbar_overlay_badge_icon() -> tauri::image::Image<'static> {
 
 #[cfg(target_os = "windows")]
 fn sync_taskbar_badge(app: &AppHandle, state: &AppState) {
-    let active = state.wrike_inbox_unread.load(Ordering::Relaxed)
-        || state.update_available_badge.load(Ordering::Relaxed);
+    let unread = state.wrike_inbox_unread.load(Ordering::Relaxed);
+    let update = state.update_available_badge.load(Ordering::Relaxed);
+    let active = unread || update;
     let app_handle = app.clone();
     let _ = app.run_on_main_thread(move || {
+        let next_icon = app_handle.default_window_icon().map(|default_icon| {
+            if active {
+                badged_window_icon(default_icon)
+            } else {
+                default_icon.to_owned()
+            }
+        });
         if let Some(window) = app_handle.get_window("main") {
-            if let Some(default_icon) = app_handle.default_window_icon() {
-                let next_icon = if active {
-                    badged_window_icon(default_icon)
-                } else {
-                    default_icon.to_owned()
-                };
-                let _ = window.set_icon(next_icon);
+            if let Some(icon) = next_icon.clone() {
+                let _ = window.set_icon(icon);
             }
             let overlay = active.then(taskbar_overlay_badge_icon);
             let _ = window.set_overlay_icon(overlay);
+        }
+        if let Some(tray) = app_handle.tray_by_id(TRAY_ICON_ID) {
+            if let Some(icon) = next_icon {
+                let _ = tray.set_icon(Some(icon));
+            }
+            let tooltip = match (unread, update) {
+                (true, true) => "ABW - Unread inbox & update available",
+                (true, false) => "ABW - Unread Wrike inbox",
+                (false, true) => "ABW - Update available",
+                (false, false) => "ABW",
+            };
+            let _ = tray.set_tooltip(Some(tooltip));
         }
     });
 }
@@ -933,12 +1145,122 @@ fn set_update_badge(app: AppHandle, state: State<'_, AppState>, available: bool)
     sync_taskbar_badge(&app, state.inner());
 }
 
+#[cfg(windows)]
+fn suspend_native_webview(webview: &Webview) -> Result<(), String> {
+    use webview2_com::{
+        Microsoft::Web::WebView2::Win32::ICoreWebView2_3, TrySuspendCompletedHandler,
+    };
+    use windows_core::Interface;
+
+    let _ = webview.hide();
+    webview
+        .with_webview(|platform_webview| unsafe {
+            if let Ok(core) = platform_webview.controller().CoreWebView2() {
+                if let Ok(webview3) = core.cast::<ICoreWebView2_3>() {
+                    let handler = TrySuspendCompletedHandler::create(Box::new(
+                        |_res: windows_core::Result<()>, _is_successful: bool| Ok(()),
+                    ));
+                    let _ = webview3.TrySuspend(&handler);
+                }
+            }
+        })
+        .map_err(|error| format!("Unable to suspend Wrike tab: {error}"))
+}
+
+#[cfg(not(windows))]
+fn suspend_native_webview(webview: &Webview) -> Result<(), String> {
+    webview
+        .hide()
+        .map_err(|error| format!("Unable to hide Wrike tab: {error}"))
+}
+
+#[cfg(windows)]
+fn resume_native_webview(webview: &Webview) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_3;
+    use windows_core::Interface;
+
+    let _ = webview.with_webview(|platform_webview| unsafe {
+        if let Ok(core) = platform_webview.controller().CoreWebView2() {
+            if let Ok(webview3) = core.cast::<ICoreWebView2_3>() {
+                let _ = webview3.Resume();
+            }
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn resume_native_webview(_webview: &Webview) {}
+
+#[cfg(windows)]
+fn set_native_memory_target_level(webview: &Webview, low: bool) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+    };
+    use windows_core::Interface;
+
+    let level = if low {
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+    } else {
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
+    };
+    let _ = webview.with_webview(move |platform_webview| unsafe {
+        if let Ok(core) = platform_webview.controller().CoreWebView2() {
+            if let Ok(webview19) = core.cast::<ICoreWebView2_19>() {
+                let _ = webview19.SetMemoryUsageTargetLevel(level);
+            }
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn set_native_memory_target_level(_webview: &Webview, _low: bool) {}
+
+#[tauri::command]
+fn suspend_wrike_tab(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    tab_id: String,
+) -> Result<bool, String> {
+    let label = wrike_tab_label(&tab_id)?;
+    let Some(webview) = app.get_webview(&label) else {
+        return Ok(false);
+    };
+    if let Ok(mut suspended) = state.suspended_tabs.lock() {
+        suspended.insert(tab_id.clone());
+    }
+    if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
+        visible.remove(&tab_id);
+    }
+    suspend_native_webview(&webview)?;
+    Ok(true)
+}
+
+#[tauri::command]
+fn resume_wrike_tab(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    tab_id: String,
+) -> Result<bool, String> {
+    let label = wrike_tab_label(&tab_id)?;
+    let Some(webview) = app.get_webview(&label) else {
+        return Ok(false);
+    };
+    if let Ok(mut suspended) = state.suspended_tabs.lock() {
+        suspended.remove(&tab_id);
+    }
+    resume_native_webview(&webview);
+    set_native_memory_target_level(&webview, false);
+    Ok(true)
+}
+
 #[tauri::command]
 async fn launch_wrike(
     app: AppHandle,
     state: State<'_, AppState>,
     tab_id: String,
     url: Option<String>,
+    hidden: Option<bool>,
 ) -> Result<(), String> {
     open_wrike_at(
         &app,
@@ -946,6 +1268,7 @@ async fn launch_wrike(
         &tab_id,
         url.as_deref().unwrap_or(WRIKE_HOME),
         false,
+        hidden.unwrap_or(false),
     )
 }
 
@@ -955,13 +1278,25 @@ fn resize_wrike_tabs(
     state: State<'_, AppState>,
     layouts: Option<Vec<WrikeTabLayout>>,
     top_inset: Option<f64>,
+    split_ratio: Option<f64>,
 ) -> Result<(), String> {
     if let Some(inset) = top_inset {
         if let Ok(mut stored) = state.top_inset.lock() {
             *stored = inset.max(0.0);
         }
     }
+    if let Some(ratio) = split_ratio.filter(|value| value.is_finite()) {
+        if let Ok(mut stored) = state.wrike_split_ratio.lock() {
+            *stored = ratio.clamp(0.25, 0.75);
+        }
+    }
     if let Some(layouts) = layouts.filter(|layouts| !layouts.is_empty()) {
+        if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
+            visible.clear();
+            for layout in &layouts {
+                visible.insert(layout.tab_id.clone());
+            }
+        }
         for layout in layouts {
             if let Some(webview) = app.get_webview(&wrike_tab_label(&layout.tab_id)?) {
                 sync_wrike_bounds(&app, &webview, layout.pane)?;
@@ -984,13 +1319,30 @@ fn resize_wrike_tabs(
 }
 
 #[tauri::command]
-fn hide_wrike_tabs(app: AppHandle, tab_ids: Vec<String>) -> Result<(), String> {
+fn hide_wrike_tabs(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    tab_ids: Vec<String>,
+) -> Result<(), String> {
+    let suspended_snapshot = state
+        .suspended_tabs
+        .lock()
+        .map(|tabs| tabs.clone())
+        .unwrap_or_default();
+    if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
+        for tab_id in &tab_ids {
+            visible.remove(tab_id);
+        }
+    }
     for tab_id in tab_ids {
         let label = wrike_tab_label(&tab_id)?;
         if let Some(webview) = app.get_webview(&label) {
             webview
                 .hide()
                 .map_err(|error| format!("Unable to hide the Wrike workspace: {error}"))?;
+            if !suspended_snapshot.contains(&tab_id) {
+                set_native_memory_target_level(&webview, true);
+            }
         }
     }
     Ok(())
@@ -1006,13 +1358,25 @@ fn focus_wrike_tab(
     let webview = app
         .get_webview(&label)
         .ok_or_else(|| "This Wrike tab is not open yet.".to_owned())?;
+    if let Ok(mut suspended) = state.suspended_tabs.lock() {
+        suspended.remove(&tab_id);
+    }
+    if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
+        visible.insert(tab_id.clone());
+    }
+    resume_native_webview(&webview);
+    set_native_memory_target_level(&webview, false);
     webview
         .show()
         .map_err(|error| format!("Unable to display the Wrike workspace: {error}"))?;
     webview.set_focus().map_err(|error| error.to_string())?;
     if let Some(context) = find_wrike_context(state.inner(), &tab_id) {
         if let Some(theme) = context.detected_theme.lock().ok().and_then(|t| t.clone()) {
-            let _ = sync_detected_wrike_theme(&app, state.inner(), &theme);
+            let app_clone = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let state = app_clone.state::<AppState>();
+                let _ = sync_detected_wrike_theme(&app_clone, state.inner(), &theme);
+            });
         }
         emit_wrike_tab_update(&app, &context);
     }
@@ -1040,7 +1404,14 @@ async fn open_source_task(
         .filter(|id| !id.is_empty())
         .unwrap_or("home");
     wrike_tab_label(target_tab_id)?;
-    open_wrike_at(&app, state.inner(), target_tab_id, parsed.as_str(), true)
+    open_wrike_at(
+        &app,
+        state.inner(),
+        target_tab_id,
+        parsed.as_str(),
+        true,
+        false,
+    )
 }
 
 #[tauri::command]
@@ -1050,15 +1421,23 @@ fn close_wrike_tab(
     tab_id: String,
 ) -> Result<(), String> {
     let label = wrike_tab_label(&tab_id)?;
-    if let Some(webview) = app.get_webview(&label) {
+    let close_result = if let Some(webview) = app.get_webview(&label) {
         webview
             .close()
-            .map_err(|error| format!("Unable to close the Wrike tab: {error}"))?;
-    }
+            .map_err(|error| format!("Unable to close the Wrike tab: {error}"))
+    } else {
+        Ok(())
+    };
     if let Ok(mut tabs) = state.wrike_tabs.lock() {
         tabs.remove(&tab_id);
     }
-    Ok(())
+    if let Ok(mut suspended) = state.suspended_tabs.lock() {
+        suspended.remove(&tab_id);
+    }
+    if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
+        visible.remove(&tab_id);
+    }
+    close_result
 }
 
 #[tauri::command]
@@ -1115,11 +1494,18 @@ fn open_wrike_at(
     tab_id: &str,
     destination: &str,
     navigate_existing: bool,
+    start_hidden: bool,
 ) -> Result<(), String> {
     let label = wrike_tab_label(tab_id)?;
     let parsed = Url::parse(destination).map_err(|error| format!("Invalid Wrike URL: {error}"))?;
+    if !is_safe_remote_destination(&parsed) {
+        return Err("Only HTTPS or about:blank URLs may be opened inside ABW.".into());
+    }
     if let Some(webview) = app.get_webview(&label) {
-        sync_wrike_bounds(app, &webview, WrikePane::Full)?;
+        if let Ok(mut suspended) = state.suspended_tabs.lock() {
+            suspended.remove(tab_id);
+        }
+        resume_native_webview(&webview);
         if navigate_existing {
             webview
                 .navigate(parsed)
@@ -1129,13 +1515,23 @@ fn open_wrike_at(
                 emit_wrike_tab_update(app, &context);
             }
         }
-        webview
-            .show()
-            .map_err(|error| format!("Unable to display the Wrike workspace: {error}"))?;
-        webview.set_focus().map_err(|error| error.to_string())?;
+        if !start_hidden {
+            set_native_memory_target_level(&webview, false);
+            if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
+                visible.insert(tab_id.to_owned());
+            }
+            webview
+                .show()
+                .map_err(|error| format!("Unable to display the Wrike workspace: {error}"))?;
+            webview.set_focus().map_err(|error| error.to_string())?;
+        }
         if let Some(context) = find_wrike_context(state, tab_id) {
             if let Some(theme) = context.detected_theme.lock().ok().and_then(|t| t.clone()) {
-                let _ = sync_detected_wrike_theme(app, state, &theme);
+                let app_clone = app.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let state = app_clone.state::<AppState>();
+                    let _ = sync_detected_wrike_theme(&app_clone, state.inner(), &theme);
+                });
             }
             emit_wrike_tab_update(app, &context);
         }
@@ -1147,8 +1543,7 @@ fn open_wrike_at(
         .get_window("main")
         .ok_or_else(|| "Unable to locate the ABW application window.".to_owned())?;
     let (content_position, content_size) = wrike_content_geometry(app, WrikePane::Full)?;
-    let (spell_check, custom_context_menu) = settings_path(app)
-        .and_then(|path| persistence::read::<Settings>(&path))
+    let (spell_check, custom_context_menu) = get_cached_settings(app)
         .map(|stored| (stored.spell_check, stored.custom_context_menu))
         .unwrap_or((true, true));
     let context = Arc::new(CaptureContext::new(tab_id, destination));
@@ -1157,6 +1552,7 @@ fn open_wrike_at(
     let navigation_context = Arc::clone(&context);
     let navigation_app = app.clone();
     let po_webview_label = label.clone();
+    let po_tab_id = tab_id.to_owned();
     let load_context = Arc::clone(&context);
     let load_app = app.clone();
     let popup_context = Arc::clone(&context);
@@ -1170,7 +1566,6 @@ fn open_wrike_at(
     }
 
     let builder = WebviewBuilder::new(label, WebviewUrl::External(parsed))
-        .auto_resize()
         .zoom_hotkeys_enabled(true)
         .initialization_script(if custom_context_menu {
             "window.__abwCustomContextMenuEnabled = true;"
@@ -1186,26 +1581,40 @@ fn open_wrike_at(
                     .ok()
                     .and_then(|page| page.as_ref().and_then(|value| Url::parse(value).ok()))
                     .is_some_and(|source| is_wrike_workspace_destination(&source));
-                if let Some(params) = url.fragment().and_then(|value| value.strip_prefix("abw-check-po?")) {
+                if let Some(params) = url
+                    .fragment()
+                    .and_then(|value| value.strip_prefix("abw-check-po?"))
+                {
                     let mut booking = serde_json::Map::new();
                     let mut automatic_id = None;
                     for (key, value) in url::form_urlencoded::parse(params.as_bytes()) {
                         if key == "automatic" {
                             automatic_id = Uuid::parse_str(&value).ok();
-                        } else if matches!(key.as_ref(), "media" | "client" | "product" | "po" | "start" | "end" | "total" | "plan") && value.len() <= 100 {
-                            booking.insert(key.into_owned(), serde_json::Value::String(value.into_owned()));
+                        } else if matches!(
+                            key.as_ref(),
+                            "media" | "client" | "product" | "po" | "start" | "end" | "total" | "plan"
+                        ) && value.len() <= 100
+                        {
+                            booking.insert(
+                                key.into_owned(),
+                                serde_json::Value::String(value.into_owned()),
+                            );
                         }
                     }
                     if let Some(id) = automatic_id {
                         if from_wrike && url.as_str().len() < 8192 {
                             let app = navigation_app.clone();
                             let label = po_webview_label.clone();
+                            let tab_id = po_tab_id.clone();
                             tauri::async_runtime::spawn_blocking(move || {
-                                let status = po_bridge::run_job(booking.into());
-                                if let Some(webview) = app.get_webview(&label) {
-                                    let _ = webview.eval(format!(
-                                        "window.__abwReceivePoStatus?.('{id}', '{status}');"
-                                    ));
+                                if let Some(status) =
+                                    po_bridge::run_job_for_tab(&tab_id, booking.into())
+                                {
+                                    if let Some(webview) = app.get_webview(&label) {
+                                        let _ = webview.eval(format!(
+                                            "window.__abwReceivePoStatus?.('{id}', '{status}');"
+                                        ));
+                                    }
                                 }
                             });
                         }
@@ -1213,7 +1622,9 @@ fn open_wrike_at(
                     }
                 }
                 let message = if !from_wrike || url.as_str().len() >= 8192 {
-                    Some("Unable to read the task for Check PO. Reopen the Wrike task and try again.")
+                    Some(
+                        "Unable to read the task for Check PO. Reopen the Wrike task and try again.",
+                    )
                 } else if open_po_in_chrome(url).is_err() {
                     Some("Unable to open Chrome for the PO check.")
                 } else {
@@ -1225,7 +1636,11 @@ fn open_wrike_at(
                 return false;
             }
             if url.scheme() == "abw-dictionary" {
-                let _ = add_custom_dictionary_word(&navigation_app, url);
+                let app_clone = navigation_app.clone();
+                let url_clone = url.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let _ = add_custom_dictionary_word(&app_clone, &url_clone);
+                });
                 return false;
             }
             if url.scheme() == "abw-shortcut" {
@@ -1233,7 +1648,12 @@ fn open_wrike_at(
                 return false;
             }
             if url.scheme() == "abw-theme" {
-                let _ = apply_detected_wrike_theme(&navigation_app, &navigation_context, url);
+                let app_clone = navigation_app.clone();
+                let context_clone = Arc::clone(&navigation_context);
+                let url_clone = url.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let _ = apply_detected_wrike_theme(&app_clone, &context_clone, &url_clone);
+                });
                 return false;
             }
             if url.scheme() == "abw-task" {
@@ -1263,6 +1683,11 @@ fn open_wrike_at(
                 if let Some(target_url) = url
                     .query_pairs()
                     .find_map(|(key, value)| (key == "url").then(|| value.into_owned()))
+                    .filter(|raw| {
+                        Url::parse(raw)
+                            .ok()
+                            .is_some_and(|parsed| is_safe_remote_destination(&parsed))
+                    })
                 {
                     let _ = navigation_app.emit("wrike-open-in-new-tab", target_url);
                 }
@@ -1272,6 +1697,11 @@ fn open_wrike_at(
                 if let Some(target_url) = url
                     .query_pairs()
                     .find_map(|(key, value)| (key == "url").then(|| value.into_owned()))
+                    .filter(|raw| {
+                        Url::parse(raw)
+                            .ok()
+                            .is_some_and(|parsed| is_safe_remote_destination(&parsed))
+                    })
                 {
                     let _ = navigation_app.emit("wrike-share-url", target_url);
                 }
@@ -1302,11 +1732,15 @@ fn open_wrike_at(
                 return NewWindowResponse::Deny;
             }
             let parent_provenance = captured_provenance(&popup_context);
-            let child_title_context = Arc::clone(&popup_context);
-            let child_download_context = Arc::clone(&popup_context);
+            let child_context = Arc::new(CaptureContext::new("popup", url.as_str()));
+            let child_title_context = Arc::clone(&child_context);
+            let child_download_context = Arc::clone(&child_context);
             let label = format!("wrike-popup-{}", Uuid::new_v4());
             let completion_app = popup_app.clone();
             let completion_workspace_label = popup_workspace_label.clone();
+            let (popup_spell_check, popup_custom_menu) = get_cached_settings(&popup_app)
+                .map(|stored| (stored.spell_check, stored.custom_context_menu))
+                .unwrap_or((true, true));
             let child_builder = WebviewWindowBuilder::new(
                 &popup_app,
                 label,
@@ -1318,7 +1752,12 @@ fn open_wrike_at(
             .window_features(features)
             .skip_taskbar(true)
             .zoom_hotkeys_enabled(true)
-            .initialization_script(apply_spell_check_script(spell_check, true))
+            .initialization_script(if popup_custom_menu {
+                "window.__abwCustomContextMenuEnabled = true;"
+            } else {
+                "window.__abwCustomContextMenuEnabled = false;"
+            })
+            .initialization_script(apply_spell_check_script(popup_spell_check, true))
             .on_navigation(is_safe_remote_destination)
             .on_page_load(move |window, payload| {
                 if matches!(payload.event(), PageLoadEvent::Finished)
@@ -1394,8 +1833,20 @@ fn open_wrike_at(
             None,
             false,
         ));
-    host.add_child(builder, content_position, content_size)
-        .map_err(|error| format!("Unable to open Wrike workspace: {error}"))?;
+    let webview = match host.add_child(builder, content_position, content_size) {
+        Ok(webview) => webview,
+        Err(error) => {
+            if let Ok(mut tabs) = state.wrike_tabs.lock() {
+                tabs.remove(tab_id);
+            }
+            return Err(format!("Unable to open Wrike workspace: {error}"));
+        }
+    };
+    if start_hidden {
+        let _ = webview.hide();
+    } else if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
+        visible.insert(tab_id.to_owned());
+    }
     emit_wrike_tab_update(app, &context);
     Ok(())
 }
@@ -1417,13 +1868,24 @@ fn wrike_content_geometry(
         .and_then(|state| state.top_inset.lock().ok().map(|value| *value))
         .unwrap_or(0.0)
         .max(0.0);
+    let split_ratio = app
+        .try_state::<AppState>()
+        .and_then(|state| state.wrike_split_ratio.lock().ok().map(|value| *value))
+        .filter(|value| value.is_finite())
+        .unwrap_or(0.5)
+        .clamp(0.25, 0.75);
     let top_offset = TASKBAR_HEIGHT + top_inset;
     let content_height = (host_size.height - top_offset).max(1.0);
-    let half_width = (host_size.width / 2.0).max(1.0);
+    let usable_width = (host_size.width - WRIKE_SPLIT_GAP).max(2.0);
+    let left_width = (usable_width * split_ratio)
+        .round()
+        .clamp(1.0, (usable_width - 1.0).max(1.0));
+    let right_x = left_width + WRIKE_SPLIT_GAP;
+    let right_width = (host_size.width - right_x).max(1.0);
     let (x, width) = match pane {
         WrikePane::Full => (0.0, host_size.width),
-        WrikePane::Left => (0.0, half_width),
-        WrikePane::Right => (half_width, (host_size.width - half_width).max(1.0)),
+        WrikePane::Left => (0.0, left_width),
+        WrikePane::Right => (right_x, right_width),
     };
     Ok((
         LogicalPosition::new(x, top_offset),
@@ -1491,9 +1953,14 @@ fn download_handler(
                             .ok()
                             .and_then(|mut entries| entries.remove(&path))
                             .unwrap_or_else(|| captured_provenance(&context));
-                        if let Err(error) = record_completed_download(&app, &path, provenance) {
-                            emit_download_capture_error(&app, error);
-                        }
+                        let app_clone = app.clone();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            if let Err(error) =
+                                record_completed_download(&app_clone, &path, provenance)
+                            {
+                                emit_download_capture_error(&app_clone, error);
+                            }
+                        });
                     } else {
                         emit_download_capture_error(
                             &app,
@@ -1563,7 +2030,7 @@ fn record_completed_download(
         file_name,
         kind: file_kind(&extension).into(),
         extension,
-        downloaded_at: Utc::now().to_rfc3339(),
+        downloaded_at: persistence::now_rfc3339(),
         size_bytes,
         source_url: provenance.source_url,
         source_label: provenance.source_label,
@@ -1572,7 +2039,7 @@ fn record_completed_download(
         records.insert(0, record.clone());
         Ok(())
     })?;
-    let settings = read_settings(app)?;
+    let settings = get_cached_settings(app)?;
     if settings.download_notifications {
         let _ = app
             .notification()
@@ -1597,10 +2064,141 @@ fn read_records(app: &AppHandle) -> Result<Vec<DownloadRecord>, String> {
 fn read_settings(app: &AppHandle) -> Result<Settings, String> {
     let mut settings: Settings = persistence::read(&settings_path(app)?)?;
     settings.open_abw_at_system_startup = startup::enabled()?;
+
+    let ws_path = workspace_state_path(app)?;
+    let workspace = if ws_path.exists() {
+        persistence::read::<WorkspaceState>(&ws_path)?
+    } else {
+        let has_legacy = !settings.pinned_download_ids.is_empty()
+            || !settings.favorite_tickets.is_empty()
+            || !settings.visit_history.is_empty()
+            || settings.last_wrike_session.is_some();
+        if has_legacy {
+            let migrated = WorkspaceState {
+                pinned_download_ids: settings.pinned_download_ids.clone(),
+                favorite_tickets: settings.favorite_tickets.clone(),
+                visit_history: settings.visit_history.clone(),
+                last_wrike_session: settings.last_wrike_session.clone(),
+                window_bounds: None,
+            };
+            let _ = persistence::update::<WorkspaceState, _>(&ws_path, |stored| {
+                *stored = migrated.clone();
+                Ok(())
+            });
+            migrated
+        } else {
+            WorkspaceState::default()
+        }
+    };
+    settings.merge_workspace_state(&workspace);
     Ok(settings)
 }
 
+fn current_settings_file_stamp(app: &AppHandle) -> Option<SettingsFileStamp> {
+    let path = settings_path(app).ok()?;
+    let metadata = fs::metadata(path).ok()?;
+    Some(SettingsFileStamp {
+        modified: metadata.modified().ok(),
+        len: metadata.len(),
+    })
+}
+
+fn store_cached_settings(app: &AppHandle, settings: &Settings) {
+    let stamp = current_settings_file_stamp(app);
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut cached) = state.cached_settings.write() {
+            *cached = Some((settings.clone(), stamp));
+        }
+    }
+}
+
+fn refresh_cached_settings(app: &AppHandle) -> Result<Settings, String> {
+    let settings = read_settings(app)?;
+    store_cached_settings(app, &settings);
+    Ok(settings)
+}
+
+fn get_cached_settings(app: &AppHandle) -> Result<Settings, String> {
+    let current_stamp = current_settings_file_stamp(app);
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(cached) = state.cached_settings.read() {
+            if let Some((settings, cached_stamp)) = cached.as_ref() {
+                if *cached_stamp == current_stamp {
+                    return Ok(settings.clone());
+                }
+            }
+        }
+    }
+    refresh_cached_settings(app)
+}
+
+fn save_main_window_bounds(app: &AppHandle) {
+    let Some(window) = app.get_window("main") else {
+        return;
+    };
+    let maximized = window.is_maximized().unwrap_or(false);
+    let minimized = window.is_minimized().unwrap_or(false);
+    if minimized {
+        return;
+    }
+    let Ok(position) = window.outer_position() else {
+        return;
+    };
+    let Ok(size) = window.outer_size() else {
+        return;
+    };
+    if size.width < 600 || size.height < 400 {
+        return;
+    }
+    let bounds = WindowBounds {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+        maximized,
+    };
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Ok(path) = workspace_state_path(&app_clone) {
+            let _ = persistence::update::<WorkspaceState, _>(&path, |workspace| {
+                if maximized {
+                    if let Some(existing) = workspace.window_bounds.as_mut() {
+                        existing.maximized = true;
+                    } else {
+                        workspace.window_bounds = Some(bounds.clone());
+                    }
+                } else {
+                    workspace.window_bounds = Some(bounds.clone());
+                }
+                Ok(())
+            });
+        }
+    });
+}
+
 fn show_main_window(app: &AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        let suspended = state
+            .suspended_tabs
+            .lock()
+            .map(|tabs| tabs.clone())
+            .unwrap_or_default();
+        let visible = state
+            .visible_wrike_tabs
+            .lock()
+            .map(|tabs| tabs.clone())
+            .unwrap_or_default();
+        for tab_id in visible {
+            if suspended.contains(&tab_id) {
+                continue;
+            }
+            if let Ok(label) = wrike_tab_label(&tab_id) {
+                if let Some(webview) = app.get_webview(&label) {
+                    set_native_memory_target_level(&webview, false);
+                }
+            }
+        }
+    }
     if let Some(window) = app.get_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -1609,8 +2207,9 @@ fn show_main_window(app: &AppHandle) {
 }
 
 fn request_quit(app: &AppHandle, explicit: bool) {
+    save_main_window_bounds(app);
     // Corrupt preferences must not make the application impossible to quit.
-    let settings = read_settings(app).unwrap_or_default();
+    let settings = get_cached_settings(app).unwrap_or_default();
     let state = app.state::<AppState>();
     let tab_count = state.wrike_tabs.lock().map(|tabs| tabs.len()).unwrap_or(2);
     let action = close_policy::action(
@@ -1629,6 +2228,26 @@ fn request_quit(app: &AppHandle, explicit: bool) {
     if action == close_policy::CloseAction::Hide {
         if let Some(window) = app.get_window("main") {
             let _ = window.hide();
+        }
+        let suspended = state
+            .suspended_tabs
+            .lock()
+            .map(|tabs| tabs.clone())
+            .unwrap_or_default();
+        let tab_ids = state
+            .wrike_tabs
+            .lock()
+            .map(|tabs| tabs.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for tab_id in tab_ids {
+            if suspended.contains(&tab_id) {
+                continue;
+            }
+            if let Ok(label) = wrike_tab_label(&tab_id) {
+                if let Some(webview) = app.get_webview(&label) {
+                    set_native_memory_target_level(&webview, true);
+                }
+            }
         }
         return;
     }
@@ -1662,7 +2281,6 @@ fn trace_native_event(app: &AppHandle, event: &str) {
     if env::var("ABW_CI_TRACE").as_deref() != Ok("1") {
         return;
     }
-    use std::io::Write;
     if let Ok(directory) = application_dir(app) {
         let _ = fs::create_dir_all(&directory);
         if let Ok(mut file) = fs::OpenOptions::new()
@@ -1695,6 +2313,10 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(application_dir(app)?.join("settings.json"))
 }
 
+fn workspace_state_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(application_dir(app)?.join("workspace-state.json"))
+}
+
 fn downloads_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let directory = application_dir(app)?.join("downloads");
     fs::create_dir_all(&directory)
@@ -1702,14 +2324,77 @@ fn downloads_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(directory)
 }
 
-fn unique_download_path(app: &AppHandle, suggested_name: &str) -> Result<PathBuf, String> {
-    let directory = downloads_dir(app)?;
-    let sanitized = Path::new(suggested_name)
+fn sanitize_download_filename(suggested_name: &str) -> String {
+    let raw = Path::new(suggested_name)
         .file_name()
         .and_then(|name| name.to_str())
-        .filter(|name| !name.trim().is_empty())
         .unwrap_or("wrike-download");
-    let original = Path::new(sanitized);
+    let cleaned: String = raw
+        .chars()
+        .map(|ch| {
+            if matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || ch.is_control()
+            {
+                '_'
+            } else {
+                ch
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim().trim_end_matches(['.', ' ']);
+    if trimmed.is_empty() {
+        return "wrike-download".to_owned();
+    }
+    let path = Path::new(trimmed);
+    let mut stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("wrike-download")
+        .to_owned();
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .filter(|ext| ext.len() <= 16);
+    let upper_stem = stem.to_ascii_uppercase();
+    if matches!(
+        upper_stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    ) {
+        stem.insert(0, '_');
+    }
+    if stem.chars().count() > 140 {
+        stem = stem.chars().take(140).collect();
+    }
+    match extension {
+        Some(ext) => format!("{stem}.{ext}"),
+        None => stem,
+    }
+}
+
+fn unique_download_path(app: &AppHandle, suggested_name: &str) -> Result<PathBuf, String> {
+    let directory = downloads_dir(app)?;
+    let sanitized = sanitize_download_filename(suggested_name);
+    let original = Path::new(&sanitized);
     let stem = original
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -1717,7 +2402,7 @@ fn unique_download_path(app: &AppHandle, suggested_name: &str) -> Result<PathBuf
     let extension = original
         .extension()
         .and_then(|extension| extension.to_str());
-    let mut candidate = directory.join(sanitized);
+    let mut candidate = directory.join(&sanitized);
     let mut suffix = 1;
     while candidate.exists() {
         let name = extension.map_or_else(
@@ -1955,16 +2640,16 @@ fn add_custom_dictionary_word(app: &AppHandle, url: &Url) -> Result<(), String> 
         .query_pairs()
         .find_map(|(key, value)| (key == "word").then(|| value.into_owned()))
         .and_then(|word| normalize_dictionary_word(&word))
+        .filter(|word| word.chars().count() <= 64)
         .ok_or_else(|| "No dictionary word was provided.".to_owned())?;
-    let (settings, previous) =
-        persistence::update::<Settings, _>(&settings_path(app)?, |settings| {
-            let previous = settings.custom_dictionary.clone();
-            settings.custom_dictionary.push(word);
-            settings.custom_dictionary =
-                normalize_dictionary(std::mem::take(&mut settings.custom_dictionary));
-            settings.open_abw_at_system_startup = startup::enabled()?;
-            Ok(previous)
-        })?;
+    let (_, previous) = persistence::update::<Settings, _>(&settings_path(app)?, |settings| {
+        let previous = settings.custom_dictionary.clone();
+        settings.custom_dictionary.push(word);
+        settings.custom_dictionary =
+            normalize_dictionary(std::mem::take(&mut settings.custom_dictionary));
+        Ok(previous)
+    })?;
+    let settings = refresh_cached_settings(app)?;
     sync_windows_spelling_dictionary(&previous, &settings.custom_dictionary);
     app.emit("settings-updated", settings)
         .map_err(|error| format!("Unable to refresh settings: {error}"))
@@ -2007,20 +2692,19 @@ fn sync_detected_wrike_theme(app: &AppHandle, state: &AppState, theme: &str) -> 
     if let Ok(mut latest) = state.detected_wrike_theme.lock() {
         *latest = Some(normalized.to_owned());
     }
-    let current = read_settings(app)?;
+    let current = get_cached_settings(app)?;
     if !current.auto_match_wrike_theme || current.theme == normalized {
         return Ok(());
     }
-    let (settings, changed) =
-        persistence::update::<Settings, _>(&settings_path(app)?, |settings| {
-            if !settings.auto_match_wrike_theme || settings.theme == normalized {
-                return Ok(false);
-            }
-            settings.theme = normalized.to_owned();
-            settings.open_abw_at_system_startup = startup::enabled()?;
-            Ok(true)
-        })?;
+    let (_, changed) = persistence::update::<Settings, _>(&settings_path(app)?, |settings| {
+        if !settings.auto_match_wrike_theme || settings.theme == normalized {
+            return Ok(false);
+        }
+        settings.theme = normalized.to_owned();
+        Ok(true)
+    })?;
     if changed {
+        let settings = refresh_cached_settings(app)?;
         app.emit("settings-updated", settings)
             .map_err(|error| format!("Unable to refresh settings: {error}"))?;
     }
@@ -2042,6 +2726,39 @@ fn apply_detected_wrike_theme(
     }
     let state = app.state::<AppState>();
     sync_detected_wrike_theme(app, state.inner(), theme)
+}
+
+fn decode_windows_dictionary_bytes(bytes: &[u8]) -> String {
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        let units: Vec<u16> = bytes[2..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&chunk| u16::from_le_bytes(chunk))
+            .collect();
+        return String::from_utf16_lossy(&units);
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        let units: Vec<u16> = bytes[2..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&chunk| u16::from_be_bytes(chunk))
+            .collect();
+        return String::from_utf16_lossy(&units);
+    }
+    let stripped = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    String::from_utf8_lossy(stripped).into_owned()
+}
+
+fn encode_windows_dictionary_utf16le(entries: &[String]) -> Vec<u8> {
+    let text = entries.join("\r\n");
+    let mut bytes = Vec::with_capacity(2 + text.len() * 2);
+    bytes.extend_from_slice(&[0xFF, 0xFE]);
+    for unit in text.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    bytes
 }
 
 #[cfg(target_os = "windows")]
@@ -2069,10 +2786,12 @@ fn sync_windows_spelling_dictionary(old_words: &[String], new_words: &[String]) 
         dictionaries.push(spelling_root.join("en-US").join("default.dic"));
     }
     for dictionary in dictionaries {
-        let mut entries = fs::read_to_string(&dictionary)
-            .unwrap_or_default()
+        let existing_text = fs::read(&dictionary)
+            .map(|bytes| decode_windows_dictionary_bytes(&bytes))
+            .unwrap_or_default();
+        let mut entries = existing_text
             .lines()
-            .map(str::trim)
+            .map(|line| line.trim().trim_start_matches('\u{feff}'))
             .filter(|line| !line.is_empty())
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>();
@@ -2087,9 +2806,16 @@ fn sync_windows_spelling_dictionary(old_words: &[String], new_words: &[String]) 
         entries.extend(new_words.iter().cloned());
         entries = normalize_dictionary(entries);
         if let Some(parent) = dictionary.parent() {
-            let _ = fs::create_dir_all(parent);
+            if fs::create_dir_all(parent).is_err() {
+                continue;
+            }
+            let encoded = encode_windows_dictionary_utf16le(&entries);
+            if let Ok(mut temp) = tempfile::NamedTempFile::new_in(parent) {
+                if temp.write_all(&encoded).is_ok() {
+                    let _ = temp.persist(&dictionary);
+                }
+            }
         }
-        let _ = fs::write(dictionary, entries.join("\r\n"));
     }
 }
 
@@ -2299,7 +3025,7 @@ pub fn run() {
             let show_item = MenuItem::with_id(app, "show", "Show ABW", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit ABW", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
-            let mut tray = TrayIconBuilder::new()
+            let mut tray = TrayIconBuilder::with_id(TRAY_ICON_ID)
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .tooltip("ABW")
@@ -2322,6 +3048,31 @@ pub fn run() {
                 tray = tray.icon(icon.clone());
             }
             tray.build(app)?;
+
+            if let Some(window) = app.get_window("main") {
+                if let Ok(path) = workspace_state_path(app.handle()) {
+                    if let Ok(workspace) = persistence::read::<WorkspaceState>(&path) {
+                        if let Some(bounds) = workspace.window_bounds {
+                            if bounds.width >= 1100 && bounds.height >= 620 {
+                                let _ =
+                                    window.set_size(PhysicalSize::new(bounds.width, bounds.height));
+                                let _ =
+                                    window.set_position(PhysicalPosition::new(bounds.x, bounds.y));
+                            }
+                            if bounds.maximized {
+                                let _ = window.maximize();
+                            }
+                        }
+                    }
+                }
+                let start_minimized = env::args().any(|arg| arg == "--minimized")
+                    && get_cached_settings(app.handle())
+                        .map(|settings| settings.close_to_notification_area)
+                        .unwrap_or(true);
+                if start_minimized {
+                    let _ = window.hide();
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2337,19 +3088,22 @@ pub fn run() {
             updater::install_update,
             launch_wrike,
             list_downloads,
+            load_spreadsheet_images,
             notify_update_available,
             open_download,
+            open_downloads_folder,
             open_source_task,
             preview_spreadsheet,
-            read_download,
             read_download_head,
             read_download_range,
             reset_app,
             resize_wrike_tabs,
+            resume_wrike_tab,
             reveal_download,
             send_test_notification,
             set_update_badge,
             storage_health,
+            suspend_wrike_tab,
             update_last_wrike_session,
             update_settings,
             wrike_tab_action
@@ -2419,6 +3173,35 @@ mod tests {
                 "https://www.wrike.com/workspace.htm#c",
             ]
         );
+
+        // Revisiting an older URL directly pushes a new entry instead of rewinding to index 0.
+        history.record("https://www.wrike.com/workspace.htm");
+        assert!(history.can_go_back());
+        assert!(!history.can_go_forward());
+        assert_eq!(history.entries.len(), 4);
+    }
+
+    #[test]
+    fn windows_dictionary_utf16le_round_trips_and_reads_utf8() {
+        let words = vec!["café".to_owned(), "Wrike".to_owned()];
+        let encoded = encode_windows_dictionary_utf16le(&words);
+        assert!(encoded.starts_with(&[0xFF, 0xFE]));
+        let decoded = decode_windows_dictionary_bytes(&encoded);
+        assert_eq!(decoded, "café\r\nWrike");
+        assert_eq!(
+            decode_windows_dictionary_bytes(b"\xEF\xBB\xBFhello\nworld"),
+            "hello\nworld"
+        );
+    }
+
+    #[test]
+    fn sanitize_download_filename_handles_windows_reserved_chars_and_names() {
+        assert_eq!(
+            sanitize_download_filename("Q3: Budget <Final>?.xlsx"),
+            "Q3_ Budget _Final__.xlsx"
+        );
+        assert_eq!(sanitize_download_filename("CON.txt"), "_CON.txt");
+        assert_eq!(sanitize_download_filename("   "), "wrike-download");
     }
 
     #[test]

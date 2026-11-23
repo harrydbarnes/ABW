@@ -17,13 +17,17 @@ pub const MAX_SPREADSHEET_PREVIEW_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SPREADSHEET_EXPANDED_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_SPREADSHEET_ARCHIVE_ENTRIES: u16 = 2_048;
 const MAX_SPREADSHEET_COMPRESSION_RATIO: u64 = 100;
+const MIN_SPREADSHEET_RATIO_CHECK_BYTES: u64 = 256 * 1024;
 const MAX_SPREADSHEET_SHEETS: usize = 128;
-const MAX_SPREADSHEET_ROWS: usize = 250;
+const MAX_SPREADSHEET_ROWS: usize = 500;
 const MAX_SPREADSHEET_COLUMNS: usize = 50;
 const MAX_SPREADSHEET_ROW_SCAN: usize = 10_000;
 const MAX_SPREADSHEET_COLUMN_SCAN: usize = 2_000;
 const MAX_XML_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SHARED_STRINGS: usize = 200_000;
+const MAX_SHEET_IMAGES: usize = 24;
+const MAX_SINGLE_IMAGE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_TOTAL_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -36,6 +40,16 @@ pub struct WorkbookPreview {
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct WorkbookImage {
+    pub data_url: String,
+    pub left_px: f64,
+    pub top_px: f64,
+    pub width_px: f64,
+    pub height_px: f64,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkbookSheet {
     pub name: String,
     pub columns: Vec<WorkbookColumn>,
@@ -44,6 +58,8 @@ pub struct WorkbookSheet {
     pub truncated_rows: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub truncated_columns: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub has_images: bool,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -65,6 +81,7 @@ pub struct WorkbookRow {
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkbookCell {
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub value: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub style_index: Option<usize>,
@@ -137,15 +154,18 @@ pub fn preview_file(path: &Path) -> Result<WorkbookPreview, String> {
         extension.as_str(),
         "xlsx" | "xlsm" | "xltx" | "xltm" | "xlsb" | "ods"
     ) {
-        validate_spreadsheet_archive(path)?;
-    }
-
-    if matches!(extension.as_str(), "xlsx" | "xlsm" | "xltx" | "xltm") {
-        match load_styled_ooxml(path) {
-            Ok(preview) => return Ok(preview),
-            Err(PreviewParseOutcome::Safety(message)) => return Err(message),
-            Err(PreviewParseOutcome::Fallback) => {
-                // Fall back to calamine for unusual or partially damaged OOXML workbooks.
+        let mut file =
+            File::open(path).map_err(|error| format!("Unable to open spreadsheet: {error}"))?;
+        validate_spreadsheet_archive_file(&mut file)?;
+        if matches!(extension.as_str(), "xlsx" | "xlsm" | "xltx" | "xltm") {
+            file.seek(SeekFrom::Start(0))
+                .map_err(|error| format!("Unable to read spreadsheet: {error}"))?;
+            match load_styled_ooxml(file) {
+                Ok(preview) => return Ok(preview),
+                Err(PreviewParseOutcome::Safety(message)) => return Err(message),
+                Err(PreviewParseOutcome::Fallback) => {
+                    // Fall back to calamine for unusual or partially damaged OOXML workbooks.
+                }
             }
         }
     }
@@ -153,19 +173,101 @@ pub fn preview_file(path: &Path) -> Result<WorkbookPreview, String> {
     load_calamine_fallback(path)
 }
 
+fn load_calamine_fallback(path: &Path) -> Result<WorkbookPreview, String> {
+    let mut workbook =
+        open_workbook_auto(path).map_err(|error| format!("Unable to open spreadsheet: {error}"))?;
+    let sheet_names = workbook.sheet_names().to_owned();
+    if sheet_names.len() > MAX_SPREADSHEET_SHEETS {
+        return Err(format!(
+            "This spreadsheet has {} sheets. In-app preview supports up to {MAX_SPREADSHEET_SHEETS}; open it in Windows instead.",
+            sheet_names.len()
+        ));
+    }
+    let sheets = sheet_names
+        .into_iter()
+        .map(|name| {
+            let mut truncated_rows = false;
+            let mut truncated_columns = false;
+            let mut rows = Vec::new();
+            let mut width = 0usize;
+            if let Ok(range) = workbook.worksheet_range(&name) {
+                rows.reserve(MAX_SPREADSHEET_ROWS.min(range.height()));
+                for (row_idx, row) in range.rows().enumerate() {
+                    if row_idx >= MAX_SPREADSHEET_ROWS {
+                        truncated_rows = true;
+                        break;
+                    }
+                    if row.len() > MAX_SPREADSHEET_COLUMNS {
+                        truncated_columns = true;
+                    }
+                    let row_width = row.len().min(MAX_SPREADSHEET_COLUMNS);
+                    width = width.max(row_width);
+                    let cells = row[..row_width]
+                        .iter()
+                        .map(|cell| WorkbookCell {
+                            value: cell.to_string(),
+                            style_index: None,
+                            col_span: None,
+                            row_span: None,
+                            covered_by_merge: false,
+                        })
+                        .collect();
+                    rows.push(WorkbookRow {
+                        index: row_idx + 1,
+                        height_px: 31,
+                        cells,
+                    });
+                }
+            }
+            for row in &mut rows {
+                if row.cells.len() < width {
+                    row.cells.resize_with(width, || WorkbookCell {
+                        value: String::new(),
+                        style_index: None,
+                        col_span: None,
+                        row_span: None,
+                        covered_by_merge: false,
+                    });
+                }
+            }
+            let columns = (1..=width)
+                .map(|index| WorkbookColumn {
+                    index,
+                    label: to_column_label(index),
+                    width_px: if index == 1 { 176 } else { 98 },
+                })
+                .collect();
+            WorkbookSheet {
+                name,
+                columns,
+                rows,
+                truncated_rows,
+                truncated_columns,
+                has_images: false,
+            }
+        })
+        .collect();
+    Ok(WorkbookPreview {
+        sheets,
+        active_sheet: 0,
+        styles: Vec::new(),
+    })
+}
+
 fn load_delimited_spreadsheet(path: &Path, force_tab: bool) -> Result<WorkbookPreview, String> {
     use std::io::BufRead;
 
     let file = File::open(path).map_err(|error| format!("Unable to open spreadsheet: {error}"))?;
     let mut reader = BufReader::with_capacity(64 * 1024, file);
-    let mut sample = String::new();
     let mut probe_buf = Vec::with_capacity(2048);
     let bytes_read = reader
         .read_until(b'\n', &mut probe_buf)
         .map_err(|error| format!("Unable to read delimited spreadsheet: {error}"))?;
-    if bytes_read > 0 {
-        sample.push_str(&String::from_utf8_lossy(&probe_buf));
-    }
+    let sample = if bytes_read > 0 {
+        String::from_utf8_lossy(&probe_buf).into_owned()
+    } else {
+        String::new()
+    };
 
     let delimiter = if force_tab {
         b'\t'
@@ -173,21 +275,49 @@ fn load_delimited_spreadsheet(path: &Path, force_tab: bool) -> Result<WorkbookPr
         detect_csv_delimiter(sample.trim_start_matches('\u{feff}'))
     };
 
-    // Rewind to byte 0 so our RFC-4180 byte-streaming parser handles quoted multiline rows cleanly.
+    // Rewind to byte 0 and read incrementally until we have enough rows for the preview budget.
     reader
         .seek(SeekFrom::Start(0))
         .map_err(|error| format!("Unable to read delimited spreadsheet: {error}"))?;
 
-    let mut raw_bytes = Vec::with_capacity(64 * 1024);
     let max_read_bytes = (8 * 1024 * 1024_usize).min(MAX_SPREADSHEET_PREVIEW_BYTES as usize);
-    let mut limited = reader.take(max_read_bytes as u64);
-    limited
-        .read_to_end(&mut raw_bytes)
-        .map_err(|error| format!("Unable to read delimited spreadsheet: {error}"))?;
+    let mut raw_bytes = Vec::with_capacity(32 * 1024);
+    let mut line_buf = Vec::with_capacity(4096);
+    let mut approx_rows = 0usize;
+    let mut in_quotes = false;
+    let mut hit_byte_cap = false;
+
+    loop {
+        line_buf.clear();
+        let read = reader
+            .read_until(b'\n', &mut line_buf)
+            .map_err(|error| format!("Unable to read delimited spreadsheet: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        if raw_bytes.len().saturating_add(read) > max_read_bytes {
+            let remaining = max_read_bytes.saturating_sub(raw_bytes.len());
+            raw_bytes.extend_from_slice(&line_buf[..remaining]);
+            hit_byte_cap = true;
+            break;
+        }
+        for &byte in &line_buf {
+            if byte == b'"' {
+                in_quotes = !in_quotes;
+            }
+        }
+        raw_bytes.extend_from_slice(&line_buf);
+        if !in_quotes {
+            approx_rows += 1;
+            if approx_rows > MAX_SPREADSHEET_ROWS + 1 {
+                hit_byte_cap = true;
+                break;
+            }
+        }
+    }
 
     let decoded = String::from_utf8_lossy(&raw_bytes);
     let text = decoded.strip_prefix('\u{feff}').unwrap_or(&decoded);
-    let hit_byte_cap = raw_bytes.len() >= max_read_bytes;
 
     let (parsed_rows, max_cols, truncated_rows, truncated_columns) =
         parse_delimited_rows(text, delimiter as char, hit_byte_cap);
@@ -270,6 +400,7 @@ fn load_delimited_spreadsheet(path: &Path, force_tab: bool) -> Result<WorkbookPr
             rows,
             truncated_rows,
             truncated_columns,
+            has_images: false,
         }],
         active_sheet: 0,
         styles,
@@ -401,13 +532,18 @@ enum PreviewParseOutcome {
     Fallback,
 }
 
+#[cfg(test)]
 pub fn validate_spreadsheet_archive(path: &Path) -> Result<(), String> {
+    let mut file = File::open(path)
+        .map_err(|error| format!("Unable to inspect spreadsheet archive: {error}"))?;
+    validate_spreadsheet_archive_file(&mut file)
+}
+
+fn validate_spreadsheet_archive_file(file: &mut File) -> Result<(), String> {
     const EOCD_SIGNATURE: u32 = 0x0605_4b50;
     const CENTRAL_DIRECTORY_SIGNATURE: u32 = 0x0201_4b50;
     const MAX_EOCD_SEARCH: u64 = 65_557;
 
-    let mut file = File::open(path)
-        .map_err(|error| format!("Unable to inspect spreadsheet archive: {error}"))?;
     let length = file
         .metadata()
         .map_err(|error| format!("Unable to inspect spreadsheet archive: {error}"))?
@@ -458,7 +594,8 @@ pub fn validate_spreadsheet_archive(path: &Path) -> Result<(), String> {
         compressed_total = compressed_total.saturating_add(compressed as u64);
         expanded_total = expanded_total.saturating_add(expanded as u64);
         if expanded_total > MAX_SPREADSHEET_EXPANDED_BYTES
-            || (compressed_total > 0
+            || (expanded_total >= MIN_SPREADSHEET_RATIO_CHECK_BYTES
+                && compressed_total > 0
                 && expanded_total / compressed_total > MAX_SPREADSHEET_COMPRESSION_RATIO)
         {
             return Err("This spreadsheet expands beyond the safe in-app preview limit.".into());
@@ -475,88 +612,17 @@ pub fn validate_spreadsheet_archive(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn load_calamine_fallback(path: &Path) -> Result<WorkbookPreview, String> {
-    let mut workbook =
-        open_workbook_auto(path).map_err(|error| format!("Unable to open spreadsheet: {error}"))?;
-    let sheet_names = workbook.sheet_names().to_owned();
-    if sheet_names.len() > MAX_SPREADSHEET_SHEETS {
-        return Err(format!(
-            "This spreadsheet has {} sheets. In-app preview supports up to {MAX_SPREADSHEET_SHEETS}; open it in Windows instead.",
-            sheet_names.len()
-        ));
+fn optional_ooxml_part<T: Default>(
+    result: Result<T, PreviewParseOutcome>,
+) -> Result<T, PreviewParseOutcome> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(PreviewParseOutcome::Safety(message)) => Err(PreviewParseOutcome::Safety(message)),
+        Err(PreviewParseOutcome::Fallback) => Ok(T::default()),
     }
-    let sheets = sheet_names
-        .into_iter()
-        .map(|name| {
-            let mut truncated_rows = false;
-            let mut truncated_columns = false;
-            let mut rows = Vec::new();
-            let mut width = 0usize;
-            if let Ok(range) = workbook.worksheet_range(&name) {
-                rows.reserve(MAX_SPREADSHEET_ROWS.min(range.height()));
-                for (row_idx, row) in range.rows().enumerate() {
-                    if row_idx >= MAX_SPREADSHEET_ROWS {
-                        truncated_rows = true;
-                        break;
-                    }
-                    if row.len() > MAX_SPREADSHEET_COLUMNS {
-                        truncated_columns = true;
-                    }
-                    let row_width = row.len().min(MAX_SPREADSHEET_COLUMNS);
-                    width = width.max(row_width);
-                    let cells = row[..row_width]
-                        .iter()
-                        .map(|cell| WorkbookCell {
-                            value: cell.to_string(),
-                            style_index: None,
-                            col_span: None,
-                            row_span: None,
-                            covered_by_merge: false,
-                        })
-                        .collect();
-                    rows.push(WorkbookRow {
-                        index: row_idx + 1,
-                        height_px: 31,
-                        cells,
-                    });
-                }
-            }
-            for row in &mut rows {
-                if row.cells.len() < width {
-                    row.cells.resize_with(width, || WorkbookCell {
-                        value: String::new(),
-                        style_index: None,
-                        col_span: None,
-                        row_span: None,
-                        covered_by_merge: false,
-                    });
-                }
-            }
-            let columns = (1..=width)
-                .map(|index| WorkbookColumn {
-                    index,
-                    label: to_column_label(index),
-                    width_px: if index == 1 { 176 } else { 98 },
-                })
-                .collect();
-            WorkbookSheet {
-                name,
-                columns,
-                rows,
-                truncated_rows,
-                truncated_columns,
-            }
-        })
-        .collect();
-    Ok(WorkbookPreview {
-        sheets,
-        active_sheet: 0,
-        styles: Vec::new(),
-    })
 }
 
-fn load_styled_ooxml(path: &Path) -> Result<WorkbookPreview, PreviewParseOutcome> {
-    let file = File::open(path).map_err(|_| PreviewParseOutcome::Fallback)?;
+fn load_styled_ooxml(file: File) -> Result<WorkbookPreview, PreviewParseOutcome> {
     let mut archive =
         ZipArchive::new(BufReader::new(file)).map_err(|_| PreviewParseOutcome::Fallback)?;
     let mut entry_lookup = HashMap::with_capacity(archive.len());
@@ -577,25 +643,31 @@ fn load_styled_ooxml(path: &Path) -> Result<WorkbookPreview, PreviewParseOutcome
         )));
     }
 
-    let rels = entry_lookup
-        .get("xl/_rels/workbook.xml.rels")
-        .and_then(|&idx| parse_workbook_rels(&mut archive, idx).ok())
-        .unwrap_or_default();
+    let rels = match entry_lookup.get("xl/_rels/workbook.xml.rels").copied() {
+        Some(idx) => optional_ooxml_part(parse_workbook_rels(&mut archive, idx))?,
+        None => HashMap::new(),
+    };
 
-    let shared_strings = entry_lookup
-        .get("xl/sharedstrings.xml")
-        .and_then(|&idx| parse_shared_strings(&mut archive, idx).ok())
-        .unwrap_or_default();
+    let shared_strings = match entry_lookup.get("xl/sharedstrings.xml").copied() {
+        Some(idx) => optional_ooxml_part(parse_shared_strings(&mut archive, idx))?,
+        None => Vec::new(),
+    };
 
-    let theme_colors = entry_lookup
-        .get("xl/theme/theme1.xml")
-        .and_then(|&idx| parse_theme_colors(&mut archive, idx).ok())
-        .unwrap_or(DEFAULT_THEME_COLORS);
+    let theme_colors = match entry_lookup.get("xl/theme/theme1.xml").copied() {
+        Some(idx) => match parse_theme_colors(&mut archive, idx) {
+            Ok(colors) => colors,
+            Err(PreviewParseOutcome::Safety(message)) => {
+                return Err(PreviewParseOutcome::Safety(message))
+            }
+            Err(PreviewParseOutcome::Fallback) => DEFAULT_THEME_COLORS,
+        },
+        None => DEFAULT_THEME_COLORS,
+    };
 
-    let stylesheet = entry_lookup
-        .get("xl/styles.xml")
-        .and_then(|&idx| parse_styles(&mut archive, idx, &theme_colors).ok())
-        .unwrap_or_default();
+    let stylesheet = match entry_lookup.get("xl/styles.xml").copied() {
+        Some(idx) => optional_ooxml_part(parse_styles(&mut archive, idx, &theme_colors))?,
+        None => Stylesheet::default(),
+    };
     let (palette, xf_style_indices) = stylesheet.build_palette();
 
     let visible_sheets: Vec<(usize, &WorkbookSheetEntry)> = workbook_meta
@@ -618,7 +690,8 @@ fn load_styled_ooxml(path: &Path) -> Result<WorkbookPreview, PreviewParseOutcome
         let Some(&sheet_idx) = entry_lookup.get(&target.to_ascii_lowercase()) else {
             return Err(PreviewParseOutcome::Fallback);
         };
-        let sheet = parse_worksheet(
+        let has_images = sheet_has_images(&mut archive, &entry_lookup, target);
+        let mut sheet = parse_worksheet(
             &mut archive,
             sheet_idx,
             &sheet_entry.name,
@@ -627,13 +700,40 @@ fn load_styled_ooxml(path: &Path) -> Result<WorkbookPreview, PreviewParseOutcome
             &xf_style_indices,
             workbook_meta.date_1904,
         )?;
+        sheet.has_images = has_images;
         sheets.push(sheet);
+    }
+
+    // Prune styles not referenced by any rendered cell to minimize IPC payload size.
+    let mut remapped_styles = Vec::new();
+    let mut style_remap: Vec<Option<usize>> = vec![None; palette.len()];
+    for sheet in &mut sheets {
+        for row in &mut sheet.rows {
+            for cell in &mut row.cells {
+                if let Some(old_idx) = cell.style_index {
+                    if let Some(slot) = style_remap.get_mut(old_idx) {
+                        let new_idx = match *slot {
+                            Some(existing) => existing,
+                            None => {
+                                let idx = remapped_styles.len();
+                                remapped_styles.push(palette[old_idx].clone());
+                                *slot = Some(idx);
+                                idx
+                            }
+                        };
+                        cell.style_index = Some(new_idx);
+                    } else {
+                        cell.style_index = None;
+                    }
+                }
+            }
+        }
     }
 
     Ok(WorkbookPreview {
         sheets,
         active_sheet,
-        styles: palette,
+        styles: remapped_styles,
     })
 }
 
@@ -1479,7 +1579,7 @@ fn resolve_ooxml_color(e: &BytesStart<'_>, theme: &[(u8, u8, u8); 12]) -> Option
                 let hex = val.trim_start_matches('#');
                 if hex.len() == 8 && hex.starts_with("00") {
                     transparent_rgb = true;
-                } else if hex.len() >= 6 {
+                } else if hex.is_ascii() && hex.len() >= 6 {
                     parsed_rgb = parse_hex_rgb(&hex[hex.len() - 6..]);
                 }
             }
@@ -1508,7 +1608,7 @@ fn resolve_ooxml_color(e: &BytesStart<'_>, theme: &[(u8, u8, u8); 12]) -> Option
 }
 
 fn parse_hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
-    if hex.len() < 6 {
+    if !hex.is_ascii() || hex.len() < 6 {
         return None;
     }
     let slice = &hex[hex.len() - 6..];
@@ -1828,6 +1928,7 @@ fn parse_worksheet<R: Read + Seek>(
         rows: built_rows,
         truncated_rows,
         truncated_columns,
+        has_images: false,
     })
 }
 
@@ -1911,6 +2012,9 @@ fn parse_row_cells<R: std::io::BufRead>(
                 }
                 "is" if current_col.is_some() => {
                     in_is = true;
+                }
+                "rPh" | "extLst" if current_col.is_some() && in_is => {
+                    skip_element_with_buf(reader, text_buf)?;
                 }
                 "t" if current_col.is_some() && in_is => {
                     append_text_until_end(reader, "t", text_buf, &mut current_value)?;
@@ -2375,7 +2479,644 @@ const INDEXED_COLORS: &[Option<(u8, u8, u8)>] = &[
     Some((0xff, 0x80, 0x80)),
     Some((0x00, 0x66, 0xcc)),
     Some((0xcc, 0xcc, 0xff)),
+    Some((0x00, 0x00, 0x80)),
+    Some((0xff, 0x00, 0xff)),
+    Some((0xff, 0xff, 0x00)),
+    Some((0x00, 0xff, 0xff)),
+    Some((0x80, 0x00, 0x80)),
+    Some((0x80, 0x00, 0x00)),
+    Some((0x00, 0x80, 0x80)),
+    Some((0x00, 0x00, 0xff)),
+    Some((0x00, 0xcc, 0xff)),
+    Some((0xcc, 0xff, 0xff)),
+    Some((0xcc, 0xff, 0xcc)),
+    Some((0xff, 0xff, 0x99)),
+    Some((0x99, 0xcc, 0xff)),
+    Some((0xff, 0x99, 0xcc)),
+    Some((0xcc, 0x99, 0xff)),
+    Some((0xff, 0xcc, 0x99)),
+    Some((0x33, 0x66, 0xff)),
+    Some((0x33, 0xcc, 0xcc)),
+    Some((0x99, 0xcc, 0x00)),
+    Some((0xff, 0xcc, 0x00)),
+    Some((0xff, 0x99, 0x00)),
+    Some((0xff, 0x66, 0x00)),
+    Some((0x66, 0x66, 0x99)),
+    Some((0x96, 0x96, 0x96)),
+    Some((0x00, 0x33, 0x66)),
+    Some((0x33, 0x99, 0x66)),
+    Some((0x00, 0x33, 0x00)),
+    Some((0x33, 0x33, 0x00)),
+    Some((0x99, 0x33, 0x00)),
+    Some((0x99, 0x33, 0x66)),
+    Some((0x33, 0x33, 0x99)),
+    Some((0x33, 0x33, 0x33)),
 ];
+
+struct RelEntry {
+    id: String,
+    rel_type: String,
+    target: String,
+    external: bool,
+}
+
+fn rels_path_for(part_path: &str) -> String {
+    match part_path.rsplit_once('/') {
+        Some((dir, file)) => format!("{dir}/_rels/{file}.rels"),
+        None => format!("_rels/{part_path}.rels"),
+    }
+}
+
+fn resolve_part_target(base_part_path: &str, target: &str) -> String {
+    let mut parts: Vec<&str> = if target.starts_with('/') {
+        Vec::new()
+    } else {
+        match base_part_path.rsplit_once('/') {
+            Some((dir, _)) => dir.split('/').filter(|s| !s.is_empty()).collect(),
+            None => Vec::new(),
+        }
+    };
+    for segment in target.trim_start_matches('/').split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join("/")
+}
+
+fn parse_relationships<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    idx: usize,
+) -> Result<Vec<RelEntry>, PreviewParseOutcome> {
+    let mut reader = open_xml(archive, idx)?;
+    let mut buf = Vec::with_capacity(512);
+    let mut entries = Vec::new();
+    loop {
+        buf.clear();
+        match reader
+            .read_event_into(&mut buf)
+            .map_err(|_| PreviewParseOutcome::Fallback)?
+        {
+            Event::Start(ref e) | Event::Empty(ref e)
+                if e.local_name().as_ref() == "Relationship" =>
+            {
+                let id = attr_value(e, "Id");
+                let rel_type = attr_value(e, "Type").unwrap_or_default();
+                let target = attr_value(e, "Target");
+                let external = attr_value(e, "TargetMode")
+                    .is_some_and(|mode| mode.eq_ignore_ascii_case("External"));
+                if let (Some(id), Some(target)) = (id, target) {
+                    entries.push(RelEntry {
+                        id,
+                        rel_type,
+                        target,
+                        external,
+                    });
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(entries)
+}
+
+fn image_mime_for_path(path: &str) -> Option<&'static str> {
+    let ext = path.rsplit('.').next()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        _ => None,
+    }
+}
+
+fn sheet_drawing_targets<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    entry_lookup: &HashMap<String, usize>,
+    sheet_target: &str,
+) -> Vec<String> {
+    let rels_key = rels_path_for(sheet_target).to_ascii_lowercase();
+    let Some(&rels_idx) = entry_lookup.get(&rels_key) else {
+        return Vec::new();
+    };
+    let Ok(rels) = parse_relationships(archive, rels_idx) else {
+        return Vec::new();
+    };
+    rels.into_iter()
+        .filter(|rel| !rel.external && rel.rel_type.ends_with("/drawing"))
+        .map(|rel| resolve_part_target(sheet_target, &rel.target))
+        .collect()
+}
+
+fn sheet_has_images<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    entry_lookup: &HashMap<String, usize>,
+    sheet_target: &str,
+) -> bool {
+    for drawing_path in sheet_drawing_targets(archive, entry_lookup, sheet_target) {
+        let drawing_rels_key = rels_path_for(&drawing_path).to_ascii_lowercase();
+        let Some(&rels_idx) = entry_lookup.get(&drawing_rels_key) else {
+            continue;
+        };
+        let Ok(rels) = parse_relationships(archive, rels_idx) else {
+            continue;
+        };
+        for rel in rels {
+            if rel.external {
+                continue;
+            }
+            let target = resolve_part_target(&drawing_path, &rel.target);
+            if image_mime_for_path(&target).is_some()
+                && entry_lookup.contains_key(&target.to_ascii_lowercase())
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+struct SheetLayoutMetrics {
+    col_defs: Vec<ColDef>,
+    row_heights: HashMap<usize, f64>,
+}
+
+impl SheetLayoutMetrics {
+    fn col_left_px(&self, col_0based: usize) -> f64 {
+        let mut x = 0.0;
+        for col_idx in 1..=col_0based {
+            let info = lookup_col_def(&self.col_defs, col_idx);
+            if info.is_some_and(|def| def.hidden) {
+                continue;
+            }
+            let width_chars = info.and_then(|def| def.width).unwrap_or(12.0);
+            let width_px = (width_chars * 7.0 + 12.0).round().clamp(38.0, 320.0);
+            x += width_px;
+        }
+        x
+    }
+
+    fn row_top_px(&self, row_0based: usize) -> f64 {
+        let mut y = 0.0;
+        for row_idx in 1..=row_0based {
+            y += self.row_heights.get(&row_idx).copied().unwrap_or(22.0);
+        }
+        y
+    }
+}
+
+fn read_sheet_layout_metrics<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    idx: usize,
+) -> SheetLayoutMetrics {
+    let mut col_defs = Vec::new();
+    let mut row_heights = HashMap::new();
+    let Ok(mut reader) = open_xml(archive, idx) else {
+        return SheetLayoutMetrics {
+            col_defs,
+            row_heights,
+        };
+    };
+    let mut buf = Vec::with_capacity(512);
+    let mut skip_buf = Vec::with_capacity(256);
+    let mut dummy_max_col = 0usize;
+    let mut prev_row_num = 0usize;
+    loop {
+        buf.clear();
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => match e.local_name().as_ref() {
+                "col" => push_col_def(e, &mut col_defs, &mut dummy_max_col),
+                "row" => {
+                    let attrs = parse_row_attrs(e, prev_row_num + 1);
+                    prev_row_num = attrs.row_num;
+                    let height = if attrs.hidden {
+                        0.0
+                    } else {
+                        f64::from(attrs.height_px)
+                    };
+                    if attrs.row_num <= MAX_SPREADSHEET_ROW_SCAN {
+                        row_heights.insert(attrs.row_num, height);
+                    }
+                    if skip_element_with_buf(&mut reader, &mut skip_buf).is_err() {
+                        break;
+                    }
+                }
+                "sheetData" | "cols" => {}
+                "mergeCells" | "drawing" | "extLst" => {
+                    if skip_element_with_buf(&mut reader, &mut skip_buf).is_err() {
+                        break;
+                    }
+                }
+                _ => {}
+            },
+            Ok(Event::Empty(ref e)) => match e.local_name().as_ref() {
+                "col" => push_col_def(e, &mut col_defs, &mut dummy_max_col),
+                "row" => {
+                    let attrs = parse_row_attrs(e, prev_row_num + 1);
+                    prev_row_num = attrs.row_num;
+                    let height = if attrs.hidden {
+                        0.0
+                    } else {
+                        f64::from(attrs.height_px)
+                    };
+                    if attrs.row_num <= MAX_SPREADSHEET_ROW_SCAN {
+                        row_heights.insert(attrs.row_num, height);
+                    }
+                }
+                _ => {}
+            },
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    SheetLayoutMetrics {
+        col_defs,
+        row_heights,
+    }
+}
+
+#[derive(Default)]
+struct AnchorMarker {
+    col: usize,
+    col_off: i64,
+    row: usize,
+    row_off: i64,
+}
+
+enum AnchorKind {
+    TwoCell,
+    OneCell,
+}
+
+enum AnchorMarkerSection {
+    From,
+    To,
+}
+
+enum AnchorTextField {
+    Col,
+    ColOff,
+    Row,
+    RowOff,
+}
+
+struct ParsedDrawingImage {
+    rel_id: String,
+    left_px: f64,
+    top_px: f64,
+    width_px: f64,
+    height_px: f64,
+}
+
+fn emu_to_px(emu: i64) -> f64 {
+    emu as f64 / 9525.0
+}
+
+fn parse_drawing_anchors<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    idx: usize,
+    metrics: &SheetLayoutMetrics,
+) -> Vec<ParsedDrawingImage> {
+    let Ok(mut reader) = open_xml(archive, idx) else {
+        return Vec::new();
+    };
+    let mut buf = Vec::with_capacity(512);
+    let mut anchors = Vec::new();
+
+    let mut active_kind: Option<AnchorKind> = None;
+    let mut active_section: Option<AnchorMarkerSection> = None;
+    let mut active_field: Option<AnchorTextField> = None;
+    let mut from_marker = AnchorMarker::default();
+    let mut to_marker = AnchorMarker::default();
+    let mut one_cell_ext: Option<(i64, i64)> = None;
+    let mut embed_id: Option<String> = None;
+    let mut field_text = String::new();
+
+    loop {
+        buf.clear();
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => match e.local_name().as_ref() {
+                "twoCellAnchor" => {
+                    active_kind = Some(AnchorKind::TwoCell);
+                    active_section = None;
+                    active_field = None;
+                    from_marker = AnchorMarker::default();
+                    to_marker = AnchorMarker::default();
+                    one_cell_ext = None;
+                    embed_id = None;
+                }
+                "oneCellAnchor" => {
+                    active_kind = Some(AnchorKind::OneCell);
+                    active_section = None;
+                    active_field = None;
+                    from_marker = AnchorMarker::default();
+                    to_marker = AnchorMarker::default();
+                    one_cell_ext = None;
+                    embed_id = None;
+                }
+                "from" if active_kind.is_some() => {
+                    active_section = Some(AnchorMarkerSection::From);
+                }
+                "to" if active_kind.is_some() => {
+                    active_section = Some(AnchorMarkerSection::To);
+                }
+                "col" if active_section.is_some() => {
+                    active_field = Some(AnchorTextField::Col);
+                    field_text.clear();
+                }
+                "colOff" if active_section.is_some() => {
+                    active_field = Some(AnchorTextField::ColOff);
+                    field_text.clear();
+                }
+                "row" if active_section.is_some() => {
+                    active_field = Some(AnchorTextField::Row);
+                    field_text.clear();
+                }
+                "rowOff" if active_section.is_some() => {
+                    active_field = Some(AnchorTextField::RowOff);
+                    field_text.clear();
+                }
+                "ext"
+                    if matches!(active_kind, Some(AnchorKind::OneCell))
+                        && one_cell_ext.is_none() =>
+                {
+                    if let (Some(cx), Some(cy)) = (
+                        attr_value(e, "cx").and_then(|v| v.parse::<i64>().ok()),
+                        attr_value(e, "cy").and_then(|v| v.parse::<i64>().ok()),
+                    ) {
+                        one_cell_ext = Some((cx, cy));
+                    }
+                }
+                "blip" if active_kind.is_some() && embed_id.is_none() => {
+                    embed_id = attr_value(e, "embed");
+                }
+                _ => {}
+            },
+            Ok(Event::Empty(ref e)) => match e.local_name().as_ref() {
+                "ext"
+                    if matches!(active_kind, Some(AnchorKind::OneCell))
+                        && one_cell_ext.is_none() =>
+                {
+                    if let (Some(cx), Some(cy)) = (
+                        attr_value(e, "cx").and_then(|v| v.parse::<i64>().ok()),
+                        attr_value(e, "cy").and_then(|v| v.parse::<i64>().ok()),
+                    ) {
+                        one_cell_ext = Some((cx, cy));
+                    }
+                }
+                "blip" if active_kind.is_some() && embed_id.is_none() => {
+                    embed_id = attr_value(e, "embed");
+                }
+                _ => {}
+            },
+            Ok(Event::Text(ref t)) if active_field.is_some() => {
+                field_text.push_str(&t.xml10_content());
+            }
+            Ok(Event::End(ref e)) => match e.local_name().as_ref() {
+                "col" | "colOff" | "row" | "rowOff" => {
+                    if let (Some(section), Some(field)) = (&active_section, active_field.take()) {
+                        let target = match section {
+                            AnchorMarkerSection::From => &mut from_marker,
+                            AnchorMarkerSection::To => &mut to_marker,
+                        };
+                        let trimmed = field_text.trim();
+                        match field {
+                            AnchorTextField::Col => {
+                                target.col = trimmed.parse::<usize>().unwrap_or(0);
+                            }
+                            AnchorTextField::ColOff => {
+                                target.col_off = trimmed.parse::<i64>().unwrap_or(0);
+                            }
+                            AnchorTextField::Row => {
+                                target.row = trimmed.parse::<usize>().unwrap_or(0);
+                            }
+                            AnchorTextField::RowOff => {
+                                target.row_off = trimmed.parse::<i64>().unwrap_or(0);
+                            }
+                        }
+                        field_text.clear();
+                    }
+                }
+                "from" | "to" => {
+                    active_section = None;
+                }
+                "twoCellAnchor" | "oneCellAnchor" => {
+                    if let (Some(kind), Some(rel_id)) = (active_kind.take(), embed_id.take()) {
+                        let left_px = (metrics.col_left_px(from_marker.col)
+                            + emu_to_px(from_marker.col_off))
+                        .max(0.0);
+                        let top_px = (metrics.row_top_px(from_marker.row)
+                            + emu_to_px(from_marker.row_off))
+                        .max(0.0);
+                        let (width_px, height_px) = match kind {
+                            AnchorKind::TwoCell => {
+                                let right_px = metrics.col_left_px(to_marker.col)
+                                    + emu_to_px(to_marker.col_off);
+                                let bottom_px = metrics.row_top_px(to_marker.row)
+                                    + emu_to_px(to_marker.row_off);
+                                (
+                                    (right_px - left_px).max(16.0),
+                                    (bottom_px - top_px).max(16.0),
+                                )
+                            }
+                            AnchorKind::OneCell => {
+                                let (cx, cy) = one_cell_ext.unwrap_or((914_400, 914_400));
+                                (emu_to_px(cx).max(16.0), emu_to_px(cy).max(16.0))
+                            }
+                        };
+                        anchors.push(ParsedDrawingImage {
+                            rel_id,
+                            left_px,
+                            top_px,
+                            width_px,
+                            height_px,
+                        });
+                    }
+                    active_section = None;
+                    active_field = None;
+                    one_cell_ext = None;
+                }
+                _ => {}
+            },
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    anchors
+}
+
+fn encode_base64(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = chunk.get(1).copied().unwrap_or(0);
+        let b2 = chunk.get(2).copied().unwrap_or(0);
+        let triple = (u32::from(b0) << 16) | (u32::from(b1) << 8) | u32::from(b2);
+        out.push(TABLE[((triple >> 18) & 0x3f) as usize] as char);
+        out.push(TABLE[((triple >> 12) & 0x3f) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[((triple >> 6) & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(triple & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+pub fn load_sheet_images(path: &Path, sheet_index: usize) -> Result<Vec<WorkbookImage>, String> {
+    let size = std::fs::metadata(path)
+        .map_err(|error| format!("Unable to inspect spreadsheet: {error}"))?
+        .len();
+    if size > MAX_SPREADSHEET_PREVIEW_BYTES {
+        return Err(format!(
+            "This spreadsheet is {} MB. In-app preview supports files up to 64 MB; open it in Windows instead.",
+            size.div_ceil(1024 * 1024)
+        ));
+    }
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if !matches!(extension.as_str(), "xlsx" | "xlsm" | "xltx" | "xltm") {
+        return Ok(Vec::new());
+    }
+
+    let mut file =
+        File::open(path).map_err(|error| format!("Unable to open spreadsheet: {error}"))?;
+    validate_spreadsheet_archive_file(&mut file)?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| format!("Unable to read spreadsheet: {error}"))?;
+    let mut archive = ZipArchive::new(BufReader::new(file))
+        .map_err(|_| "Unable to open spreadsheet archive.".to_owned())?;
+    let mut entry_lookup = HashMap::with_capacity(archive.len());
+    for idx in 0..archive.len() {
+        if let Some(Ok(name)) = archive.name_for_index(idx) {
+            entry_lookup.insert(name.to_ascii_lowercase(), idx);
+        }
+    }
+
+    let Some(&workbook_idx) = entry_lookup.get("xl/workbook.xml") else {
+        return Ok(Vec::new());
+    };
+    let Ok(workbook_meta) = parse_workbook(&mut archive, workbook_idx) else {
+        return Ok(Vec::new());
+    };
+    let rels = match entry_lookup.get("xl/_rels/workbook.xml.rels").copied() {
+        Some(idx) => parse_workbook_rels(&mut archive, idx).unwrap_or_default(),
+        None => HashMap::new(),
+    };
+    let visible_sheets: Vec<&WorkbookSheetEntry> = workbook_meta
+        .sheets
+        .iter()
+        .filter(|sheet| sheet.visible)
+        .collect();
+    let Some(sheet_entry) = visible_sheets.get(sheet_index) else {
+        return Ok(Vec::new());
+    };
+    let Some(sheet_target) = rels.get(&sheet_entry.rel_id) else {
+        return Ok(Vec::new());
+    };
+    let Some(&sheet_idx) = entry_lookup.get(&sheet_target.to_ascii_lowercase()) else {
+        return Ok(Vec::new());
+    };
+    if !sheet_has_images(&mut archive, &entry_lookup, sheet_target) {
+        return Ok(Vec::new());
+    }
+
+    let metrics = read_sheet_layout_metrics(&mut archive, sheet_idx);
+    let drawing_paths = sheet_drawing_targets(&mut archive, &entry_lookup, sheet_target);
+    let mut images = Vec::new();
+    let mut encoded_cache: HashMap<String, String> = HashMap::new();
+    let mut total_image_bytes = 0usize;
+
+    for drawing_path in drawing_paths {
+        if images.len() >= MAX_SHEET_IMAGES {
+            break;
+        }
+        let Some(&drawing_idx) = entry_lookup.get(&drawing_path.to_ascii_lowercase()) else {
+            continue;
+        };
+        let drawing_rels_key = rels_path_for(&drawing_path).to_ascii_lowercase();
+        let Some(&rels_idx) = entry_lookup.get(&drawing_rels_key) else {
+            continue;
+        };
+        let Ok(rels) = parse_relationships(&mut archive, rels_idx) else {
+            continue;
+        };
+        let rel_targets: HashMap<String, String> = rels
+            .into_iter()
+            .filter(|rel| !rel.external)
+            .map(|rel| (rel.id, resolve_part_target(&drawing_path, &rel.target)))
+            .collect();
+
+        let anchors = parse_drawing_anchors(&mut archive, drawing_idx, &metrics);
+        for anchor in anchors {
+            if images.len() >= MAX_SHEET_IMAGES {
+                break;
+            }
+            let Some(image_path) = rel_targets.get(&anchor.rel_id) else {
+                continue;
+            };
+            let Some(mime) = image_mime_for_path(image_path) else {
+                continue;
+            };
+            let lookup_key = image_path.to_ascii_lowercase();
+            let data_url = if let Some(cached) = encoded_cache.get(&lookup_key) {
+                cached.clone()
+            } else {
+                let Some(&image_idx) = entry_lookup.get(&lookup_key) else {
+                    continue;
+                };
+                let Ok(entry) = archive.by_index(image_idx) else {
+                    continue;
+                };
+                if entry.size() > MAX_SINGLE_IMAGE_BYTES as u64 {
+                    continue;
+                }
+                let mut bytes = Vec::with_capacity(entry.size() as usize);
+                if entry
+                    .take((MAX_SINGLE_IMAGE_BYTES + 1) as u64)
+                    .read_to_end(&mut bytes)
+                    .is_err()
+                {
+                    continue;
+                }
+                if bytes.len() > MAX_SINGLE_IMAGE_BYTES
+                    || total_image_bytes.saturating_add(bytes.len()) > MAX_TOTAL_IMAGE_BYTES
+                {
+                    continue;
+                }
+                total_image_bytes += bytes.len();
+                let url = format!("data:{mime};base64,{}", encode_base64(&bytes));
+                encoded_cache.insert(lookup_key, url.clone());
+                url
+            };
+            images.push(WorkbookImage {
+                data_url,
+                left_px: anchor.left_px,
+                top_px: anchor.top_px,
+                width_px: anchor.width_px,
+                height_px: anchor.height_px,
+            });
+        }
+    }
+
+    Ok(images)
+}
 
 #[cfg(test)]
 mod tests {
@@ -2467,7 +3208,7 @@ mod tests {
             ("xl/worksheets/sheet1.xml", sheet1_xml),
             ("xl/worksheets/sheet2.xml", sheet2_xml),
         ]);
-        let preview = load_styled_ooxml(file.path()).unwrap();
+        let preview = load_styled_ooxml(File::open(file.path()).unwrap()).unwrap();
         assert_eq!(preview.active_sheet, 0);
         assert_eq!(preview.sheets.len(), 1);
         let sheet = &preview.sheets[0];
@@ -2548,14 +3289,14 @@ mod tests {
             ("xl/styles.xml", styles_xml),
             ("xl/worksheets/sheet1.xml", sheet1_xml),
         ]);
-        let preview = load_styled_ooxml(file.path()).unwrap();
-        assert_eq!(preview.styles.len(), 2);
+        let preview = load_styled_ooxml(File::open(file.path()).unwrap()).unwrap();
+        assert_eq!(preview.styles.len(), 1);
         let row = &preview.sheets[0].rows[0];
         assert_eq!(row.cells[0].value, "Hello World");
-        assert_eq!(row.cells[0].style_index, Some(1));
+        assert_eq!(row.cells[0].style_index, Some(0));
         assert_eq!(row.cells[1].value, "");
-        assert_eq!(row.cells[1].style_index, Some(1));
-        assert_eq!(preview.styles[1].font_weight, Some(700));
+        assert_eq!(row.cells[1].style_index, Some(0));
+        assert_eq!(preview.styles[0].font_weight, Some(700));
     }
 
     #[test]
@@ -2589,7 +3330,7 @@ mod tests {
             ("xl/_rels/workbook.xml.rels", rels_xml),
             ("xl/worksheets/sheet1.xml", &sheet1_xml),
         ]);
-        let preview = load_styled_ooxml(file.path()).unwrap();
+        let preview = load_styled_ooxml(File::open(file.path()).unwrap()).unwrap();
         let sheet = &preview.sheets[0];
         assert_eq!(sheet.rows.len(), MAX_SPREADSHEET_ROWS);
         assert_eq!(sheet.columns.len(), MAX_SPREADSHEET_COLUMNS);
@@ -2668,5 +3409,81 @@ mod tests {
         assert_eq!(semi_preview.sheets[0].rows.len(), MAX_SPREADSHEET_ROWS);
         assert_eq!(semi_preview.sheets[0].columns.len(), 2);
         assert!(semi_preview.sheets[0].truncated_rows);
+    }
+
+    #[test]
+    fn encodes_base64_and_loads_ooxml_sheet_images_on_demand() {
+        assert_eq!(encode_base64(b""), "");
+        assert_eq!(encode_base64(b"f"), "Zg==");
+        assert_eq!(encode_base64(b"fo"), "Zm8=");
+        assert_eq!(encode_base64(b"foo"), "Zm9v");
+
+        let workbook_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/relationships">
+  <sheets><sheet name="Media" sheetId="1" r:id="rId1"/></sheets>
+</workbook>"#;
+        let wb_rels = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Target="worksheets/sheet1.xml"/>
+</Relationships>"#;
+        let sheet1_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+           xmlns:r="http://schemas.openxmlformats.org/officeDocument/relationships">
+  <sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Logo</t></is></c></row></sheetData>
+  <drawing r:id="rIdDraw"/>
+</worksheet>"#;
+        let sheet1_rels = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdDraw" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>"#;
+        let drawing1_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/relationships">
+  <xdr:oneCellAnchor>
+    <xdr:from><xdr:col>1</xdr:col><xdr:colOff>95250</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:ext cx="952500" cy="476250"/>
+    <xdr:pic><xdr:blipFill><a:blip r:embed="rIdImg"/></xdr:blipFill></xdr:pic>
+    <xdr:clientData/>
+  </xdr:oneCellAnchor>
+</xdr:wsDr>"#;
+        let drawing1_rels = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdImg" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/logo.png"/>
+</Relationships>"#;
+
+        let temp = tempfile::Builder::new().suffix(".xlsx").tempfile().unwrap();
+        let file = temp.reopen().unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, content) in [
+            ("xl/workbook.xml", workbook_xml.as_bytes()),
+            ("xl/_rels/workbook.xml.rels", wb_rels.as_bytes()),
+            ("xl/worksheets/sheet1.xml", sheet1_xml.as_bytes()),
+            (
+                "xl/worksheets/_rels/sheet1.xml.rels",
+                sheet1_rels.as_bytes(),
+            ),
+            ("xl/drawings/drawing1.xml", drawing1_xml.as_bytes()),
+            (
+                "xl/drawings/_rels/drawing1.xml.rels",
+                drawing1_rels.as_bytes(),
+            ),
+            ("xl/media/logo.png", b"\x89PNG\r\n\x1a\n"),
+        ] {
+            zip.start_file(name, options).unwrap();
+            zip.write_all(content).unwrap();
+        }
+        zip.finish().unwrap();
+
+        let preview = preview_file(temp.path()).unwrap();
+        assert!(preview.sheets[0].has_images);
+        let images = load_sheet_images(temp.path(), 0).unwrap();
+        assert_eq!(images.len(), 1);
+        assert!(images[0].data_url.starts_with("data:image/png;base64,"));
+        assert_eq!(images[0].width_px, 100.0);
+        assert_eq!(images[0].height_px, 50.0);
+        assert!(images[0].left_px > 96.0);
     }
 }

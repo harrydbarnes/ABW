@@ -7,7 +7,6 @@ name = "abw"
 version = "0.1.42"
 dependencies = [
  "calamine",
- "chrono",
  "open",
  "quick-xml",
  "serde",
@@ -21,6 +20,8 @@ dependencies = [
  "tempfile",
  "url",
  "uuid",
+ "webview2-com",
+ "windows-core",
  "winreg",
  "zip",
 ]
@@ -543,10 +544,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
- "js-sys",
  "num-traits",
  "serde",
- "wasm-bindgen",
  "windows-link",
 ]
 
@@ -738,7 +737,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 2.0.119",
+ "syn 3.0.10",
 ]
 
 [[package]]

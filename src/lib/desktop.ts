@@ -5,6 +5,7 @@ import type {
   DownloadRecord,
   DownloadsStorageStats,
   Settings,
+  WorkbookImage,
   WorkbookPreview,
   WrikeSession,
 } from "../types";
@@ -48,6 +49,8 @@ export type WrikeShortcutEvent = {
 export interface PdfHeadResult {
   totalSize: number;
   initialChunk: Uint8Array;
+  tailOffset?: number;
+  tailChunk?: Uint8Array;
   complete: boolean;
 }
 
@@ -98,30 +101,33 @@ export async function saveWrikeSession(session: WrikeSession): Promise<void> {
   }
 }
 
-export async function readDownload(id: string): Promise<Uint8Array | null> {
-  if (!desktopRuntime) {
-    return null;
-  }
-  const bytes = await invokeDesktop<ArrayBuffer>("read_download", { id });
-  return new Uint8Array(bytes);
-}
-
 export async function readDownloadHead(id: string): Promise<PdfHeadResult | null> {
   if (!desktopRuntime) {
     return null;
   }
   const buffer = await invokeDesktop<ArrayBuffer>("read_download_head", { id });
-  if (buffer.byteLength < 8) {
+  if (buffer.byteLength < 20) {
     throw new Error("Invalid PDF header response.");
   }
   const view = new DataView(buffer);
-  const low = view.getUint32(0, true);
-  const high = view.getUint32(4, true);
-  const totalSize = high * 0x1_0000_0000 + low;
-  const initialChunk = new Uint8Array(buffer, 8);
+  const totalLow = view.getUint32(0, true);
+  const totalHigh = view.getUint32(4, true);
+  const totalSize = totalHigh * 0x1_0000_0000 + totalLow;
+  const headLen = view.getUint32(8, true);
+  const tailLow = view.getUint32(12, true);
+  const tailHigh = view.getUint32(16, true);
+  const tailOffset = tailHigh * 0x1_0000_0000 + tailLow;
+  if (20 + headLen > buffer.byteLength) {
+    throw new Error("Invalid PDF header chunk length.");
+  }
+  const initialChunk = new Uint8Array(buffer, 20, headLen);
+  const tailLen = buffer.byteLength - (20 + headLen);
+  const tailChunk = tailLen > 0 ? new Uint8Array(buffer, 20 + headLen, tailLen) : undefined;
   return {
     totalSize,
     initialChunk,
+    tailOffset: tailChunk ? tailOffset : undefined,
+    tailChunk,
     complete: initialChunk.byteLength >= totalSize,
   };
 }
@@ -145,9 +151,25 @@ export async function previewSpreadsheet(id: string): Promise<WorkbookPreview | 
   return invokeDesktop<WorkbookPreview>("preview_spreadsheet", { id });
 }
 
+export async function loadSpreadsheetImages(
+  id: string,
+  sheetIndex: number,
+): Promise<WorkbookImage[]> {
+  if (!desktopRuntime) {
+    return [];
+  }
+  return invokeDesktop<WorkbookImage[]>("load_spreadsheet_images", { id, sheetIndex });
+}
+
 export async function openDownload(id: string): Promise<void> {
   if (desktopRuntime) {
     await invokeDesktop("open_download", { id });
+  }
+}
+
+export async function openDownloadsFolder(): Promise<void> {
+  if (desktopRuntime) {
+    await invokeDesktop("open_downloads_folder");
   }
 }
 
@@ -236,20 +258,44 @@ export async function openSourceTask(record: DownloadRecord, tabId?: string): Pr
   }
 }
 
-export async function launchWrike(tabId: string, url?: string): Promise<void> {
+export async function launchWrike(
+  tabId: string,
+  url?: string,
+  options?: { hidden?: boolean },
+): Promise<void> {
   if (desktopRuntime) {
-    await invokeDesktop("launch_wrike", { tabId, url: url ?? null });
+    await invokeDesktop("launch_wrike", {
+      tabId,
+      url: url ?? null,
+      hidden: options?.hidden ?? false,
+    });
   }
+}
+
+export async function suspendWrikeTab(tabId: string): Promise<boolean> {
+  if (!desktopRuntime) {
+    return false;
+  }
+  return invokeDesktop<boolean>("suspend_wrike_tab", { tabId });
+}
+
+export async function resumeWrikeTab(tabId: string): Promise<boolean> {
+  if (!desktopRuntime) {
+    return false;
+  }
+  return invokeDesktop<boolean>("resume_wrike_tab", { tabId });
 }
 
 export async function resizeWrikeTabs(
   layouts?: WrikeTabLayout[],
   topInset?: number,
+  splitRatio?: number,
 ): Promise<void> {
   if (desktopRuntime) {
     await invokeDesktop("resize_wrike_tabs", {
       layouts: layouts ?? null,
       topInset: topInset ?? null,
+      splitRatio: splitRatio ?? null,
     });
   }
 }

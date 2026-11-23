@@ -39,6 +39,7 @@ export interface Settings {
   launchWrikeOnStart: boolean;
   downloadNotifications: boolean;
   openAbwAtSystemStartup: boolean;
+  startMinimizedToTray: boolean;
   closeToNotificationArea: boolean;
   confirmBeforeClosingTabs: boolean;
   openDownloadedFilesAutomatically: boolean;
@@ -129,9 +130,9 @@ export interface WorkbookSheet {
   name: string;
   columns: WorkbookColumn[];
   rows: WorkbookRow[];
-  images?: WorkbookImage[];
   truncatedRows?: boolean;
   truncatedColumns?: boolean;
+  hasImages?: boolean;
 }
 
 export interface WorkbookColumn {
@@ -147,7 +148,7 @@ export interface WorkbookRow {
 }
 
 export interface WorkbookCell {
-  value: string;
+  value?: string;
   style?: CSSProperties;
   styleIndex?: number;
   colSpan?: number;

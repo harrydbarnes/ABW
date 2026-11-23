@@ -212,6 +212,19 @@ test('injected keyboard shortcut handler emits expected abw-shortcut URLs', () =
   ]);
 });
 
+test('installer hooks guard startup prompt during passive/update installs and clean up preference key on full uninstall', () => {
+  const hooks = readFileSync(new URL('../src-tauri/assets/installer-hooks.nsh', import.meta.url), 'utf8');
+  assert.match(hooks, /StrCmp \$UpdateMode 1 abw_startup_apply/);
+  assert.match(hooks, /StrCmp \$PassiveMode 1 abw_startup_apply/);
+  assert.match(hooks, /DeleteRegKey HKCU "\$\{ABW_PREF_KEY\}"/);
+});
+
+test('injected script exposes instant spellcheck toggle and gates open.htm observer', () => {
+  assert.match(source, /window\.__abwSetSpellCheck\s*=/);
+  assert.match(source, /if \(isLikelyOpenInterstitialPage\(\) && !clickBrowserLink\(\)\)/);
+  assert.match(source, /document\.readyState && document\.readyState !== "complete"/);
+});
+
 test('injected theme, corner, and custom-scheme IPC are gated to wrike.com hosts', () => {
   const hostStart = source.indexOf('const abwIsWrikeHost = () => {');
   const hostEnd = source.indexOf('let abwSpellApplyTimer = 0;', hostStart);
@@ -265,7 +278,7 @@ test('injected theme, corner, and custom-scheme IPC are gated to wrike.com hosts
     'const abwScheduleCornerSync = () => {\n    if (abwAutoDownload || !abwIsWrikeHost()',
     'const abwSyncWrikeContentCorner = (fast = false) => {\n    if (abwAutoDownload || !abwIsWrikeHost()',
     'const abwReportWrikeTheme = (force = false) => {\n    if (abwAutoDownload || !abwIsWrikeHost()',
-    'const abwScheduleThemeDetect = (delay = 180) => {\n    if (abwAutoDownload || !abwIsWrikeHost()',
+    'const abwScheduleThemeDetect = (delay = 250) => {\n    if (abwAutoDownload || !abwIsWrikeHost()',
   ]) {
     const normalizedSource = source.replace(/\r\n/g, '\n');
     assert.ok(normalizedSource.includes(fnMarker), `Expected host gate in: ${fnMarker}`);
@@ -278,6 +291,17 @@ test('task-po script detects task panels without URL id gate and auto-expands Mo
   assert.match(poSource, /function expandMoreIfNeeded\(/);
   assert.match(poSource, /expandedMoreFor/);
   assert.match(poSource, /\/\^more\$\/i\.test/);
+  assert.match(poSource, /if \(document\.hidden\) return;/);
+  assert.match(poSource, /panel\.textContent/);
+});
+
+test('preview installer hooks target abw.exe and injected script gates hidden tabs and drag corner sync', () => {
+  const previewHooks = readFileSync(new URL('../src-tauri/assets/installer-hooks-preview.nsh', import.meta.url), 'utf8');
+  assert.match(previewHooks, /\$INSTDIR\\abw\.exe/);
+  assert.doesNotMatch(previewHooks, /ABW Preview\.exe/);
+
+  assert.match(source, /document\.hidden/);
+  assert.match(source, /abwCornerDragActive/);
 });
 
 

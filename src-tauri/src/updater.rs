@@ -1,4 +1,3 @@
-use chrono::DateTime;
 use serde::Serialize;
 use std::{
     sync::Mutex,
@@ -193,7 +192,7 @@ fn clean_release_notes(notes: Option<&str>) -> Option<String> {
 }
 
 fn format_unix_timestamp(seconds: i64) -> Option<String> {
-    DateTime::from_timestamp(seconds, 0).map(|date_time| date_time.to_rfc3339())
+    crate::persistence::format_unix_timestamp_rfc3339(seconds)
 }
 
 fn friendly_check_error(error: &UpdaterError) -> String {

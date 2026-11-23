@@ -12,13 +12,16 @@ import {
 import type {
   DownloadRecord,
   WorkbookCell,
+  WorkbookImage,
   WorkbookPreview,
   WorkbookSheet,
 } from "../../types";
+import { loadSpreadsheetImages } from "../../lib/desktop";
 import { loadCachedSpreadsheetPreview, toColumnLabel } from "./previewCache";
 
 const ROW_HEADER_WIDTH_PX = 38;
 const COLUMN_HEADER_HEIGHT_PX = 28;
+const VIRTUAL_ROW_OVERSCAN = 12;
 
 type CellCoord = {
   row: number;
@@ -97,8 +100,6 @@ const SheetRow = memo(function SheetRow({
   activeMatchCol,
   selMinCol,
   selMaxCol,
-  onStartSelection,
-  onExtendSelection,
 }: {
   row: WorkbookSheet["rows"][number];
   rowIndex: number;
@@ -108,8 +109,6 @@ const SheetRow = memo(function SheetRow({
   activeMatchCol: number;
   selMinCol: number;
   selMaxCol: number;
-  onStartSelection: (rowIndex: number, cellIndex: number, shiftKey: boolean) => void;
-  onExtendSelection: (rowIndex: number, cellIndex: number) => void;
 }) {
   return (
     <tr style={{ height: row.heightPx }}>
@@ -132,14 +131,9 @@ const SheetRow = memo(function SheetRow({
             className={className || undefined}
             colSpan={cell.colSpan}
             data-cell-key={isMatch || isActiveMatch ? `${rowIndex}:${cellIndex}` : undefined}
+            data-col={cellIndex}
+            data-row={rowIndex}
             key={columns[cellIndex]?.index ?? cellIndex}
-            onMouseDown={(event) => {
-              if (event.button !== 0) {
-                return;
-              }
-              onStartSelection(rowIndex, cellIndex, event.shiftKey);
-            }}
-            onMouseEnter={() => onExtendSelection(rowIndex, cellIndex)}
             rowSpan={cell.rowSpan}
             style={
               cell.styleIndex !== undefined
@@ -147,7 +141,7 @@ const SheetRow = memo(function SheetRow({
                 : cell.style
             }
           >
-            {cell.value}
+            {cell.value ?? ""}
           </td>
         );
       })}
@@ -178,6 +172,12 @@ export default memo(function SpreadsheetPreview({
   const [findQuery, setFindQuery] = useState("");
   const deferredQuery = useDeferredValue(findQuery);
   const [matchCursor, setMatchCursor] = useState(0);
+  const [showImages, setShowImages] = useState(false);
+  const [imagesLoading, setImagesLoading] = useState(false);
+  const [imagesByKey, setImagesByKey] = useState<Record<string, WorkbookImage[]>>({});
+  const [viewport, setViewport] = useState({ scrollTop: 0, height: 600 });
+  const activeRecordIdRef = useRef(record.id);
+  activeRecordIdRef.current = record.id;
 
   useEffect(() => {
     const handleWheel = (event: WheelEvent) => {
@@ -223,6 +223,10 @@ export default memo(function SpreadsheetPreview({
     setProblem(null);
     setFindQuery("");
     setMatchCursor(0);
+    setShowImages(false);
+    setImagesLoading(false);
+    setImagesByKey({});
+    setViewport({ scrollTop: 0, height: scrollerRef.current?.clientHeight || 600 });
     sheetScrollRef.current.clear();
     if (demo) {
       setPreview(DEMO_PREVIEW);
@@ -259,6 +263,140 @@ export default memo(function SpreadsheetPreview({
   const sheets = preview?.sheets ?? [];
   const sheet = sheets[Math.min(active, Math.max(sheets.length - 1, 0))];
   const stylesPalette = preview?.styles ?? [];
+  const imageCacheKey = `${record.id}:${active}`;
+  const currentImages = imagesByKey[imageCacheKey] ?? [];
+
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller || !sheet) {
+      return;
+    }
+    let rafId = 0;
+    const syncViewport = () => {
+      const nextTop = scroller.scrollTop;
+      const nextHeight = scroller.clientHeight || 600;
+      setViewport((current) =>
+        Math.abs(current.scrollTop - nextTop) < 1 && Math.abs(current.height - nextHeight) < 1
+          ? current
+          : { scrollTop: nextTop, height: nextHeight },
+      );
+    };
+    const onScroll = () => {
+      if (rafId) {
+        return;
+      }
+      rafId = window.requestAnimationFrame(() => {
+        rafId = 0;
+        syncViewport();
+      });
+    };
+    syncViewport();
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(onScroll);
+      observer.observe(scroller);
+    }
+    return () => {
+      if (rafId) {
+        window.cancelAnimationFrame(rafId);
+      }
+      scroller.removeEventListener("scroll", onScroll);
+      observer?.disconnect();
+    };
+  }, [active, loading, problem, record.id, sheet]);
+
+  const { rowOffsets, totalRowsHeight, mergeOwnerStart } = useMemo(() => {
+    if (!sheet) {
+      return {
+        rowOffsets: [0],
+        totalRowsHeight: 0,
+        mergeOwnerStart: [] as number[],
+      };
+    }
+    const offsets = new Array<number>(sheet.rows.length + 1);
+    offsets[0] = 0;
+    const owners = new Array<number>(sheet.rows.length);
+    for (let r = 0; r < sheet.rows.length; r += 1) {
+      offsets[r + 1] = offsets[r] + sheet.rows[r].heightPx;
+      owners[r] = r;
+    }
+    for (let r = 0; r < sheet.rows.length; r += 1) {
+      const cells = sheet.rows[r].cells;
+      for (let c = 0; c < cells.length; c += 1) {
+        const span = cells[c].rowSpan ?? 1;
+        if (span > 1) {
+          const maxR = Math.min(sheet.rows.length - 1, r + span - 1);
+          for (let k = r + 1; k <= maxR; k += 1) {
+            if (r < owners[k]) {
+              owners[k] = r;
+            }
+          }
+        }
+      }
+    }
+    return {
+      rowOffsets: offsets,
+      totalRowsHeight: offsets[sheet.rows.length],
+      mergeOwnerStart: owners,
+    };
+  }, [sheet]);
+
+  const { startRow, endRow, topSpacerHeight, bottomSpacerHeight } = useMemo(() => {
+    if (!sheet || sheet.rows.length === 0) {
+      return { startRow: 0, endRow: 0, topSpacerHeight: 0, bottomSpacerHeight: 0 };
+    }
+    const rowCount = sheet.rows.length;
+    const scale = zoom / 100;
+    const unscaledTop = Math.max(0, viewport.scrollTop / scale - COLUMN_HEADER_HEIGHT_PX);
+    const unscaledBottom = Math.max(
+      unscaledTop,
+      (viewport.scrollTop + viewport.height) / scale - COLUMN_HEADER_HEIGHT_PX,
+    );
+
+    let lo = 0;
+    let hi = rowCount;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (rowOffsets[mid + 1] <= unscaledTop) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    let start = Math.max(0, lo - VIRTUAL_ROW_OVERSCAN);
+    while (start > 0 && mergeOwnerStart[start] < start) {
+      start = mergeOwnerStart[start];
+    }
+
+    lo = start;
+    hi = rowCount;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (rowOffsets[mid] < unscaledBottom) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    let end = Math.min(rowCount, lo + VIRTUAL_ROW_OVERSCAN);
+    for (let r = start; r < end; r += 1) {
+      const cells = sheet.rows[r].cells;
+      for (let c = 0; c < cells.length; c += 1) {
+        const span = cells[c].rowSpan ?? 1;
+        if (span > 1) {
+          end = Math.max(end, Math.min(rowCount, r + span));
+        }
+      }
+    }
+
+    return {
+      startRow: start,
+      endRow: end,
+      topSpacerHeight: rowOffsets[start],
+      bottomSpacerHeight: totalRowsHeight - rowOffsets[end],
+    };
+  }, [mergeOwnerStart, rowOffsets, sheet, totalRowsHeight, viewport.height, viewport.scrollTop, zoom]);
 
   const { matches, matchesByRow } = useMemo(() => {
     const trimmed = deferredQuery.trim().toLowerCase();
@@ -295,14 +433,25 @@ export default memo(function SpreadsheetPreview({
   }, [deferredQuery, active]);
 
   useEffect(() => {
-    if (!activeMatchKey || !scrollerRef.current) {
+    if (!activeMatchKey || !activeMatch || !scrollerRef.current) {
       return;
     }
-    const target = scrollerRef.current.querySelector<HTMLElement>(
-      `td[data-cell-key="${activeMatchKey}"]`,
-    );
-    target?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [activeMatchKey]);
+    const scroller = scrollerRef.current;
+    const target = scroller.querySelector<HTMLElement>(`td[data-cell-key="${activeMatchKey}"]`);
+    if (target) {
+      target.scrollIntoView({ block: "nearest", inline: "nearest" });
+      return;
+    }
+    const scale = zoom / 100;
+    const rowY = (COLUMN_HEADER_HEIGHT_PX + (rowOffsets[activeMatch.row] ?? 0)) * scale;
+    scroller.scrollTop = Math.max(0, rowY - scroller.clientHeight / 3);
+    window.requestAnimationFrame(() => {
+      const mounted = scrollerRef.current?.querySelector<HTMLElement>(
+        `td[data-cell-key="${activeMatchKey}"]`,
+      );
+      mounted?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
+  }, [activeMatch, activeMatchKey, rowOffsets, zoom]);
 
   const normalizedBounds = useMemo(() => {
     if (!selection) {
@@ -329,15 +478,12 @@ export default memo(function SpreadsheetPreview({
     let nonEmptyCount = 0;
     let numericCount = 0;
     let sum = 0;
-    const rowsText: string[] = [];
 
     for (let r = normalizedBounds.minRow; r <= normalizedBounds.maxRow; r += 1) {
       const row = sheet.rows[r];
-      const rowValues: string[] = [];
       for (let c = normalizedBounds.minCol; c <= normalizedBounds.maxCol; c += 1) {
         const cell = row?.cells[c];
-        const value = cell && !cell.coveredByMerge ? cell.value : "";
-        rowValues.push(value);
+        const value = cell && !cell.coveredByMerge ? cell.value ?? "" : "";
         if (value.trim() !== "") {
           nonEmptyCount += 1;
           const numeric = parseSpreadsheetNumber(value);
@@ -347,7 +493,6 @@ export default memo(function SpreadsheetPreview({
           }
         }
       }
-      rowsText.push(rowValues.join("\t"));
     }
 
     const startLabel = `${sheet.columns[normalizedBounds.minCol]?.label ?? toColumnLabel(normalizedBounds.minCol + 1)}${sheet.rows[normalizedBounds.minRow]?.index ?? normalizedBounds.minRow + 1}`;
@@ -359,21 +504,30 @@ export default memo(function SpreadsheetPreview({
       numericCount,
       sum,
       average: numericCount > 0 ? sum / numericCount : null,
-      tsv: rowsText.join("\n"),
     };
   }, [normalizedBounds, sheet]);
 
   const copySelection = useCallback(async () => {
-    if (!selectionSummary) {
+    if (!sheet || !normalizedBounds) {
       return;
     }
+    const rowsText: string[] = [];
+    for (let r = normalizedBounds.minRow; r <= normalizedBounds.maxRow; r += 1) {
+      const row = sheet.rows[r];
+      const rowValues: string[] = [];
+      for (let c = normalizedBounds.minCol; c <= normalizedBounds.maxCol; c += 1) {
+        const cell = row?.cells[c];
+        rowValues.push(cell && !cell.coveredByMerge ? cell.value ?? "" : "");
+      }
+      rowsText.push(rowValues.join("\t"));
+    }
     try {
-      await navigator.clipboard.writeText(selectionSummary.tsv);
+      await navigator.clipboard.writeText(rowsText.join("\n"));
       setCopiedNotice(true);
     } catch {
       // Clipboard API unavailable
     }
-  }, [selectionSummary]);
+  }, [normalizedBounds, sheet]);
 
   const startSelection = useCallback((rowIndex: number, cellIndex: number, shiftKey: boolean) => {
     isSelectingRef.current = true;
@@ -412,6 +566,38 @@ export default memo(function SpreadsheetPreview({
     setMatchCursor((current) => (current + delta + matches.length) % matches.length);
   }
 
+  async function toggleShowImages() {
+    if (showImages) {
+      setShowImages(false);
+      return;
+    }
+    if (demo || !sheet?.hasImages) {
+      return;
+    }
+    if (imageCacheKey in imagesByKey) {
+      setShowImages(true);
+      return;
+    }
+    const targetRecordId = record.id;
+    const targetSheet = active;
+    const targetKey = imageCacheKey;
+    setImagesLoading(true);
+    try {
+      const loaded = await loadSpreadsheetImages(targetRecordId, targetSheet);
+      if (activeRecordIdRef.current !== targetRecordId) {
+        return;
+      }
+      setImagesByKey((current) => ({ ...current, [targetKey]: loaded }));
+      setShowImages(true);
+    } catch {
+      // Keep grid interactive even if optional images fail to load.
+    } finally {
+      if (activeRecordIdRef.current === targetRecordId) {
+        setImagesLoading(false);
+      }
+    }
+  }
+
   function switchSheet(nextIndex: number) {
     if (nextIndex === active) {
       return;
@@ -426,8 +612,13 @@ export default memo(function SpreadsheetPreview({
     window.requestAnimationFrame(() => {
       const saved = sheetScrollRef.current.get(nextIndex);
       if (scrollerRef.current) {
-        scrollerRef.current.scrollTop = saved?.top ?? 0;
+        const nextTop = saved?.top ?? 0;
+        scrollerRef.current.scrollTop = nextTop;
         scrollerRef.current.scrollLeft = saved?.left ?? 0;
+        setViewport({
+          scrollTop: nextTop,
+          height: scrollerRef.current.clientHeight || 600,
+        });
       }
     });
   }
@@ -504,6 +695,17 @@ export default memo(function SpreadsheetPreview({
           {sheet.columns.length} visible columns{sheet.truncatedColumns ? " (preview limit)" : ""}
         </span>
         <div className="toolbar-actions">
+          {sheet.hasImages ? (
+            <button
+              className="secondary toolbar-find-btn"
+              disabled={imagesLoading}
+              onClick={() => void toggleShowImages()}
+              title={showImages ? "Hide embedded images" : "Load and display embedded images"}
+              type="button"
+            >
+              {imagesLoading ? "Loading…" : showImages ? "Hide images" : "Show images"}
+            </button>
+          ) : null}
           <button
             className="secondary toolbar-find-btn"
             onClick={() => (findOpen ? setFindOpen(false) : openFindBar())}
@@ -603,8 +805,43 @@ export default memo(function SpreadsheetPreview({
                 ))}
               </tr>
             </thead>
-            <tbody>
-              {sheet.rows.map((row, rowIndex) => {
+            <tbody
+              onMouseDown={(event) => {
+                if (event.button !== 0) {
+                  return;
+                }
+                const cell = (event.target as HTMLElement | null)?.closest<HTMLTableCellElement>("td[data-row][data-col]");
+                if (!cell) {
+                  return;
+                }
+                const rowIndex = Number(cell.dataset.row);
+                const cellIndex = Number(cell.dataset.col);
+                if (Number.isFinite(rowIndex) && Number.isFinite(cellIndex)) {
+                  startSelection(rowIndex, cellIndex, event.shiftKey);
+                }
+              }}
+              onMouseOver={(event) => {
+                if (!isSelectingRef.current) {
+                  return;
+                }
+                const cell = (event.target as HTMLElement | null)?.closest<HTMLTableCellElement>("td[data-row][data-col]");
+                if (!cell) {
+                  return;
+                }
+                const rowIndex = Number(cell.dataset.row);
+                const cellIndex = Number(cell.dataset.col);
+                if (Number.isFinite(rowIndex) && Number.isFinite(cellIndex)) {
+                  extendSelection(rowIndex, cellIndex);
+                }
+              }}
+            >
+              {topSpacerHeight > 0 ? (
+                <tr aria-hidden="true" className="sheet-virtual-spacer" style={{ height: topSpacerHeight }}>
+                  <td colSpan={sheet.columns.length + 1} />
+                </tr>
+              ) : null}
+              {sheet.rows.slice(startRow, endRow).map((row, offset) => {
+                const rowIndex = startRow + offset;
                 const inSelectedRow = Boolean(
                   normalizedBounds &&
                     rowIndex >= normalizedBounds.minRow &&
@@ -616,8 +853,6 @@ export default memo(function SpreadsheetPreview({
                     columns={sheet.columns}
                     key={row.index}
                     matchCols={matchesByRow.get(rowIndex)}
-                    onExtendSelection={extendSelection}
-                    onStartSelection={startSelection}
                     row={row}
                     rowIndex={rowIndex}
                     selMaxCol={inSelectedRow && normalizedBounds ? normalizedBounds.maxCol : -1}
@@ -626,22 +861,29 @@ export default memo(function SpreadsheetPreview({
                   />
                 );
               })}
+              {bottomSpacerHeight > 0 ? (
+                <tr aria-hidden="true" className="sheet-virtual-spacer" style={{ height: bottomSpacerHeight }}>
+                  <td colSpan={sheet.columns.length + 1} />
+                </tr>
+              ) : null}
             </tbody>
           </table>
-          {sheet.images?.map((image, index) => (
-            <img
-              alt=""
-              className="sheet-image"
-              key={`${index}-${image.leftPx}-${image.topPx}`}
-              src={image.dataUrl}
-              style={{
-                left: ROW_HEADER_WIDTH_PX + image.leftPx,
-                top: COLUMN_HEADER_HEIGHT_PX + image.topPx,
-                width: image.widthPx,
-                height: image.heightPx,
-              }}
-            />
-          ))}
+          {showImages
+            ? currentImages.map((image, index) => (
+                <img
+                  alt=""
+                  className="sheet-image"
+                  key={`${index}-${image.leftPx}-${image.topPx}`}
+                  src={image.dataUrl}
+                  style={{
+                    left: ROW_HEADER_WIDTH_PX + image.leftPx,
+                    top: COLUMN_HEADER_HEIGHT_PX + image.topPx,
+                    width: image.widthPx,
+                    height: image.heightPx,
+                  }}
+                />
+              ))
+            : null}
         </div>
       </div>
       {selectionSummary ? (
@@ -675,7 +917,7 @@ export default memo(function SpreadsheetPreview({
           <button
             aria-selected={active === index}
             className={active === index ? "active" : ""}
-            key={item.name}
+            key={`${index}-${item.name}`}
             onClick={() => switchSheet(index)}
             role="tab"
           >

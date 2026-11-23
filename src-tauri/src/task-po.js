@@ -11,6 +11,9 @@
   let pendingId;
   let nextCheck = 0;
   let expandedMoreFor = '';
+  let lastPanelEl = null;
+  let lastPanelFingerprint = '';
+  let lastValues = null;
   const requiredKeys = ['client', 'product', 'po', 'start', 'end', 'total', 'plan'];
   const handoff = 'https://go.mediaocean.com/robots.txt#abw-check-po?';
   function setStatus(status) {
@@ -35,6 +38,7 @@
   const actionSelector = 'button,[role="button"],[title],[aria-label],[data-test-id],[data-testid]';
   const name = el => ['aria-label','title','data-test-id','data-testid'].map(a => el.getAttribute(a) || '').concat((el.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => document.getElementById(id)?.textContent || '')).join(' ');
   function sync() {
+    if (document.hidden) return;
     let anchor = null;
     panel = null;
     for (const close of [...document.querySelectorAll(actionSelector)].reverse()) {
@@ -48,7 +52,7 @@
       }
       if (anchor) break;
     }
-    if (!anchor) {button.remove(); lastBooking = ''; pendingId = undefined; expandedMoreFor = ''; return;}
+    if (!anchor) {button.remove(); lastBooking = ''; pendingId = undefined; expandedMoreFor = ''; lastPanelEl = null; lastPanelFingerprint = ''; lastValues = null; return;}
     const r = anchor.getBoundingClientRect();
     button.style.zIndex = '2147483647';
     button.style.top = (r.bottom + 8) + 'px';
@@ -58,12 +62,19 @@
     queueCheck();
   }
   function bookingValues() {
+    const fingerprint = panel ? `${panel.childElementCount}:${panel.textContent || ''}` : '';
+    if (panel === lastPanelEl && fingerprint === lastPanelFingerprint && lastValues) {
+      return new URLSearchParams(lastValues);
+    }
     const lines = panel.innerText.split(/\n/).map(line => line.trim()).filter(Boolean);
     const values = new URLSearchParams();
     for (const [key, label] of Object.entries(labels)) {
       const i = lines.findIndex(line => line.replace(/[\s*:]+$/, '').toLowerCase() === label.toLowerCase());
       if (i >= 0 && lines[i + 1]) values.set(key, lines[i + 1].slice(0, 100));
     }
+    lastPanelEl = panel;
+    lastPanelFingerprint = fingerprint;
+    lastValues = new URLSearchParams(values);
     return values;
   }
   function hasRequiredValues(values) {
@@ -116,17 +127,26 @@
     }
     location.assign(handoff + values);
   };
-  let scheduled = false;
+  let scheduleTimer = 0;
+  let rafId = 0;
   function schedule() {
-    if (!scheduled) {scheduled=true; requestAnimationFrame(() => {scheduled=false; sync();});}
+    if (scheduleTimer || rafId) return;
+    scheduleTimer = setTimeout(() => {
+      scheduleTimer = 0;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        sync();
+      });
+    }, 120);
   }
   function start() {
     if (!style.isConnected) (document.head || document.documentElement)?.append(style);
-    window.__abwPoObserver.observe(document.documentElement,{childList:true,subtree:true});
-    addEventListener('resize',schedule); addEventListener('scroll',schedule,true); addEventListener('hashchange',schedule);
+    window.__abwPoObserver.observe(document.documentElement, { childList: true, subtree: true });
+    addEventListener('resize', schedule, { passive: true });
+    addEventListener('hashchange', schedule);
     schedule();
     setInterval(() => { if (!document.hidden && panel) schedule(); }, 15000);
   }
-  window.__abwPoObserver=new MutationObserver(schedule);
-  if (document.documentElement) start(); else addEventListener('DOMContentLoaded',start,{once:true});
+  window.__abwPoObserver = new MutationObserver(schedule);
+  if (document.documentElement) start(); else addEventListener('DOMContentLoaded', start, { once: true });
 })();

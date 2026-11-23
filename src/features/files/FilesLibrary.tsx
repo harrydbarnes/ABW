@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { DownloadRecord, FileFilter } from "../../types";
 
 interface Props {
@@ -74,12 +74,20 @@ export const FilesLibrary = memo(function FilesLibrary({
   selectedId,
 }: Props) {
   const pinned = useMemo(() => new Set(pinnedIds), [pinnedIds]);
+  const sectionRef = useRef<HTMLElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const labelsRef = useRef<HTMLDivElement>(null);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
   const todayString = useMemo(() => new Date().toDateString(), [downloads]);
   const [colWidths, setColWidths] = useState<FilesColumnWidths | null>(() => loadColumnWidths());
   const [draggingCol, setDraggingCol] = useState<keyof FilesColumnWidths | null>(null);
+
+  useEffect(() => {
+    return () => {
+      dragCleanupRef.current?.();
+    };
+  }, []);
 
   const filesColsStyle = useMemo<CSSProperties | undefined>(() => {
     if (!colWidths) return undefined;
@@ -89,12 +97,14 @@ export const FilesLibrary = memo(function FilesLibrary({
   }, [colWidths]);
 
   function startColumnResize(col: keyof FilesColumnWidths, clientX: number) {
+    dragCleanupRef.current?.();
     const labelCells = labelsRef.current?.querySelectorAll<HTMLElement>(".list-label-cell");
     const initial: FilesColumnWidths = colWidths ?? {
       file: labelCells?.[0]?.getBoundingClientRect().width ?? DEFAULT_COL_WIDTHS.file,
       source: labelCells?.[1]?.getBoundingClientRect().width ?? DEFAULT_COL_WIDTHS.source,
       date: labelCells?.[2]?.getBoundingClientRect().width ?? DEFAULT_COL_WIDTHS.date,
     };
+    let latest: FilesColumnWidths = initial;
     const startX = clientX;
     setDraggingCol(col);
     const limits: Record<keyof FilesColumnWidths, [number, number]> = {
@@ -105,24 +115,37 @@ export const FilesLibrary = memo(function FilesLibrary({
     const [minW, maxW] = limits[col];
     const onMove = (event: PointerEvent) => {
       const delta = event.clientX - startX;
-      const next: FilesColumnWidths = {
+      latest = {
         ...initial,
         [col]: Math.round(Math.max(minW, Math.min(maxW, initial[col] + delta))),
       };
-      setColWidths(next);
+      sectionRef.current?.style.setProperty(
+        "--files-cols",
+        `minmax(${latest.file}px, 1fr) ${latest.source}px ${latest.date}px 98px`,
+      );
+    };
+    const finish = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      dragCleanupRef.current = null;
+      setDraggingCol(null);
+      setColWidths(latest);
       try {
-        window.localStorage.setItem("abw.filesColWidths", JSON.stringify(next));
+        window.localStorage.setItem("abw.filesColWidths", JSON.stringify(latest));
       } catch {
         // ignore storage errors
       }
     };
-    const onUp = () => {
-      setDraggingCol(null);
+    dragCleanupRef.current = () => {
       window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      dragCleanupRef.current = null;
     };
     window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
@@ -187,6 +210,7 @@ export const FilesLibrary = memo(function FilesLibrary({
       className="files-library"
       aria-label="Downloaded files"
       onKeyDown={handleKeyDown}
+      ref={sectionRef}
       style={filesColsStyle}
     >
       <header className="library-header">

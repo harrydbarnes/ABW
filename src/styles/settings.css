@@ -1451,7 +1451,7 @@
 
 .row-action-button:hover:not(:disabled) {
   background: #edf2fb;
-  color: var(--ink);
+  color: var(--text);
 }
 
 .row-action-button.danger:hover:not(:disabled) {
@@ -1467,6 +1467,47 @@
 .preview-actions .secondary.danger {
   color: #b52b35;
   border-color: #f2c7cb;
+}
+
+.storage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.startup-url-reorder {
+  display: inline-flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.startup-url-reorder button {
+  width: 28px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.startup-url-reorder button:hover:not(:disabled) {
+  background: var(--surface-soft);
+}
+
+.startup-url-reorder button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.startup-url-error {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #b52b35;
 }
 
 .preview-actions .secondary.danger:hover:not(:disabled) {

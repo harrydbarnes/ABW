@@ -13,6 +13,7 @@
   --accent: #315de8;
   --accent-soft: #e7ecff;
   --border: #dde4ef;
+  --text: #14233a;
   --muted: #637188;
   --surface: #ffffff;
   --surface-soft: #f5f7fb;
@@ -576,7 +577,6 @@ input:focus-visible {
   font-weight: 550;
   outline: 0;
   transform-origin: left center;
-  will-change: transform, opacity, filter;
 }
 
 .workspace-tab .tab-title {
@@ -628,21 +628,82 @@ input:focus-visible {
 
 .workspace-tab.split-left,
 .workspace-tab.split-right {
-  box-shadow: inset 0 0 0 1px rgb(101 135 246 / 34%);
+  padding-left: 9px;
 }
 
-.workspace-tab.split-left::before,
-.workspace-tab.split-right::before {
-  content: "";
-  width: 4px;
-  height: 16px;
-  border-radius: 99px;
+.workspace-tab.split-left {
+  box-shadow: inset 0 -2px 0 #7095ff, inset 0 0 0 1px rgb(112 149 255 / 42%);
+}
+
+.workspace-tab.split-right {
+  box-shadow: inset 0 -2px 0 #4ed1ad, inset 0 0 0 1px rgb(78 209 173 / 42%);
+}
+
+.tab-split-badge {
   flex: none;
-  background: #8fa8ff;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 5px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  line-height: 1;
 }
 
-.workspace-tab.split-right::before {
-  background: #73d6bb;
+.tab-split-badge.left {
+  color: #0e1e45;
+  background: #8aa8ff;
+}
+
+.tab-split-badge.right {
+  color: #082d24;
+  background: #67dcb9;
+}
+
+.split-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 30px;
+  padding: 0 4px;
+  border: 1px solid var(--nav-border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--nav-active) 48%, var(--nav));
+  flex: none;
+}
+
+.split-controls button {
+  height: 22px;
+  border-radius: 5px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--nav-text);
+  font-size: 11px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.split-controls .split-ratio-btn {
+  padding: 0 6px;
+}
+
+.split-controls .split-icon-btn {
+  width: 22px;
+  font-size: 13px;
+}
+
+.split-controls .split-icon-btn .material-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.split-controls button:hover {
+  color: var(--nav-selected-text);
+  background: var(--nav-active);
 }
 
 .workspace-tab:focus-visible {
@@ -1108,21 +1169,6 @@ input:focus-visible {
   pointer-events: auto;
 }
 
-.session-toast {
-  height: auto;
-  min-height: 44px;
-  max-width: 360px;
-  width: 360px;
-  padding: 9px 9px 9px 14px;
-  white-space: normal;
-  animation: none;
-}
-
-.session-toast > span:first-child {
-  min-width: 0;
-  flex: 1;
-}
-
 .toast-actions {
   display: flex;
   gap: 6px;
@@ -1193,6 +1239,42 @@ input:focus-visible {
   gap: 10px;
   color: #627188;
   background: var(--surface);
+}
+
+.wrike-split-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc((100% - 8px) * var(--wrike-split-ratio, 0.5));
+  width: 8px;
+  z-index: 6;
+  cursor: col-resize;
+  background: var(--nav);
+  display: grid;
+  place-items: center;
+  touch-action: none;
+  user-select: none;
+  transition: background-color 140ms ease;
+}
+
+.wrike-split-divider::after {
+  content: "";
+  width: 3px;
+  height: 44px;
+  border-radius: 99px;
+  background: rgb(255 255 255 / 32%);
+  transition: height 140ms ease, background-color 140ms ease;
+}
+
+.wrike-split-divider:hover,
+.wrike-split-divider.dragging {
+  background: var(--nav-active);
+}
+
+.wrike-split-divider:hover::after,
+.wrike-split-divider.dragging::after {
+  height: 68px;
+  background: #8aa8ff;
 }
 
 .split-drop-zones {
