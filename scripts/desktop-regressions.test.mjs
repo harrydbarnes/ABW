@@ -272,4 +272,12 @@ test('injected theme, corner, and custom-scheme IPC are gated to wrike.com hosts
   }
 });
 
+test('task-po script detects task panels without URL id gate and auto-expands More', () => {
+  const poSource = readFileSync(new URL('../src-tauri/src/task-po.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(poSource, /\(\?:[?&#]\(\?:id\|taskId/);
+  assert.match(poSource, /function expandMoreIfNeeded\(/);
+  assert.match(poSource, /expandedMoreFor/);
+  assert.match(poSource, /\/\^more\$\/i\.test/);
+});
+
 
