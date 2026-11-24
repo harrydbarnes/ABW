@@ -358,6 +358,7 @@ test('injected file preview dismissal targets Wrike proofing viewer only and ign
   assert.match(snippet, /file-list-expander/);
   assert.match(snippet, /wrike-attachments-list-item/);
   assert.match(snippet, /attachment-list-item-download/);
+  assert.match(snippet, /abwShowPreviewLoading/);
   assert.doesNotMatch(snippet, /\[role="dialog"\]/);
   assert.doesNotMatch(snippet, /KeyboardEvent\(["']keydown["']/);
 

@@ -15,11 +15,13 @@ export default memo(function PreviewPanel({
   onOpenSourceTask,
   onRevealDownload,
   onDeleteDownload,
+  onClosePreview,
 }: {
   record: DownloadRecord | null;
   onOpenSourceTask?: (record: DownloadRecord) => void;
   onRevealDownload?: (id: string) => void;
   onDeleteDownload?: (record: DownloadRecord) => void;
+  onClosePreview?: () => void;
 }) {
   function handleOpenTask(target: DownloadRecord) {
     if (onOpenSourceTask) {
@@ -81,6 +83,17 @@ export default memo(function PreviewPanel({
           <button className="primary" onClick={() => void openDownload(record.id)}>
             Open in Windows
           </button>
+          {onClosePreview ? (
+            <button
+              aria-label="Close preview and return to Wrike"
+              className="secondary preview-close-btn"
+              onClick={onClosePreview}
+              title="Close preview and return to Wrike"
+              type="button"
+            >
+              ×
+            </button>
+          ) : null}
         </div>
       </header>
       <Suspense fallback={<div className="document-loading">Preparing preview...</div>}>

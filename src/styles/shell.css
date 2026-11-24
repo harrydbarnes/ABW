@@ -371,7 +371,6 @@ input:focus-visible {
 .brand {
   height: 50px;
   padding-right: 15px;
-  border-right: 1px solid var(--nav-border);
   display: grid;
   align-items: center;
   flex: none;

@@ -191,6 +191,7 @@ export function App() {
   const [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
   const [isTopbarActionsMenuOpen, setIsTopbarActionsMenuOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [previewFromWrike, setPreviewFromWrike] = useState(false);
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [filter, setFilter] = useState<FileFilter>("all");
@@ -599,6 +600,7 @@ export function App() {
         if (record.kind === "pdf" || record.kind === "spreadsheet" || record.kind === "image") {
           setIsTopbarActionsMenuOpen(false);
           setTicketModal(null);
+          setPreviewFromWrike(true);
           setScreen("files");
           window.requestAnimationFrame(() => {
             void hideWrike(wrikeTabsRef.current.map((tab) => tab.id));
@@ -1120,6 +1122,7 @@ export function App() {
   }
 
   async function restoreWrikeView() {
+    setPreviewFromWrike(false);
     const split = wrikeSplitRef.current;
     if (split && wrikeTabExists(split.leftTabId) && wrikeTabExists(split.rightTabId)) {
       await showWrikeSplit(split, activeWrikeTabIdRef.current);
@@ -1456,6 +1459,7 @@ export function App() {
   async function showLocalScreen(next: Exclude<Screen, "wrike">) {
     setIsTopbarActionsMenuOpen(false);
     setTicketModal(null);
+    setPreviewFromWrike(false);
     setScreen(next);
     await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
     await hideWrike(wrikeTabsRef.current.map((tab) => tab.id));
@@ -2664,6 +2668,7 @@ export function App() {
             />
             <Suspense fallback={<div className="preview-panel loading">Loading preview...</div>}>
               <PreviewPanel
+                onClosePreview={previewFromWrike ? () => void restoreWrikeView() : undefined}
                 onDeleteDownload={removeDownloadedFile}
                 onOpenSourceTask={(record) => void openRecordSourceTask(record)}
                 onRevealDownload={revealDownloadedFile}

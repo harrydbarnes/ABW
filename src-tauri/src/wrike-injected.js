@@ -1124,12 +1124,107 @@
   let abwPreviewDownloadTimer = 0;
   let abwPreviewDownloadRequest = 0;
   let abwExpectingDownloadUntil = 0;
+  let abwPreviewLoadingTimer = 0;
+  const abwHidePreviewLoading = () => {
+    window.clearTimeout(abwPreviewLoadingTimer);
+    abwPreviewLoadingTimer = 0;
+    const existing = document.getElementById("abw-preview-loading-overlay");
+    if (existing) existing.remove();
+  };
+  const abwShowPreviewLoading = (fileName = "") => {
+    if (!document.body || abwAutoDownload) return;
+    if (!document.getElementById("abw-preview-loading-style")) {
+      const style = document.createElement("style");
+      style.id = "abw-preview-loading-style";
+      style.textContent = `
+        @keyframes abw-preview-spin { to { transform: rotate(360deg); } }
+        #abw-preview-loading-overlay {
+          position: fixed;
+          inset: 0;
+          z-index: 2147483646;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(15, 23, 42, 0.36);
+          backdrop-filter: blur(2px);
+          animation: abw-preview-fade 140ms ease forwards;
+        }
+        @keyframes abw-preview-fade { from { opacity: 0; } to { opacity: 1; } }
+        .abw-preview-loading-toast {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          max-width: min(420px, calc(100vw - 48px));
+          padding: 13px 18px;
+          border-radius: 10px;
+          background: #ffffff;
+          color: #13223c;
+          border: 1px solid #d8e1ef;
+          box-shadow: 0 14px 36px rgba(15, 23, 42, 0.22);
+          font: 600 13.5px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+        .abw-preview-loading-spinner {
+          width: 18px;
+          height: 18px;
+          flex: none;
+          box-sizing: border-box;
+          border: 2.5px solid #d9e2f1;
+          border-top-color: #315de8;
+          border-radius: 50%;
+          animation: abw-preview-spin 700ms linear infinite;
+        }
+        .abw-preview-loading-meta {
+          min-width: 0;
+        }
+        .abw-preview-loading-name {
+          font-size: 12px;
+          font-weight: 500;
+          color: #596981;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+      `;
+      (document.head || document.documentElement).append(style);
+    }
+    abwHidePreviewLoading();
+    const overlay = document.createElement("div");
+    overlay.id = "abw-preview-loading-overlay";
+    const toast = document.createElement("div");
+    toast.className = "abw-preview-loading-toast";
+    const spinner = document.createElement("span");
+    spinner.className = "abw-preview-loading-spinner";
+    const meta = document.createElement("div");
+    meta.className = "abw-preview-loading-meta";
+    const title = document.createElement("div");
+    title.textContent = "File Preview Loading…";
+    meta.append(title);
+    if (fileName) {
+      const sub = document.createElement("div");
+      sub.className = "abw-preview-loading-name";
+      sub.textContent = fileName;
+      meta.append(sub);
+    }
+    toast.append(spinner, meta);
+    overlay.append(toast);
+    document.body.append(overlay);
+    abwPreviewLoadingTimer = window.setTimeout(abwHidePreviewLoading, 6000);
+  };
+  if (!window.__abwPreviewLoadingListeners) {
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) abwHidePreviewLoading();
+    });
+    window.addEventListener("pagehide", abwHidePreviewLoading);
+    window.__abwPreviewLoadingListeners = true;
+  }
   const abwCancelQueuedPreviewDownload = () => {
     window.clearInterval(abwPreviewDownloadTimer);
     abwPreviewDownloadRequest += 1;
+    abwHidePreviewLoading();
   };
   const abwQueuePreviewDownload = (fileName = "") => {
     window.clearInterval(abwPreviewDownloadTimer);
+    abwShowPreviewLoading(fileName);
     const request = ++abwPreviewDownloadRequest;
     const expectedFileName = abwNormalizeFileName(fileName);
     const previousDialogs = new Map(
@@ -1177,8 +1272,11 @@
           return;
         }
       }
-      if (attempts >= 60) window.clearInterval(abwPreviewDownloadTimer);
-    }, 100);
+      if (attempts >= 120) {
+        window.clearInterval(abwPreviewDownloadTimer);
+        abwHidePreviewLoading();
+      }
+    }, 50);
   };
   const abwKeepDownloadsInWebview = (event) => {
     abwScheduleThemeDetect(220);
@@ -1197,7 +1295,9 @@
         if (inlineDownload && abwIsVisible(inlineDownload)) {
           event.preventDefault();
           event.stopPropagation();
+          event.stopImmediatePropagation();
           abwCancelQueuedPreviewDownload();
+          abwShowPreviewLoading(matchedName);
           abwExpectingDownloadUntil = Date.now() + 5000;
           inlineDownload.click();
         } else {
