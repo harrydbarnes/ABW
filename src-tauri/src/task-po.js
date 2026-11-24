@@ -1,7 +1,51 @@
 (() => {
   if (window !== window.top || !/(^|\.)wrike\.com$/.test(location.hostname) || window.__abwPoObserver) return;
   const style = document.createElement('style');
-  style.textContent = '.abw-check-po-btn{position:fixed;z-index:1000;padding:4px 12px;border:1px solid #aab4c5;border-radius:6px;background:Canvas;color:CanvasText;font:500 13px system-ui;cursor:pointer;transition:transform 140ms ease,background-color 140ms ease,border-color 140ms ease,box-shadow 140ms ease,color 140ms ease}.abw-check-po-btn:hover{transform:translateY(-1px);background:#f3f6fc;border-color:#7d95c4;box-shadow:0 3px 10px rgba(16,29,53,.12)}.abw-check-po-btn:active{transform:translateY(0);box-shadow:none}';
+  style.textContent = `
+    .abw-check-po-btn {
+      position: fixed;
+      z-index: 1000;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border: 1px solid #aab4c5;
+      border-radius: 6px;
+      background: Canvas;
+      color: CanvasText;
+      font: 500 13px system-ui;
+      cursor: pointer;
+      transition: transform 140ms ease, background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease, color 140ms ease;
+    }
+    .abw-check-po-btn:hover {
+      transform: translateY(-1px);
+      background: #f3f6fc;
+      border-color: #7d95c4;
+      box-shadow: 0 3px 10px rgba(16, 29, 53, .12);
+    }
+    .abw-check-po-btn:active { transform: translateY(0); box-shadow: none; }
+    .abw-check-po-btn[aria-busy="true"] {
+      --abw-po-accent: #7355d9;
+      background: color-mix(in srgb, var(--abw-po-accent) 9%, Canvas);
+      border-color: color-mix(in srgb, var(--abw-po-accent) 35%, Canvas);
+    }
+    .abw-check-po-btn[aria-busy="true"]::before {
+      content: '';
+      width: 11px;
+      height: 11px;
+      box-sizing: border-box;
+      border: 2px solid color-mix(in srgb, var(--abw-po-accent) 35%, Canvas);
+      border-top-color: var(--abw-po-accent);
+      border-radius: 50%;
+      animation: abw-po-check-spin .8s linear infinite;
+    }
+    @keyframes abw-po-check-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .abw-check-po-btn { transition: none; }
+      .abw-check-po-btn:hover { transform: none; }
+      .abw-check-po-btn[aria-busy="true"]::before { animation: none; }
+    }
+  `;
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'abw-check-po-btn';
@@ -26,6 +70,8 @@
       unavailable: ['Check PO', 'CanvasText'],
     };
     const [label, color] = states[status] || states.unavailable;
+    if (status === 'checking') button.setAttribute('aria-busy', 'true');
+    else button.removeAttribute('aria-busy');
     if (button.textContent !== label) button.textContent = label;
     button.style.color = color;
   }

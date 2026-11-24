@@ -296,6 +296,32 @@ test('task-po script detects task panels without URL id gate and waits for the S
   assert.match(poSource, /panel\.textContent/);
 });
 
+test('PO button is busy only while an automatic lookup is in progress', () => {
+  const poSource = readFileSync(new URL('../src-tauri/src/task-po.js', import.meta.url), 'utf8');
+  const start = poSource.indexOf('  function setStatus(status)');
+  const end = poSource.indexOf('  window.__abwReceivePoStatus', start);
+  assert.ok(start >= 0 && end > start);
+  const attributes = new Map();
+  const button = {
+    style: {},
+    setAttribute: (name, value) => attributes.set(name, value),
+    removeAttribute: name => attributes.delete(name),
+  };
+  const setStatus = new Function('button', poSource.slice(start, end) + 'return setStatus;')(button);
+
+  for (const [status, label] of [
+    ['checked', '✓ PO Checked'], ['review', 'Review PO'],
+    ['signin', 'Sign in to Prisma'], ['unavailable', 'Check PO'],
+  ]) {
+    setStatus('checking');
+    assert.equal(button.textContent, 'Checking PO…');
+    assert.equal(attributes.get('aria-busy'), 'true');
+    setStatus(status);
+    assert.equal(button.textContent, label);
+    assert.equal(attributes.has('aria-busy'), false);
+  }
+});
+
 test('preview installer hooks target abw.exe and injected script gates hidden tabs and drag corner sync', () => {
   const previewHooks = readFileSync(new URL('../src-tauri/assets/installer-hooks-preview.nsh', import.meta.url), 'utf8');
   assert.match(previewHooks, /\$INSTDIR\\abw\.exe/);
