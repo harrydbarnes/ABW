@@ -337,6 +337,8 @@ test('PO button is busy only while an automatic lookup is in progress', () => {
     assert.equal(button.textContent, label);
     assert.equal(attributes.has('aria-busy'), false);
   }
+  assert.match(poSource, /function clearPending\(\)/);
+  assert.match(poSource, /pendingTimer = setTimeout/);
 });
 
 test('preview installer hooks target abw.exe and injected script gates hidden tabs and drag corner sync', () => {

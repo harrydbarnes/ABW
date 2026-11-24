@@ -53,6 +53,7 @@
   let panel;
   let lastBooking = '';
   let pendingId;
+  let pendingTimer = 0;
   let nextCheck = 0;
   let expandedMoreFor = '';
   let pendingManualCheck;
@@ -61,6 +62,11 @@
   let lastValues = null;
   const requiredKeys = ['client', 'po', 'start', 'end', 'total', 'plan'];
   const handoff = 'https://go.mediaocean.com/robots.txt#abw-check-po?';
+  function clearPending() {
+    clearTimeout(pendingTimer);
+    pendingTimer = 0;
+    pendingId = undefined;
+  }
   function setStatus(status) {
     const states = {
       checking: ['Checking PO…', 'CanvasText'],
@@ -77,7 +83,7 @@
   }
   window.__abwReceivePoStatus = (id, status) => {
     if (id !== pendingId) return;
-    pendingId = undefined;
+    clearPending();
     nextCheck = Date.now() + (status === 'checked' || status === 'review' ? 300000 : 60000);
     setStatus(status);
   };
@@ -104,7 +110,7 @@
       }
       if (anchor) break;
     }
-    if (!anchor) {button.remove(); lastBooking = ''; pendingId = undefined; pendingManualCheck = undefined; expandedMoreFor = ''; lastPanelEl = null; lastPanelFingerprint = ''; lastValues = null; return;}
+    if (!anchor) {button.remove(); lastBooking = ''; clearPending(); pendingManualCheck = undefined; expandedMoreFor = ''; lastPanelEl = null; lastPanelFingerprint = ''; lastValues = null; return;}
     const r = anchor.getBoundingClientRect();
     button.style.zIndex = '2147483647';
     button.style.top = (r.bottom + 8) + 'px';
@@ -171,7 +177,7 @@
     const booking = location.href + ' ' + values.toString();
     if (booking !== lastBooking) {
       lastBooking = booking;
-      pendingId = undefined;
+      clearPending();
       nextCheck = Date.now() + 750;
       setStatus('unavailable');
       setTimeout(schedule, 750);
@@ -181,8 +187,15 @@
       expandMoreIfNeeded(values);
       return;
     }
-    pendingId = crypto.randomUUID();
-    values.set('automatic', pendingId);
+    const id = crypto.randomUUID();
+    pendingId = id;
+    pendingTimer = setTimeout(() => {
+      if (pendingId !== id) return;
+      clearPending();
+      nextCheck = Date.now() + 60000;
+      setStatus('unavailable');
+    }, 25000);
+    values.set('automatic', id);
     setStatus('checking');
     location.assign(handoff + values);
   }
@@ -190,6 +203,10 @@
     event.preventDefault();
     event.stopPropagation();
     if (!panel || pendingManualCheck) return;
+    if (pendingId) {
+      clearPending();
+      setStatus('unavailable');
+    }
     const values = bookingValues();
     if (expandMoreIfNeeded(values)) {
       pendingManualCheck = { task: taskKey(), deadline: Date.now() + 3000 };
