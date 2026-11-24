@@ -913,6 +913,7 @@ export default memo(function SpreadsheetPreview({
           style={{
             zoom: `${zoom}%`,
             width: totalTableWidth,
+            minHeight: COLUMN_HEADER_HEIGHT_PX + totalRowsHeight,
           }}
         >
           <table className="sheet" style={{ width: totalTableWidth }}>
@@ -970,7 +971,7 @@ export default memo(function SpreadsheetPreview({
             >
               {topSpacerHeight > 0 ? (
                 <tr aria-hidden="true" className="sheet-virtual-spacer" style={{ height: topSpacerHeight }}>
-                  <td colSpan={renderedColCount} />
+                  <td colSpan={renderedColCount} style={{ height: topSpacerHeight, lineHeight: 0 }} />
                 </tr>
               ) : null}
               {sheet.rows.slice(startRow, endRow).map((row, offset) => {
@@ -1000,7 +1001,7 @@ export default memo(function SpreadsheetPreview({
               })}
               {bottomSpacerHeight > 0 ? (
                 <tr aria-hidden="true" className="sheet-virtual-spacer" style={{ height: bottomSpacerHeight }}>
-                  <td colSpan={renderedColCount} />
+                  <td colSpan={renderedColCount} style={{ height: bottomSpacerHeight, lineHeight: 0 }} />
                 </tr>
               ) : null}
             </tbody>

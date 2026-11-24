@@ -1,7 +1,10 @@
 .files-screen {
   display: grid;
   grid-template-columns: minmax(340px, var(--files-split-percent, 45%)) 18px minmax(360px, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .files-resizer {
@@ -32,6 +35,8 @@
 
 .files-library {
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   background: var(--surface);
   border-right: 1px solid var(--border);
   display: flex;

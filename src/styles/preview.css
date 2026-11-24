@@ -6,6 +6,7 @@
   box-shadow: var(--shadow);
   display: flex;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
   flex-direction: column;
 }
