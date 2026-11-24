@@ -670,22 +670,48 @@
     }, delay);
   };
   window.__abwDetectWrikeTheme = (force = false) => abwReportWrikeTheme(Boolean(force));
+  const abwEditableSelector = 'textarea, input[type="text"], [contenteditable="true"], [role="textbox"]';
+  const abwPendingSpellNodes = new Set();
+  const applySpellCheckToNode = (root) => {
+    if (!root) return;
+    if (root instanceof Element && root.matches?.(abwEditableSelector)) {
+      if (root.spellcheck !== enabled) root.spellcheck = enabled;
+    }
+    root.querySelectorAll?.(abwEditableSelector).forEach((element) => {
+      if (element.spellcheck !== enabled) element.spellcheck = enabled;
+    });
+  };
   const apply = () => {
-    document.querySelectorAll('textarea, input[type="text"], [contenteditable="true"], [role="textbox"]')
-      .forEach((element) => {
-        if (element.spellcheck !== enabled) element.spellcheck = enabled;
-      });
+    applySpellCheckToNode(document);
     abwScheduleThemeDetect(450);
   };
   window.__abwSetSpellCheck = (nextEnabled) => {
     enabled = Boolean(nextEnabled);
+    abwPendingSpellNodes.clear();
     apply();
   };
-  const scheduleApply = () => {
-    if (abwSpellApplyTimer) return;
+  const scheduleApply = (mutations) => {
+    if (Array.isArray(mutations)) {
+      for (const mutation of mutations) {
+        if (!mutation.addedNodes) continue;
+        for (const node of mutation.addedNodes) {
+          if (node instanceof Element) {
+            abwPendingSpellNodes.add(node);
+          }
+        }
+      }
+    }
+    if (!abwPendingSpellNodes.size || abwSpellApplyTimer) return;
     abwSpellApplyTimer = window.setTimeout(() => {
       abwSpellApplyTimer = 0;
-      apply();
+      const pending = Array.from(abwPendingSpellNodes);
+      abwPendingSpellNodes.clear();
+      for (const node of pending) {
+        if (node.isConnected) {
+          applySpellCheckToNode(node);
+        }
+      }
+      abwScheduleThemeDetect(450);
     }, 150);
   };
   const findEditable = (element) => {
@@ -1385,7 +1411,7 @@
   const start = () => {
     apply();
     let observer = null;
-    if (enabled && document.body) {
+    if (document.body) {
       observer = new MutationObserver(scheduleApply);
       observer.observe(document.body, {
         childList: true,
@@ -1403,6 +1429,8 @@
     themeObserver.observe(document.body, themeObserverOptions);
     window.__abwSpellCleanup = () => {
       window.clearTimeout(abwSpellApplyTimer);
+      abwSpellApplyTimer = 0;
+      abwPendingSpellNodes.clear();
       window.clearTimeout(abwThemeDetectTimer);
       window.clearTimeout(abwSchemeDrainTimer);
       abwSchemeDrainTimer = 0;

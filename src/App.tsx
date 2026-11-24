@@ -121,7 +121,7 @@ function extractWrikeTicketMetadata(title: string, url: string): { client?: stri
 }
 const READ_ONLY_URL = "https://login.wrike.com/login/?forceLogin=false&read";
 const APP_VERSION = import.meta.env.VITE_APP_VERSION;
-const LAUNCH_SPLASH_DURATION_MS = 2800;
+const LAUNCH_SPLASH_FALLBACK_MS = 2800;
 const PERIODIC_UPDATE_CHECK_MS = 4 * 60 * 60 * 1000;
 const FOCUS_UPDATE_CHECK_MIN_AGE_MS = 60 * 60 * 1000;
 const TOP_BANNER_HEIGHT = 42;
@@ -192,6 +192,7 @@ export function App() {
   const [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number } | null>(null);
   const [isTopbarActionsMenuOpen, setIsTopbarActionsMenuOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [compactFilesPane, setCompactFilesPane] = useState<"list" | "preview">("list");
   const [previewFromWrike, setPreviewFromWrike] = useState(false);
   const [previewRevealKey, setPreviewRevealKey] = useState(0);
   const [showPreviewedFiles, setShowPreviewedFiles] = useState(false);
@@ -257,6 +258,8 @@ export function App() {
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const tabLastActiveAtRef = useRef<Map<string, number>>(new Map());
+  const initializedTabIdsRef = useRef<Set<string>>(new Set());
+  const pendingSuspendTabIdsRef = useRef<Set<string>>(new Set());
   const lastRecordedVisitRef = useRef<Map<string, string>>(new Map());
   const filesDragCleanupRef = useRef<(() => void) | null>(null);
   const wrikeSplitDragCleanupRef = useRef<(() => void) | null>(null);
@@ -270,7 +273,6 @@ export function App() {
   const sessionSaveTimerRef = useRef<number | undefined>(undefined);
   const closingTabIdsRef = useRef(new Set<string>());
   const tabIdCounterRef = useRef(0);
-  const launchStartedAtRef = useRef(Date.now());
   const shortcutHandlerRef = useRef<(shortcut: WrikeShortcutEvent) => void>(() => undefined);
 
   const visiblePrivacyTabIds =
@@ -344,7 +346,7 @@ export function App() {
   useEffect(() => {
     const splashTimer = window.setTimeout(
       () => setIsLaunchSplashVisible(false),
-      LAUNCH_SPLASH_DURATION_MS,
+      LAUNCH_SPLASH_FALLBACK_MS,
     );
     return () => window.clearTimeout(splashTimer);
   }, []);
@@ -555,6 +557,7 @@ export function App() {
       if (warnings.length) {
         setStorageWarning(warnings.join(" "));
         setScreen("settings");
+        setIsLaunchSplashVisible(false);
         return;
       }
       if (isDesktopRuntime() && next.autoCheckForUpdates) {
@@ -572,18 +575,22 @@ export function App() {
         setSessionPrompt(next.lastWrikeSession);
       }
       if (next.launchWrikeOnStart) {
-        await waitForLaunchSplash();
         await openStartupTabs(next.startupTabUrls);
+        setIsLaunchSplashVisible(false);
         if (!canRestoreSession) {
           canPersistSessionRef.current = true;
         }
       } else {
         setScreen("files");
+        setIsLaunchSplashVisible(false);
         if (!canRestoreSession) {
           canPersistSessionRef.current = true;
         }
       }
-    }).catch((error) => setStorageWarning(`Unable to load preferences: ${String(error)}`));
+    }).catch((error) => {
+      setIsLaunchSplashVisible(false);
+      setStorageWarning(`Unable to load preferences: ${String(error)}`);
+    });
     let cancelled = false;
     const unsubscribers: Array<() => void> = [];
     const registerUnsubscriber = (promise: Promise<() => void>) => {
@@ -602,6 +609,7 @@ export function App() {
         if (record.kind === "pdf" || record.kind === "spreadsheet" || record.kind === "image") {
           setIsTopbarActionsMenuOpen(false);
           setTicketModal(null);
+          setCompactFilesPane("preview");
           setPreviewFromWrike(true);
           setScreen("files");
           window.requestAnimationFrame(() => {
@@ -760,7 +768,7 @@ export function App() {
     for (const tabId of visibleIds) {
       if (tabId) {
         tabLastActiveAtRef.current.set(tabId, now);
-        if (suspendedTabIdsRef.current.has(tabId)) {
+        if (suspendedTabIdsRef.current.has(tabId) || pendingSuspendTabIdsRef.current.has(tabId)) {
           void resumeWrikeTab(tabId).catch(() => undefined);
         }
       }
@@ -788,10 +796,19 @@ export function App() {
       const alreadySuspended = suspendedTabIdsRef.current;
       const toSuspend: string[] = [];
       for (const tab of wrikeTabsRef.current) {
-        if (activeIds.has(tab.id) || alreadySuspended.has(tab.id)) {
+        if (
+          !initializedTabIdsRef.current.has(tab.id) ||
+          activeIds.has(tab.id) ||
+          alreadySuspended.has(tab.id) ||
+          pendingSuspendTabIdsRef.current.has(tab.id)
+        ) {
           continue;
         }
-        const lastActiveAt = tabLastActiveAtRef.current.get(tab.id) ?? now;
+        const lastActiveAt = tabLastActiveAtRef.current.get(tab.id);
+        if (lastActiveAt === undefined) {
+          tabLastActiveAtRef.current.set(tab.id, now);
+          continue;
+        }
         if (now - lastActiveAt >= thresholdMs) {
           toSuspend.push(tab.id);
         }
@@ -800,9 +817,28 @@ export function App() {
         return;
       }
       for (const tabId of toSuspend) {
-        void suspendWrikeTab(tabId).catch(() => undefined);
+        pendingSuspendTabIdsRef.current.add(tabId);
+        void suspendWrikeTab(tabId)
+          .then((didSuspend) => {
+            pendingSuspendTabIdsRef.current.delete(tabId);
+            if (!didSuspend) {
+              return;
+            }
+            const currentlyVisible = new Set(
+              screenRef.current === "wrike" ? visibleWrikeTabIds() : [activeWrikeTabIdRef.current],
+            );
+            if (currentlyVisible.has(tabId)) {
+              void resumeWrikeTab(tabId).catch(() => undefined);
+              return;
+            }
+            setSuspendedTabIds((current) =>
+              current.includes(tabId) ? current : [...current, tabId],
+            );
+          })
+          .catch(() => {
+            pendingSuspendTabIdsRef.current.delete(tabId);
+          });
       }
-      setSuspendedTabIds((current) => [...new Set([...current, ...toSuspend])]);
     }, intervalMs);
     return () => window.clearInterval(timer);
   }, [settings.suspendInactiveTabsMinutes]);
@@ -959,14 +995,6 @@ export function App() {
     return `${prefix}-${Date.now().toString(36)}-${tabIdCounterRef.current.toString(36)}`;
   }
 
-  async function waitForLaunchSplash() {
-    const elapsed = Date.now() - launchStartedAtRef.current;
-    const remaining = LAUNCH_SPLASH_DURATION_MS - elapsed;
-    if (remaining > 0) {
-      await new Promise<void>((resolve) => window.setTimeout(resolve, remaining));
-    }
-  }
-
   function currentWrikeSession(): WrikeSession {
     return {
       tabs: wrikeTabsRef.current.map((tab) => ({
@@ -985,32 +1013,53 @@ export function App() {
     const nextIds = new Set(nextTabs.map((tab) => tab.id));
     const oldTabs = wrikeTabsRef.current.filter((tab) => !nextIds.has(tab.id));
     await Promise.all(oldTabs.map((tab) => closeWrikeTab(tab.id).catch(() => undefined)));
-    wrikeTabsRef.current = nextTabs;
-    syncWrikeSplitRef(nextSplit);
-    syncActiveWrikeTabId(nextActiveTabId);
-    setWrikeTabs(nextTabs);
-    setScreen("wrike");
+    for (const oldTab of oldTabs) {
+      initializedTabIdsRef.current.delete(oldTab.id);
+      pendingSuspendTabIdsRef.current.delete(oldTab.id);
+      tabLastActiveAtRef.current.delete(oldTab.id);
+    }
     const visibleIds =
       nextSplit && nextIds.has(nextSplit.leftTabId) && nextIds.has(nextSplit.rightTabId)
         ? [nextSplit.leftTabId, nextSplit.rightTabId]
         : [nextActiveTabId];
+    const visibleIdSet = new Set(visibleIds);
+    const preparedTabs = nextTabs.map((tab) =>
+      visibleIdSet.has(tab.id) ? tab : { ...tab, isTitleLoading: false },
+    );
+    wrikeTabsRef.current = preparedTabs;
+    syncWrikeSplitRef(nextSplit);
+    syncActiveWrikeTabId(nextActiveTabId);
+    setWrikeTabs(preparedTabs);
+    setScreen("wrike");
+    const visibleTabs = preparedTabs.filter((tab) => visibleIdSet.has(tab.id));
     const launchOrder = [
-      ...nextTabs.filter((tab) => tab.id !== nextActiveTabId),
-      ...nextTabs.filter((tab) => tab.id === nextActiveTabId),
+      ...visibleTabs.filter((tab) => tab.id === nextActiveTabId),
+      ...visibleTabs.filter((tab) => tab.id !== nextActiveTabId),
     ];
     await Promise.all(
-      launchOrder.map((tab) =>
-        launchWrike(tab.id, tab.mode === "readOnly" ? READ_ONLY_URL : tab.url ?? WRIKE_HOME),
-      ),
+      launchOrder.map(async (tab) => {
+        await launchWrike(tab.id, tab.mode === "readOnly" ? READ_ONLY_URL : tab.url ?? WRIKE_HOME);
+        initializedTabIdsRef.current.add(tab.id);
+        tabLastActiveAtRef.current.set(tab.id, Date.now());
+      }),
     );
+    const currentVisibleIds = visibleWrikeTabIds();
     await resizeWrikeTabs(
-      currentWrikeLayouts(nextSplit, nextActiveTabId),
+      currentWrikeLayouts(),
       topBannerInsetRef.current,
       wrikeSplitRatioRef.current,
     ).catch(() => undefined);
-    await hideWrike(nextTabs.filter((tab) => !visibleIds.includes(tab.id)).map((tab) => tab.id));
-    if (visibleIds.includes(nextActiveTabId)) {
-      await focusWrikeTab(nextActiveTabId).catch(() => undefined);
+    const toHide = wrikeTabsRef.current
+      .filter((tab) => initializedTabIdsRef.current.has(tab.id) && !currentVisibleIds.includes(tab.id))
+      .map((tab) => tab.id);
+    if (toHide.length) {
+      await hideWrike(toHide);
+    }
+    if (
+      currentVisibleIds.includes(activeWrikeTabIdRef.current) &&
+      initializedTabIdsRef.current.has(activeWrikeTabIdRef.current)
+    ) {
+      await focusWrikeTab(activeWrikeTabIdRef.current).catch(() => undefined);
     }
   }
 
@@ -1126,12 +1175,26 @@ export function App() {
     const visibleIds = [nextSplit.leftTabId, nextSplit.rightTabId];
     const launchOrder =
       focusTabId === nextSplit.leftTabId
-        ? [nextSplit.rightTabId, nextSplit.leftTabId]
-        : [nextSplit.leftTabId, nextSplit.rightTabId];
+        ? [nextSplit.leftTabId, nextSplit.rightTabId]
+        : [nextSplit.rightTabId, nextSplit.leftTabId];
     await Promise.all(
-      launchOrder.map((tabId) => {
+      launchOrder.map(async (tabId) => {
         const tab = wrikeTabsRef.current.find((candidate) => candidate.id === tabId);
-        return launchWrike(tabId, tab?.mode === "readOnly" ? READ_ONLY_URL : undefined);
+        const needsInit = !initializedTabIdsRef.current.has(tabId);
+        const launchUrl =
+          tab?.mode === "readOnly"
+            ? READ_ONLY_URL
+            : needsInit
+              ? tab?.url ?? WRIKE_HOME
+              : undefined;
+        if (needsInit && tab?.mode === "standard") {
+          setWrikeTabs((current) =>
+            current.map((item) => (item.id === tabId ? { ...item, isTitleLoading: true } : item)),
+          );
+        }
+        await launchWrike(tabId, launchUrl);
+        initializedTabIdsRef.current.add(tabId);
+        tabLastActiveAtRef.current.set(tabId, Date.now());
       }),
     );
     await resizeWrikeTabs(
@@ -1139,7 +1202,12 @@ export function App() {
       topBannerInsetRef.current,
       wrikeSplitRatioRef.current,
     ).catch(() => undefined);
-    await hideWrike(wrikeTabsRef.current.filter((tab) => !visibleIds.includes(tab.id)).map((tab) => tab.id));
+    await hideWrike(
+      wrikeTabsRef.current
+        .filter((tab) => initializedTabIdsRef.current.has(tab.id) && !visibleIds.includes(tab.id))
+        .map((tab) => tab.id),
+    );
+    await focusWrikeTab(focusTabId).catch(() => undefined);
   }
 
   async function restoreWrikeView() {
@@ -1242,7 +1310,13 @@ export function App() {
       wrikeSplitRatioRef.current,
     ).catch(() => undefined);
     await launchWrike(targetTab.id, url);
-    await hideWrike(tabs.filter((tab) => tab.id !== targetTab.id).map((tab) => tab.id));
+    initializedTabIdsRef.current.add(targetTab.id);
+    tabLastActiveAtRef.current.set(targetTab.id, Date.now());
+    await hideWrike(
+      tabs
+        .filter((tab) => initializedTabIdsRef.current.has(tab.id) && tab.id !== targetTab.id)
+        .map((tab) => tab.id),
+    );
   }
 
   function removeFavoriteUrl(url: string) {
@@ -1277,6 +1351,12 @@ export function App() {
       setTicketModal(null);
       lastRecordedVisitRef.current.clear();
       tabLastActiveAtRef.current.clear();
+      pendingSuspendTabIdsRef.current.clear();
+      for (const id of [...initializedTabIdsRef.current]) {
+        if (id !== INITIAL_WRIKE_TAB.id) {
+          initializedTabIdsRef.current.delete(id);
+        }
+      }
       setSuspendedTabIds([]);
       setSearch("");
       setFilter("all");
@@ -1437,13 +1517,31 @@ export function App() {
     }
     syncWrikeSplitRef(null);
     syncActiveWrikeTabId(tabId);
+    const needsInit = !initializedTabIdsRef.current.has(tabId);
+    const launchUrl =
+      tab?.mode === "readOnly"
+        ? READ_ONLY_URL
+        : needsInit
+          ? tab?.url ?? WRIKE_HOME
+          : undefined;
+    if (needsInit && tab?.mode === "standard") {
+      setWrikeTabs((current) =>
+        current.map((item) => (item.id === tabId ? { ...item, isTitleLoading: true } : item)),
+      );
+    }
     await resizeWrikeTabs(
       currentWrikeLayouts(null, tabId),
       topBannerInsetRef.current,
       wrikeSplitRatioRef.current,
     ).catch(() => undefined);
-    await launchWrike(tabId, tab?.mode === "readOnly" ? READ_ONLY_URL : undefined);
-    await hideWrike(tabs.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
+    await launchWrike(tabId, launchUrl);
+    initializedTabIdsRef.current.add(tabId);
+    tabLastActiveAtRef.current.set(tabId, Date.now());
+    await hideWrike(
+      tabs
+        .filter((item) => initializedTabIdsRef.current.has(item.id) && item.id !== tabId)
+        .map((item) => item.id),
+    );
     const update = await getWrikeTabState(tabId);
     if (update) {
       setWrikeTabs((current) =>
@@ -1467,7 +1565,13 @@ export function App() {
       wrikeSplitRatioRef.current,
     ).catch(() => undefined);
     await launchWrike(tabId, WRIKE_HOME);
-    await hideWrike(wrikeTabsRef.current.filter((tab) => tab.id !== tabId).map((tab) => tab.id));
+    initializedTabIdsRef.current.add(tabId);
+    tabLastActiveAtRef.current.set(tabId, Date.now());
+    await hideWrike(
+      wrikeTabsRef.current
+        .filter((tab) => initializedTabIdsRef.current.has(tab.id) && tab.id !== tabId)
+        .map((tab) => tab.id),
+    );
     const update = await getWrikeTabState(tabId);
     if (update) {
       setWrikeTabs((current) =>
@@ -1481,9 +1585,16 @@ export function App() {
     setIsTopbarActionsMenuOpen(false);
     setTicketModal(null);
     setPreviewFromWrike(false);
+    if (next === "files") {
+      setCompactFilesPane("list");
+    }
     setScreen(next);
     await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-    await hideWrike(wrikeTabsRef.current.map((tab) => tab.id));
+    await hideWrike(
+      wrikeTabsRef.current
+        .filter((tab) => initializedTabIdsRef.current.has(tab.id))
+        .map((tab) => tab.id),
+    );
   }
 
   async function openRecordSourceTask(record: DownloadRecord) {
@@ -1513,7 +1624,13 @@ export function App() {
         wrikeSplitRatioRef.current,
       ).catch(() => undefined);
       await openSourceTask(record, targetTab.id);
-      await hideWrike(tabs.filter((tab) => tab.id !== targetTab.id).map((tab) => tab.id));
+      initializedTabIdsRef.current.add(targetTab.id);
+      tabLastActiveAtRef.current.set(targetTab.id, Date.now());
+      await hideWrike(
+        tabs
+          .filter((tab) => initializedTabIdsRef.current.has(tab.id) && tab.id !== targetTab.id)
+          .map((tab) => tab.id),
+      );
       const update = await getWrikeTabState(targetTab.id);
       if (update) {
         setWrikeTabs((current) =>
@@ -1547,7 +1664,11 @@ export function App() {
     setNewWrikeTabId(next.id);
     window.setTimeout(() => setNewWrikeTabId(null), 520);
     await launchWrike(next.id, next.mode === "readOnly" ? READ_ONLY_URL : url);
-    await hideWrike(tabs.map((tab) => tab.id));
+    initializedTabIdsRef.current.add(next.id);
+    tabLastActiveAtRef.current.set(next.id, Date.now());
+    await hideWrike(
+      tabs.filter((tab) => initializedTabIdsRef.current.has(tab.id)).map((tab) => tab.id),
+    );
   }
 
   async function addReadOnlyTab() {
@@ -1570,7 +1691,11 @@ export function App() {
     setNewWrikeTabId(next.id);
     window.setTimeout(() => setNewWrikeTabId(null), 520);
     await launchWrike(next.id, READ_ONLY_URL);
-    await hideWrike(tabs.map((tab) => tab.id));
+    initializedTabIdsRef.current.add(next.id);
+    tabLastActiveAtRef.current.set(next.id, Date.now());
+    await hideWrike(
+      tabs.filter((tab) => initializedTabIdsRef.current.has(tab.id)).map((tab) => tab.id),
+    );
   }
 
   async function runWrikeTabAction(tabId: string, action: WrikeTabAction) {
@@ -1635,6 +1760,8 @@ export function App() {
       }
     } finally {
       closingTabIdsRef.current.delete(tabId);
+      initializedTabIdsRef.current.delete(tabId);
+      pendingSuspendTabIdsRef.current.delete(tabId);
       tabLastActiveAtRef.current.delete(tabId);
       lastRecordedVisitRef.current.delete(tabId);
       setSuspendedTabIds((current) =>
@@ -2051,7 +2178,11 @@ export function App() {
 
   return (
     <>
-    <div className="app-shell" data-theme={settings.theme} spellCheck={settings.spellCheck}>
+    <div
+      className={`app-shell ${isLaunchSplashVisible ? "" : "is-ready"}`}
+      data-theme={settings.theme}
+      spellCheck={settings.spellCheck}
+    >
       <header
         className={`taskbar ${wrikeTabs.length >= 4 ? "is-tab-crowded" : ""}`}
         onDoubleClick={handleTitlebarDoubleClick}
@@ -2628,13 +2759,38 @@ export function App() {
           </section>
         ) : screen === "files" ? (
           <div
-            className={`files-screen ${previewFromWrike ? "preview-entering" : ""}`}
+            className={`files-screen ${previewFromWrike ? "preview-entering" : ""} compact-pane-${compactFilesPane}`}
             key={previewFromWrike ? `wrike-preview-${previewRevealKey}` : "files-screen"}
             style={{ "--files-split-percent": `${filesSplitPercent}%` } as React.CSSProperties}
           >
+            <div className="files-compact-bar" role="tablist" aria-label="Files view">
+              <button
+                aria-selected={compactFilesPane === "list"}
+                className={compactFilesPane === "list" ? "active" : undefined}
+                onClick={() => setCompactFilesPane("list")}
+                role="tab"
+                type="button"
+              >
+                Files ({visibleDownloads.length})
+              </button>
+              <button
+                aria-selected={compactFilesPane === "preview"}
+                className={compactFilesPane === "preview" ? "active" : undefined}
+                disabled={!selectedRecord}
+                onClick={() => setCompactFilesPane("preview")}
+                role="tab"
+                type="button"
+              >
+                {selectedRecord ? `Preview: ${selectedRecord.fileName}` : "Preview"}
+              </button>
+            </div>
             <FilesLibrary
               downloads={visibleDownloads}
               filter={filter}
+              onActivate={(id) => {
+                setSelectedId(id);
+                setCompactFilesPane("preview");
+              }}
               onDelete={removeDownloadedFile}
               onFilterChange={setFilter}
               onOpenSourceTask={(record) => void openRecordSourceTask(record)}

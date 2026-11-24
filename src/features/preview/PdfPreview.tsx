@@ -35,9 +35,37 @@ type CachedPdfBitmap = {
   bitmap: ImageBitmap;
   cssWidth: number;
   cssHeight: number;
+  bytes: number;
 };
 
 const MAX_PAGE_BITMAP_CACHE = 3;
+const MAX_PAGE_BITMAP_CACHE_BYTES = 48 * 1024 * 1024;
+
+function evictPdfBitmapCache(
+  cache: Map<string, CachedPdfBitmap>,
+  incomingBytes: number,
+  maxEntries = MAX_PAGE_BITMAP_CACHE,
+) {
+  let totalBytes = 0;
+  for (const entry of cache.values()) {
+    totalBytes += entry.bytes;
+  }
+  while (
+    cache.size > 0 &&
+    (cache.size >= maxEntries || totalBytes + incomingBytes > MAX_PAGE_BITMAP_CACHE_BYTES)
+  ) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    const oldest = cache.get(oldestKey);
+    if (oldest) {
+      totalBytes -= oldest.bytes;
+      oldest.bitmap.close();
+    }
+    cache.delete(oldestKey);
+  }
+}
 
 export default memo(function PdfPreview({
   demo,
@@ -392,23 +420,21 @@ export default memo(function PdfPreview({
             return;
           }
           if (typeof createImageBitmap === "function" && canvas.current) {
-            try {
-              const bitmap = await createImageBitmap(canvas.current);
-              if (!live) {
-                bitmap.close();
-                return;
-              }
-              const cache = pageBitmapCacheRef.current;
-              if (cache.size >= MAX_PAGE_BITMAP_CACHE) {
-                const oldestKey = cache.keys().next().value;
-                if (oldestKey !== undefined) {
-                  cache.get(oldestKey)?.bitmap.close();
-                  cache.delete(oldestKey);
+            const bitmapBytes = canvas.current.width * canvas.current.height * 4;
+            if (bitmapBytes > 0 && bitmapBytes <= MAX_PAGE_BITMAP_CACHE_BYTES) {
+              try {
+                const cache = pageBitmapCacheRef.current;
+                evictPdfBitmapCache(cache, bitmapBytes);
+                const bitmap = await createImageBitmap(canvas.current);
+                if (!live) {
+                  bitmap.close();
+                  return;
                 }
+                evictPdfBitmapCache(cache, bitmapBytes);
+                cache.set(cacheKey, { bitmap, cssWidth, cssHeight, bytes: bitmapBytes });
+              } catch {
+                // Ignore ImageBitmap creation failures; canvas already holds the rendered page.
               }
-              cache.set(cacheKey, { bitmap, cssWidth, cssHeight });
-            } catch {
-              // Ignore ImageBitmap creation failures; canvas already holds the rendered page.
             }
           }
         }
