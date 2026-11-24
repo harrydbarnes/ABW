@@ -363,6 +363,14 @@ test('injected file preview dismissal targets Wrike proofing viewer only and ign
 
   const poSource = readFileSync(new URL('../src-tauri/src/task-po.js', import.meta.url), 'utf8');
   assert.match(poSource, /wrike-proofing-app,\s*proofing-viewer/);
+
+  const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const dlStart = appSource.indexOf('subscribeToDownloadCompleted(');
+  const dlEnd = appSource.indexOf('subscribeToDownloadDeleted(', dlStart);
+  assert.ok(dlStart >= 0 && dlEnd > dlStart);
+  const dlSnippet = appSource.slice(dlStart, dlEnd);
+  assert.match(dlSnippet, /setScreen\("files"\)/);
+  assert.match(dlSnippet, /hideWrike\(/);
 });
 
 

@@ -597,7 +597,12 @@ export function App() {
         setSelectedId(record.id);
         setNotice(`${record.fileName} is ready in Files.`);
         if (record.kind === "pdf" || record.kind === "spreadsheet" || record.kind === "image") {
+          setIsTopbarActionsMenuOpen(false);
+          setTicketModal(null);
           setScreen("files");
+          window.requestAnimationFrame(() => {
+            void hideWrike(wrikeTabsRef.current.map((tab) => tab.id));
+          });
         }
       }),
     );
@@ -1453,7 +1458,7 @@ export function App() {
     setTicketModal(null);
     setScreen(next);
     await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-    await hideWrike(wrikeTabs.map((tab) => tab.id));
+    await hideWrike(wrikeTabsRef.current.map((tab) => tab.id));
   }
 
   async function openRecordSourceTask(record: DownloadRecord) {
