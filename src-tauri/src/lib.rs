@@ -1260,7 +1260,6 @@ async fn launch_wrike(
     state: State<'_, AppState>,
     tab_id: String,
     url: Option<String>,
-    hidden: Option<bool>,
 ) -> Result<(), String> {
     open_wrike_at(
         &app,
@@ -1268,7 +1267,6 @@ async fn launch_wrike(
         &tab_id,
         url.as_deref().unwrap_or(WRIKE_HOME),
         false,
-        hidden.unwrap_or(false),
     )
 }
 
@@ -1404,14 +1402,7 @@ async fn open_source_task(
         .filter(|id| !id.is_empty())
         .unwrap_or("home");
     wrike_tab_label(target_tab_id)?;
-    open_wrike_at(
-        &app,
-        state.inner(),
-        target_tab_id,
-        parsed.as_str(),
-        true,
-        false,
-    )
+    open_wrike_at(&app, state.inner(), target_tab_id, parsed.as_str(), true)
 }
 
 #[tauri::command]
@@ -1494,7 +1485,6 @@ fn open_wrike_at(
     tab_id: &str,
     destination: &str,
     navigate_existing: bool,
-    start_hidden: bool,
 ) -> Result<(), String> {
     let label = wrike_tab_label(tab_id)?;
     let parsed = Url::parse(destination).map_err(|error| format!("Invalid Wrike URL: {error}"))?;
@@ -1515,16 +1505,14 @@ fn open_wrike_at(
                 emit_wrike_tab_update(app, &context);
             }
         }
-        if !start_hidden {
-            set_native_memory_target_level(&webview, false);
-            if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
-                visible.insert(tab_id.to_owned());
-            }
-            webview
-                .show()
-                .map_err(|error| format!("Unable to display the Wrike workspace: {error}"))?;
-            webview.set_focus().map_err(|error| error.to_string())?;
+        set_native_memory_target_level(&webview, false);
+        if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
+            visible.insert(tab_id.to_owned());
         }
+        webview
+            .show()
+            .map_err(|error| format!("Unable to display the Wrike workspace: {error}"))?;
+        webview.set_focus().map_err(|error| error.to_string())?;
         if let Some(context) = find_wrike_context(state, tab_id) {
             if let Some(theme) = context.detected_theme.lock().ok().and_then(|t| t.clone()) {
                 let app_clone = app.clone();
@@ -1833,18 +1821,13 @@ fn open_wrike_at(
             None,
             false,
         ));
-    let webview = match host.add_child(builder, content_position, content_size) {
-        Ok(webview) => webview,
-        Err(error) => {
-            if let Ok(mut tabs) = state.wrike_tabs.lock() {
-                tabs.remove(tab_id);
-            }
-            return Err(format!("Unable to open Wrike workspace: {error}"));
+    if let Err(error) = host.add_child(builder, content_position, content_size) {
+        if let Ok(mut tabs) = state.wrike_tabs.lock() {
+            tabs.remove(tab_id);
         }
-    };
-    if start_hidden {
-        let _ = webview.hide();
-    } else if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
+        return Err(format!("Unable to open Wrike workspace: {error}"));
+    }
+    if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
         visible.insert(tab_id.to_owned());
     }
     emit_wrike_tab_update(app, &context);

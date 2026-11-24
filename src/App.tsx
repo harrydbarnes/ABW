@@ -568,10 +568,6 @@ export function App() {
         setSessionPrompt(next.lastWrikeSession);
       }
       if (next.launchWrikeOnStart) {
-        const startupUrls = normalizedStartupUrls(next.startupTabUrls);
-        if (isDesktopRuntime()) {
-          void launchWrike("home", startupUrls[0], { hidden: true }).catch(() => undefined);
-        }
         await waitForLaunchSplash();
         await openStartupTabs(next.startupTabUrls);
         if (!canRestoreSession) {

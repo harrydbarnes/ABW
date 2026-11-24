@@ -258,16 +258,11 @@ export async function openSourceTask(record: DownloadRecord, tabId?: string): Pr
   }
 }
 
-export async function launchWrike(
-  tabId: string,
-  url?: string,
-  options?: { hidden?: boolean },
-): Promise<void> {
+export async function launchWrike(tabId: string, url?: string): Promise<void> {
   if (desktopRuntime) {
     await invokeDesktop("launch_wrike", {
       tabId,
       url: url ?? null,
-      hidden: options?.hidden ?? false,
     });
   }
 }
