@@ -348,4 +348,13 @@ test('preview installer hooks target abw.exe and injected script gates hidden ta
   assert.match(source, /abwCornerDragActive/);
 });
 
+test('injected file preview dismissal targets fullscreen viewers only and never dispatches Escape', () => {
+  const fnStart = source.indexOf('const abwIsFullscreenFileViewer =');
+  const fnEnd = source.indexOf('const abwKeepDownloadsInWebview =', fnStart);
+  assert.ok(fnStart >= 0 && fnEnd > fnStart, 'Fullscreen preview helpers must exist');
+  const snippet = source.slice(fnStart, fnEnd);
+  assert.match(snippet, /abwIsFullscreenFileViewer\(root\)/);
+  assert.doesNotMatch(snippet, /KeyboardEvent\(["']keydown["']/);
+});
+
 

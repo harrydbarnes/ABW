@@ -1110,10 +1110,17 @@
   };
   const abwNormalizeFileName = (value) =>
     String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  const abwIsFullscreenFileViewer = (element) => {
+    if (!(element instanceof Element)) return false;
+    if (element === document.body || element === document.documentElement) return false;
+    if (!abwIsVisible(element)) return false;
+    const rect = element.getBoundingClientRect();
+    return rect.width >= window.innerWidth * 0.8 && rect.height >= window.innerHeight * 0.8;
+  };
   const abwPreviewRootSelector =
-    '[role="dialog"], [aria-modal="true"], [class*="file-preview" i], [class*="attachment-preview" i], [class*="preview-modal" i], [class*="lightbox" i]';
+    '.cdk-overlay-pane, [role="dialog"], [aria-modal="true"], [class*="preview" i], [class*="viewer" i], [class*="lightbox" i]';
   const abwDismissPreviewOverlay = (root) => {
-    if (!(root instanceof Element)) return;
+    if (!abwIsFullscreenFileViewer(root)) return;
     const closeBtn = Array.from(root.querySelectorAll('button, a, [role="button"]')).find((control) => {
       if (!abwIsVisible(control)) return false;
       const aria = (control.getAttribute("aria-label") || "").trim();
@@ -1130,11 +1137,7 @@
     });
     if (closeBtn) {
       closeBtn.click();
-      return;
     }
-    document.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true })
-    );
   };
   let abwPreviewDownloadTimer = 0;
   let abwPreviewDownloadRequest = 0;
@@ -1145,7 +1148,7 @@
     const expectedFileName = abwNormalizeFileName(fileName);
     const previousDialogs = new Map(
       Array.from(document.querySelectorAll(abwPreviewRootSelector))
-        .filter(abwIsVisible)
+        .filter(abwIsFullscreenFileViewer)
         .map((root) => [root, abwNormalizeFileName(root.textContent)])
     );
     let attempts = 0;
@@ -1156,7 +1159,7 @@
       }
       attempts += 1;
       const roots = Array.from(document.querySelectorAll(abwPreviewRootSelector))
-        .filter(abwIsVisible)
+        .filter(abwIsFullscreenFileViewer)
         .reverse();
       if (abwAutoDownload) roots.push(document);
       for (const root of roots) {
@@ -1197,12 +1200,12 @@
           abwExpectingDownloadUntil = Date.now() + 5000;
           download.click();
           if (root !== document) {
-            window.setTimeout(() => abwDismissPreviewOverlay(root), 120);
+            window.setTimeout(() => abwDismissPreviewOverlay(root), 150);
           }
           return;
         }
       }
-      if (attempts >= 60) window.clearInterval(abwPreviewDownloadTimer);
+      if (attempts >= 32) window.clearInterval(abwPreviewDownloadTimer);
     }, 250);
   };
   const abwKeepDownloadsInWebview = (event) => {
@@ -1223,6 +1226,9 @@
     const fileName = abwFindSupportedFileName(target) || abwFindSupportedFileName(control);
     if (fileName) {
       abwQueuePreviewDownload(fileName);
+    } else {
+      window.clearInterval(abwPreviewDownloadTimer);
+      abwPreviewDownloadRequest += 1;
     }
   };
   const abwPatchWindowOpen = () => {

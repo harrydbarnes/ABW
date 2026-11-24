@@ -596,6 +596,9 @@ export function App() {
       subscribeToDownloadCompleted((record) => {
         setSelectedId(record.id);
         setNotice(`${record.fileName} is ready in Files.`);
+        if (record.kind === "pdf" || record.kind === "spreadsheet" || record.kind === "image") {
+          setScreen("files");
+        }
       }),
     );
     registerUnsubscriber(
