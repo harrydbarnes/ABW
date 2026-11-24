@@ -54,6 +54,7 @@ import {
   subscribeToWrikeShortcuts,
   subscribeToWrikeTabUpdates,
   suspendWrikeTab,
+  takePendingDeepLink,
   wrikeTabAction,
   type WrikeShortcutEvent,
   type WrikeTabAction,
@@ -698,6 +699,11 @@ export function App() {
         void addWrikeTab(url);
       }),
     );
+    void takePendingDeepLink().then((url) => {
+      if (url && !cancelled) {
+        void addWrikeTab(url);
+      }
+    });
     registerUnsubscriber(
       subscribeToShareUrl((url) => {
         if (navigator.share) {

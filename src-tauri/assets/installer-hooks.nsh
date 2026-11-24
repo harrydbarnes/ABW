@@ -42,12 +42,17 @@ FunctionEnd
   abw_startup_enable:
     WriteRegStr HKCU "${ABW_RUN_KEY}" "ABW" '"$INSTDIR\ABW.exe"'
   abw_startup_done:
+  WriteRegStr HKCU "Software\Classes\wrikeapp" "" "URL:Wrike Protocol"
+  WriteRegStr HKCU "Software\Classes\wrikeapp" "URL Protocol" ""
+  WriteRegStr HKCU "Software\Classes\wrikeapp\DefaultIcon" "" "$INSTDIR\ABW.exe,0"
+  WriteRegStr HKCU "Software\Classes\wrikeapp\shell\open\command" "" '"$INSTDIR\ABW.exe" "%1"'
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
   StrCmp $UpdateMode 1 abw_uninstall_done
     DeleteRegValue HKCU "${ABW_RUN_KEY}" "ABW"
     DeleteRegKey HKCU "${ABW_PREF_KEY}"
+    DeleteRegKey HKCU "Software\Classes\wrikeapp"
     DeleteRegKey HKCU "Software\Google\Chrome\NativeMessagingHosts\net.insidemedia.abw.po_check"
     Delete "$LOCALAPPDATA\ABW\po-check\native-host.json"
     Delete "$LOCALAPPDATA\ABW\po-check\declined-chrome-extension"

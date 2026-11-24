@@ -314,6 +314,7 @@ struct AppState {
     tracked_paths: Mutex<HashMap<String, PathBuf>>,
     detected_wrike_theme: Mutex<Option<String>>,
     preview_intent_until: Mutex<Option<std::time::Instant>>,
+    pending_deep_link: Mutex<Option<String>>,
     cached_settings: RwLock<Option<(Settings, Option<SettingsFileStamp>)>>,
     top_inset: Mutex<f64>,
     wrike_split_ratio: Mutex<f64>,
@@ -332,6 +333,7 @@ impl Default for AppState {
             tracked_paths: Mutex::new(HashMap::new()),
             detected_wrike_theme: Mutex::new(None),
             preview_intent_until: Mutex::new(None),
+            pending_deep_link: Mutex::new(None),
             cached_settings: RwLock::new(None),
             top_inset: Mutex::new(0.0),
             wrike_split_ratio: Mutex::new(0.5),
@@ -1041,6 +1043,29 @@ async fn reset_app(app: AppHandle) -> Result<Settings, String> {
     })
     .await
     .map_err(|error| format!("Unable to reset ABW: {error}"))?
+}
+
+fn parse_wrike_deep_link(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let normalized = if trimmed.len() >= 11 && trimmed[..11].eq_ignore_ascii_case("wrikeapp://") {
+        format!("https://{}", &trimmed[11..])
+    } else {
+        trimmed.to_owned()
+    };
+    let parsed = Url::parse(&normalized).ok()?;
+    is_wrike_workspace_destination(&parsed).then(|| parsed.to_string())
+}
+
+#[tauri::command]
+fn take_pending_deep_link(state: State<'_, AppState>) -> Option<String> {
+    state
+        .pending_deep_link
+        .lock()
+        .ok()
+        .and_then(|mut guard| guard.take())
 }
 
 #[tauri::command]
@@ -3045,8 +3070,15 @@ fn apply_spell_check_script(enabled: bool, auto_download: bool) -> &'static str 
 
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            show_main_window(app)
+        .plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            show_main_window(app);
+            if let Some(target_url) = args
+                .iter()
+                .skip(1)
+                .find_map(|arg| parse_wrike_deep_link(arg))
+            {
+                let _ = app.emit("wrike-open-in-new-tab", target_url);
+            }
         }))
         .manage(AppState::default())
         .manage(updater::PendingUpdateState::default())
@@ -3055,6 +3087,16 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             trace_native_event(app.handle(), "setup");
+            if let Some(target_url) = std::env::args()
+                .skip(1)
+                .find_map(|arg| parse_wrike_deep_link(&arg))
+            {
+                if let Some(state) = app.try_state::<AppState>() {
+                    if let Ok(mut guard) = state.pending_deep_link.lock() {
+                        *guard = Some(target_url);
+                    }
+                }
+            }
             #[cfg(windows)]
             if app.config().identifier == "net.insidemedia.abw" {
                 let handle = app.handle().clone();
@@ -3143,6 +3185,7 @@ pub fn run() {
             set_update_badge,
             storage_health,
             suspend_wrike_tab,
+            take_pending_deep_link,
             update_last_wrike_session,
             update_settings,
             wrike_tab_action
@@ -3280,5 +3323,19 @@ mod tests {
             normalize_startup_tab_urls(vec!["   ".into(), "javascript:void(0)".into()]),
             vec![WRIKE_HOME]
         );
+    }
+
+    #[test]
+    fn parse_wrike_deep_link_accepts_wrikeapp_and_https_wrike_urls_only() {
+        assert_eq!(
+            parse_wrike_deep_link("wrikeapp://app-eu.wrike.com/open.htm?id=4527006164").as_deref(),
+            Some("https://app-eu.wrike.com/open.htm?id=4527006164")
+        );
+        assert_eq!(
+            parse_wrike_deep_link("https://www.wrike.com/workspace.htm").as_deref(),
+            Some("https://www.wrike.com/workspace.htm")
+        );
+        assert_eq!(parse_wrike_deep_link("wrikeapp://evil.example/x"), None);
+        assert_eq!(parse_wrike_deep_link("javascript:alert(1)"), None);
     }
 }

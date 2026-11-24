@@ -391,6 +391,13 @@ export async function subscribeToOpenInNewTab(notify: (url: string) => void): Pr
   return listen<string>("wrike-open-in-new-tab", (event) => notify(event.payload));
 }
 
+export async function takePendingDeepLink(): Promise<string | null> {
+  if (!desktopRuntime) {
+    return null;
+  }
+  return invokeDesktop<string | null>("take_pending_deep_link");
+}
+
 export async function subscribeToShareUrl(notify: (url: string) => void): Promise<() => void> {
   if (!desktopRuntime) {
     return () => undefined;
