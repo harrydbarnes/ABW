@@ -144,6 +144,14 @@ export async function readDownloadRange(
   return new Uint8Array(buffer);
 }
 
+export async function readDownloadImage(id: string): Promise<Uint8Array | null> {
+  if (!desktopRuntime) {
+    return null;
+  }
+  const buffer = await invokeDesktop<ArrayBuffer>("read_download_image", { id });
+  return new Uint8Array(buffer);
+}
+
 export async function previewSpreadsheet(id: string): Promise<WorkbookPreview | null> {
   if (!desktopRuntime) {
     return null;

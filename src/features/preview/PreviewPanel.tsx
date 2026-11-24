@@ -5,6 +5,10 @@ import { formatBytes, PDF_PREVIEW_BYTE_LIMIT } from "./previewCache";
 
 const SpreadsheetPreview = lazy(() => import("./SpreadsheetPreview"));
 const PdfPreview = lazy(() => import("./PdfPreview"));
+const ImagePreview = lazy(() => import("./ImagePreview"));
+
+const IMAGE_PREVIEW_BYTE_LIMIT = 32 * 1024 * 1024;
+const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"]);
 
 export default memo(function PreviewPanel({
   record,
@@ -34,14 +38,21 @@ export default memo(function PreviewPanel({
     );
   }
 
+  const isImage =
+    record.kind === "image" || IMAGE_EXTENSIONS.has(record.extension.trim().toLowerCase());
   const pdfTooLarge = record.kind === "pdf" && !record.demo && record.sizeBytes > PDF_PREVIEW_BYTE_LIMIT;
+  const imageTooLarge = isImage && !record.demo && record.sizeBytes > IMAGE_PREVIEW_BYTE_LIMIT;
 
   return (
     <section className="preview-panel" aria-label={`Preview of ${record.fileName}`}>
       <header className="preview-header">
         <div className="preview-title">
-          <h2>{record.fileName}</h2>
-          <button className="inline-link" onClick={() => handleOpenTask(record)}>
+          <h2 title={record.fileName}>{record.fileName}</h2>
+          <button
+            className="inline-link"
+            onClick={() => handleOpenTask(record)}
+            title={record.sourceLabel}
+          >
             {record.sourceLabel}
           </button>
         </div>
@@ -82,6 +93,14 @@ export default memo(function PreviewPanel({
             />
           ) : (
             <PdfPreview demo={!!record.demo} record={record} />
+          )
+        ) : isImage ? (
+          imageTooLarge ? (
+            <PreviewError
+              message={`This image is ${formatBytes(record.sizeBytes)}. Open it in Windows; in-app image preview supports files up to 32 MB.`}
+            />
+          ) : (
+            <ImagePreview demo={!!record.demo} record={record} />
           )
         ) : (
           <div className="unsupported-preview">

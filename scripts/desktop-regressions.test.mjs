@@ -153,11 +153,21 @@ test('injected download detector recognizes supported extensions including csv a
     `${source.slice(fnStart, fnEnd)}; return { abwSupportedFileName, abwLooksLikeDownloadUrl };`,
   )();
 
-  for (const name of ['report.pdf', 'budget.xlsx', 'export.csv', 'data.tsv', 'notes.docx']) {
+  for (const name of [
+    'report.pdf',
+    'budget.xlsx',
+    'export.csv',
+    'data.tsv',
+    'notes.docx',
+    'Picture1.png',
+    'photo.jpg',
+    'banner.webp',
+    'anim.gif',
+  ]) {
     assert.match(name, abwSupportedFileName);
     assert.equal(abwLooksLikeDownloadUrl(`https://www.wrike.com/files/${encodeURIComponent(name)}`), true);
   }
-  assert.doesNotMatch('avatar.png', abwSupportedFileName);
+  assert.doesNotMatch('archive.zip', abwSupportedFileName);
   assert.equal(abwLooksLikeDownloadUrl('https://www.wrike.com/workspace.htm'), false);
 });
 

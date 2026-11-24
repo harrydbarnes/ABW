@@ -48,6 +48,7 @@ async fn storage_health(app: AppHandle) -> Result<Vec<String>, String> {
 
 const WRIKE_HOME: &str = "https://www.wrike.com/workspace.htm";
 const MAX_PDF_PREVIEW_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_IMAGE_PREVIEW_BYTES: u64 = 32 * 1024 * 1024;
 const PDF_HEAD_CHUNK_BYTES: u64 = 131_072;
 const PDF_INLINE_THRESHOLD_BYTES: u64 = 512 * 1024;
 const MAX_PDF_RANGE_BYTES: u64 = 8 * 1024 * 1024;
@@ -512,6 +513,29 @@ async fn read_download_range(
     })
     .await
     .map_err(|error| format!("Unable to read PDF byte range: {error}"))?
+}
+
+#[tauri::command]
+async fn read_download_image(app: AppHandle, id: String) -> Result<Response, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (_, mut file) = open_tracked_file(&app, &id)?;
+        let size = file
+            .metadata()
+            .map_err(|error| format!("Unable to inspect download: {error}"))?
+            .len();
+        if size > MAX_IMAGE_PREVIEW_BYTES {
+            return Err(format!(
+                "This image is {} MB. In-app image preview currently supports files up to 32 MB; open it in Windows instead.",
+                size.div_ceil(1024 * 1024)
+            ));
+        }
+        let mut buf = Vec::with_capacity(size as usize);
+        file.read_to_end(&mut buf)
+            .map_err(|error| format!("Unable to read image file: {error}"))?;
+        Ok(Response::new(buf))
+    })
+    .await
+    .map_err(|error| format!("Unable to read image download: {error}"))?
 }
 
 #[tauri::command]
@@ -2447,6 +2471,7 @@ fn file_kind(extension: &str) -> &'static str {
         "pdf" => "pdf",
         "xls" | "xlsx" | "xlsm" | "xlsb" | "ods" | "csv" | "tsv" => "spreadsheet",
         "doc" | "docx" | "rtf" | "txt" => "document",
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" => "image",
         _ => "other",
     }
 }
@@ -3083,6 +3108,7 @@ pub fn run() {
             open_source_task,
             preview_spreadsheet,
             read_download_head,
+            read_download_image,
             read_download_range,
             reset_app,
             resize_wrike_tabs,
@@ -3131,7 +3157,10 @@ mod tests {
         for ext in ["doc", "docx", "rtf", "txt"] {
             assert_eq!(file_kind(ext), "document", "expected document for {ext}");
         }
-        assert_eq!(file_kind("png"), "other");
+        for ext in ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"] {
+            assert_eq!(file_kind(ext), "image", "expected image for {ext}");
+        }
+        assert_eq!(file_kind("zip"), "other");
         assert_eq!(file_kind(""), "other");
     }
 

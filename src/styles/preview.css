@@ -40,7 +40,9 @@
 }
 
 .preview-title {
+  flex: 1;
   min-width: 0;
+  overflow: hidden;
 }
 
 .preview-title h2 {
@@ -53,6 +55,12 @@
 }
 
 .inline-link {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
   color: var(--accent);
   font-size: 12px;
   padding: 0;
@@ -64,6 +72,7 @@
 
 .preview-actions {
   display: flex;
+  flex-shrink: 0;
   gap: 9px;
   white-space: nowrap;
 }
@@ -109,7 +118,8 @@
 }
 
 .spreadsheet-view,
-.pdf-view {
+.pdf-view,
+.image-view {
   min-height: 0;
   flex: 1;
   display: flex;
@@ -341,6 +351,27 @@
   display: flex;
   justify-content: center;
   background: #edf1f7;
+}
+
+.image-canvas {
+  min-height: 0;
+  flex: 1;
+  padding: 24px;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #edf1f7;
+}
+
+.image-preview-img {
+  display: block;
+  flex: none;
+  max-width: none;
+  max-height: none;
+  background: repeating-conic-gradient(#f5f7fb 0% 25%, #fff 0% 50%) 50% / 16px 16px;
+  box-shadow: 0 3px 13px rgb(22 35 60 / 12%);
+  transition: transform 120ms ease;
 }
 
 .pdf-page-stage {

@@ -54,6 +54,7 @@ const filters: Array<{ id: FileFilter; label: string }> = [
   { id: "all", label: "All" },
   { id: "pdf", label: "PDF" },
   { id: "spreadsheet", label: "Spreadsheets" },
+  { id: "image", label: "Images" },
   { id: "document", label: "Documents" },
 ];
 

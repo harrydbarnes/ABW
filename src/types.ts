@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 
-export type FileKind = "pdf" | "spreadsheet" | "document" | "other";
+export type FileKind = "pdf" | "spreadsheet" | "document" | "image" | "other";
 
 export interface DownloadRecord {
   id: string;

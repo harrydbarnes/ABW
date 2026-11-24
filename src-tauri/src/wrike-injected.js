@@ -1077,8 +1077,9 @@
     event.preventDefault();
     showLinkContextMenu(linkUrl, event);
   };
-  const abwSupportedFileName = /[^\\r\\n]{1,180}[.](pdf|doc|docx|xls|xlsx|xlsm|xlsb|ods|csv|tsv|rtf|txt)/i;
+  const abwSupportedFileName = /[^\r\n]{1,180}[.](pdf|doc|docx|xls|xlsx|xlsm|xlsb|ods|csv|tsv|rtf|txt|png|jpg|jpeg|gif|webp|bmp|svg)/i;
   const abwDownloadWord = /download/i;
+  const abwCloseWord = /^(?:close|dismiss|×|✕)$/i;
   const abwIsVisible = (element) => {
     if (!(element instanceof Element)) return false;
     const rect = element.getBoundingClientRect();
@@ -1089,6 +1090,8 @@
     [
       element?.getAttribute?.("aria-label"),
       element?.getAttribute?.("title"),
+      element?.getAttribute?.("data-tooltip"),
+      element?.getAttribute?.("data-testid"),
       element?.textContent
     ].filter(Boolean).join(" ").trim();
   const abwLooksLikeDownloadUrl = (value) => {
@@ -1107,6 +1110,32 @@
   };
   const abwNormalizeFileName = (value) =>
     String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  const abwPreviewRootSelector =
+    '[role="dialog"], [aria-modal="true"], [class*="file-preview" i], [class*="attachment-preview" i], [class*="preview-modal" i], [class*="lightbox" i]';
+  const abwDismissPreviewOverlay = (root) => {
+    if (!(root instanceof Element)) return;
+    const closeBtn = Array.from(root.querySelectorAll('button, a, [role="button"]')).find((control) => {
+      if (!abwIsVisible(control)) return false;
+      const aria = (control.getAttribute("aria-label") || "").trim();
+      const title = (control.getAttribute("title") || "").trim();
+      const tooltip = (control.getAttribute("data-tooltip") || "").trim();
+      const text = (control.textContent || "").trim();
+      return (
+        abwCloseWord.test(aria) ||
+        abwCloseWord.test(title) ||
+        abwCloseWord.test(tooltip) ||
+        abwCloseWord.test(text) ||
+        /\bclose\b/i.test(aria || title)
+      );
+    });
+    if (closeBtn) {
+      closeBtn.click();
+      return;
+    }
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true })
+    );
+  };
   let abwPreviewDownloadTimer = 0;
   let abwPreviewDownloadRequest = 0;
   let abwExpectingDownloadUntil = 0;
@@ -1115,7 +1144,7 @@
     const request = ++abwPreviewDownloadRequest;
     const expectedFileName = abwNormalizeFileName(fileName);
     const previousDialogs = new Map(
-      Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]'))
+      Array.from(document.querySelectorAll(abwPreviewRootSelector))
         .filter(abwIsVisible)
         .map((root) => [root, abwNormalizeFileName(root.textContent)])
     );
@@ -1126,7 +1155,7 @@
         return;
       }
       attempts += 1;
-      const roots = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]'))
+      const roots = Array.from(document.querySelectorAll(abwPreviewRootSelector))
         .filter(abwIsVisible)
         .reverse();
       if (abwAutoDownload) roots.push(document);
@@ -1140,7 +1169,14 @@
         }
         const download = Array.from(root.querySelectorAll('button, a, [role="button"], [role="link"]'))
           .find((control) => {
-            if (!abwIsVisible(control) || !abwDownloadWord.test(abwControlLabel(control))) {
+            if (!abwIsVisible(control)) {
+              return false;
+            }
+            const isDownloadControl =
+              abwDownloadWord.test(abwControlLabel(control)) ||
+              control.hasAttribute("download") ||
+              abwLooksLikeDownloadUrl(control.getAttribute("href"));
+            if (!isDownloadControl) {
               return false;
             }
             if (!expectedFileName || isNewOrChangedDialog) return true;
@@ -1160,6 +1196,9 @@
           window.clearInterval(abwPreviewDownloadTimer);
           abwExpectingDownloadUntil = Date.now() + 5000;
           download.click();
+          if (root !== document) {
+            window.setTimeout(() => abwDismissPreviewOverlay(root), 120);
+          }
           return;
         }
       }
