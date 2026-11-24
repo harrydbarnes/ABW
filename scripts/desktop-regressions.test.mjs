@@ -285,12 +285,13 @@ test('injected theme, corner, and custom-scheme IPC are gated to wrike.com hosts
   }
 });
 
-test('task-po script detects task panels without URL id gate and auto-expands More', () => {
+test('task-po script detects task panels without URL id gate and waits for the Show more fields control', () => {
   const poSource = readFileSync(new URL('../src-tauri/src/task-po.js', import.meta.url), 'utf8');
   assert.doesNotMatch(poSource, /\(\?:[?&#]\(\?:id\|taskId/);
   assert.match(poSource, /function expandMoreIfNeeded\(/);
   assert.match(poSource, /expandedMoreFor/);
-  assert.match(poSource, /\/\^more\$\/i\.test/);
+  assert.match(poSource, /\/\^show more fields\$\/i\.test/);
+  assert.match(poSource, /hasCampaignDates\(values\) \|\| Date.now\(\) >= pendingManualCheck.deadline/);
   assert.match(poSource, /if \(document\.hidden\) return;/);
   assert.match(poSource, /panel\.textContent/);
 });

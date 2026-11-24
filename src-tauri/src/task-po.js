@@ -11,6 +11,7 @@
   let pendingId;
   let nextCheck = 0;
   let expandedMoreFor = '';
+  let pendingManualCheck;
   let lastPanelEl = null;
   let lastPanelFingerprint = '';
   let lastValues = null;
@@ -52,14 +53,26 @@
       }
       if (anchor) break;
     }
-    if (!anchor) {button.remove(); lastBooking = ''; pendingId = undefined; expandedMoreFor = ''; lastPanelEl = null; lastPanelFingerprint = ''; lastValues = null; return;}
+    if (!anchor) {button.remove(); lastBooking = ''; pendingId = undefined; pendingManualCheck = undefined; expandedMoreFor = ''; lastPanelEl = null; lastPanelFingerprint = ''; lastValues = null; return;}
     const r = anchor.getBoundingClientRect();
     button.style.zIndex = '2147483647';
     button.style.top = (r.bottom + 8) + 'px';
     button.style.right = Math.max(8, innerWidth-r.right) + 'px';
     const host = anchor.closest('dialog:modal') || document.body;
     if (button.parentElement !== host) host.append(button);
-    queueCheck();
+    const values = bookingValues();
+    if (pendingManualCheck) {
+      if (pendingManualCheck.task !== taskKey()) {
+        pendingManualCheck = undefined;
+      } else if (hasCampaignDates(values) || Date.now() >= pendingManualCheck.deadline) {
+        pendingManualCheck = undefined;
+        location.assign(handoff + values);
+        return;
+      } else {
+        return;
+      }
+    }
+    queueCheck(values);
   }
   function bookingValues() {
     const fingerprint = panel ? `${panel.childElementCount}:${panel.textContent || ''}` : '';
@@ -78,24 +91,32 @@
     return values;
   }
   function hasRequiredValues(values) {
-    return requiredKeys.every(key => values.get(key));
+    return hasCampaignDates(values) && requiredKeys.every(key => values.get(key));
+  }
+  function hasCampaignDates(values) {
+    return ['start', 'end'].every(key => /^(?:\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2})$/.test(values.get(key) || ''));
+  }
+  function taskKey() {
+    return location.href + ' ' + (panel.innerText.split(/\n/)[0] || '').trim();
   }
   function expandMoreIfNeeded(values) {
-    if (!panel || hasRequiredValues(values)) return false;
-    const taskKey = location.href + ' ' + (panel.innerText.split(/\n/)[0] || '').trim();
-    if (expandedMoreFor === taskKey) return false;
+    if (!panel || hasCampaignDates(values)) return false;
+    const task = taskKey();
+    if (expandedMoreFor === task) return false;
     const moreBtn = [...panel.querySelectorAll('button,[role="button"]')].find(el => {
-      const text = (el.textContent || '').trim();
-      return /^more$/i.test(text) && el.getAttribute('aria-expanded') !== 'true' && el.getBoundingClientRect().width > 0;
+      const label = el.getAttribute('aria-label') || el.getAttribute('title') ||
+        (el.getAttribute('aria-labelledby') || '').split(/\s+/)
+          .map(id => document.getElementById(id)?.textContent || '').join(' ');
+      return /^show more fields$/i.test(label.trim()) &&
+        el.getAttribute('aria-expanded') !== 'true' && el.getBoundingClientRect().width > 0;
     });
     if (!moreBtn) return false;
-    expandedMoreFor = taskKey;
+    expandedMoreFor = task;
     moreBtn.click();
-    setTimeout(schedule, 250);
+    schedule();
     return true;
   }
-  function queueCheck() {
-    const values = bookingValues();
+  function queueCheck(values) {
     const booking = location.href + ' ' + values.toString();
     if (booking !== lastBooking) {
       lastBooking = booking;
@@ -117,12 +138,11 @@
   button.onclick = event => {
     event.preventDefault();
     event.stopPropagation();
-    if (!panel) return;
+    if (!panel || pendingManualCheck) return;
     const values = bookingValues();
-    if (!hasRequiredValues(values) && expandMoreIfNeeded(values)) {
-      setTimeout(() => {
-        if (panel) location.assign(handoff + bookingValues());
-      }, 250);
+    if (expandMoreIfNeeded(values)) {
+      pendingManualCheck = { task: taskKey(), deadline: Date.now() + 3000 };
+      setTimeout(schedule, 3000);
       return;
     }
     location.assign(handoff + values);
