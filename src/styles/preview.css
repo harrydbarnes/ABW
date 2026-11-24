@@ -11,14 +11,14 @@
   flex-direction: column;
 }
 
-.files-screen.preview-entering .preview-panel {
-  animation: preview-enter 220ms cubic-bezier(0.22, 1, 0.36, 1);
+.files-screen.preview-entering {
+  animation: preview-enter 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 @keyframes preview-enter {
   from {
     opacity: 0;
-    transform: translateY(10px) scale(0.992);
+    transform: translateY(8px) scale(0.994);
   }
   to {
     opacity: 1;
@@ -27,7 +27,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .files-screen.preview-entering .preview-panel {
+  .files-screen.preview-entering {
     animation: none;
   }
 }

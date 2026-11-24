@@ -192,6 +192,7 @@ export function App() {
   const [isTopbarActionsMenuOpen, setIsTopbarActionsMenuOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [previewFromWrike, setPreviewFromWrike] = useState(false);
+  const [previewRevealKey, setPreviewRevealKey] = useState(0);
   const [showPreviewedFiles, setShowPreviewedFiles] = useState(false);
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
@@ -597,15 +598,18 @@ export function App() {
     registerUnsubscriber(
       subscribeToDownloadCompleted((record) => {
         setSelectedId(record.id);
-        setNotice(`${record.fileName} is ready in Files.`);
         if (record.kind === "pdf" || record.kind === "spreadsheet" || record.kind === "image") {
           setIsTopbarActionsMenuOpen(false);
           setTicketModal(null);
           setPreviewFromWrike(true);
           setScreen("files");
           window.requestAnimationFrame(() => {
-            void hideWrike(wrikeTabsRef.current.map((tab) => tab.id));
+            void hideWrike(wrikeTabsRef.current.map((tab) => tab.id)).finally(() => {
+              setPreviewRevealKey((current) => current + 1);
+            });
           });
+        } else if (!record.previewed) {
+          setNotice(`${record.fileName} is ready in Files.`);
         }
       }),
     );
@@ -2619,6 +2623,7 @@ export function App() {
         ) : screen === "files" ? (
           <div
             className={`files-screen ${previewFromWrike ? "preview-entering" : ""}`}
+            key={previewFromWrike ? `wrike-preview-${previewRevealKey}` : "files-screen"}
             style={{ "--files-split-percent": `${filesSplitPercent}%` } as React.CSSProperties}
           >
             <FilesLibrary

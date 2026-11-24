@@ -68,7 +68,7 @@ export default memo(function PreviewPanel({
               disabled={!!record.demo}
               onClick={() => onRevealDownload(record.id)}
             >
-              Show in folder
+              Open folder
             </button>
           ) : null}
           {onDeleteDownload ? (
@@ -78,7 +78,7 @@ export default memo(function PreviewPanel({
               onClick={() => onDeleteDownload(record)}
               title="Delete this file from your computer and the Files list"
             >
-              Delete file
+              Delete
             </button>
           ) : null}
           <button className="primary" onClick={() => void openDownload(record.id)}>
