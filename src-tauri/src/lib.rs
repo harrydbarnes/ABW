@@ -2046,8 +2046,13 @@ fn record_completed_download(
         .unwrap_or(0);
     let previewed = app
         .try_state::<AppState>()
-        .and_then(|state| state.preview_intent_until.lock().ok())
-        .and_then(|mut guard| guard.take())
+        .and_then(|state| {
+            state
+                .preview_intent_until
+                .lock()
+                .ok()
+                .and_then(|mut guard| guard.take())
+        })
         .is_some_and(|deadline| std::time::Instant::now() <= deadline);
     let record = DownloadRecord {
         id: Uuid::new_v4().to_string(),
