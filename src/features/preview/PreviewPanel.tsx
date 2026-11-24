@@ -76,8 +76,9 @@ export default memo(function PreviewPanel({
               className="secondary danger"
               disabled={!!record.demo}
               onClick={() => onDeleteDownload(record)}
+              title="Delete this file from your computer and the Files list"
             >
-              Remove
+              Delete file
             </button>
           ) : null}
           <button className="primary" onClick={() => void openDownload(record.id)}>

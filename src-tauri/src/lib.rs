@@ -67,6 +67,8 @@ struct DownloadRecord {
     size_bytes: u64,
     source_url: Option<String>,
     source_label: String,
+    #[serde(default)]
+    previewed: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -311,6 +313,7 @@ struct AppState {
     visible_wrike_tabs: Mutex<HashSet<String>>,
     tracked_paths: Mutex<HashMap<String, PathBuf>>,
     detected_wrike_theme: Mutex<Option<String>>,
+    preview_intent_until: Mutex<Option<std::time::Instant>>,
     cached_settings: RwLock<Option<(Settings, Option<SettingsFileStamp>)>>,
     top_inset: Mutex<f64>,
     wrike_split_ratio: Mutex<f64>,
@@ -328,6 +331,7 @@ impl Default for AppState {
             visible_wrike_tabs: Mutex::new(HashSet::new()),
             tracked_paths: Mutex::new(HashMap::new()),
             detected_wrike_theme: Mutex::new(None),
+            preview_intent_until: Mutex::new(None),
             cached_settings: RwLock::new(None),
             top_inset: Mutex::new(0.0),
             wrike_split_ratio: Mutex::new(0.5),
@@ -1668,6 +1672,14 @@ fn open_wrike_at(
                 });
                 return false;
             }
+            if url.scheme() == "abw-preview-intent" {
+                if let Some(state) = navigation_app.try_state::<AppState>() {
+                    if let Ok(mut guard) = state.preview_intent_until.lock() {
+                        *guard = Some(std::time::Instant::now() + std::time::Duration::from_secs(12));
+                    }
+                }
+                return false;
+            }
             if url.scheme() == "abw-task" {
                 let title = url
                     .query_pairs()
@@ -2032,6 +2044,11 @@ fn record_completed_download(
     let size_bytes = fs::metadata(path)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
+    let previewed = app
+        .try_state::<AppState>()
+        .and_then(|state| state.preview_intent_until.lock().ok())
+        .and_then(|mut guard| guard.take())
+        .is_some_and(|deadline| std::time::Instant::now() <= deadline);
     let record = DownloadRecord {
         id: Uuid::new_v4().to_string(),
         file_name,
@@ -2041,6 +2058,7 @@ fn record_completed_download(
         size_bytes,
         source_url: provenance.source_url,
         source_label: provenance.source_label,
+        previewed,
     };
     persistence::update::<Vec<DownloadRecord>, _>(&records_path(app)?, |records| {
         records.insert(0, record.clone());
@@ -2055,7 +2073,9 @@ fn record_completed_download(
             .body(format!("{notification_file_name} is ready to preview."))
             .show();
     }
-    if settings.open_downloaded_files_automatically {
+    if settings.open_downloaded_files_automatically
+        && !(previewed && matches!(record.kind.as_str(), "pdf" | "spreadsheet" | "image"))
+    {
         let _ = open::that(path);
     }
     app.emit("downloads-updated", ())

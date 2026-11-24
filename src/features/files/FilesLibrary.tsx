@@ -11,9 +11,11 @@ interface Props {
   onSearchChange: (search: string) => void;
   onSelect: (id: string) => void;
   onTogglePin: (id: string) => void;
+  onShowPreviewedChange: (value: boolean) => void;
   pinnedIds: string[];
   search: string;
   selectedId: string | null;
+  showPreviewed: boolean;
 }
 
 interface FilesColumnWidths {
@@ -56,6 +58,7 @@ const filters: Array<{ id: FileFilter; label: string }> = [
   { id: "spreadsheet", label: "Spreadsheets" },
   { id: "image", label: "Images" },
   { id: "document", label: "Documents" },
+  { id: "previewed", label: "Previewed" },
 ];
 
 const TIME_FORMATTER = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
@@ -70,9 +73,11 @@ export const FilesLibrary = memo(function FilesLibrary({
   onSearchChange,
   onSelect,
   onTogglePin,
+  onShowPreviewedChange,
   pinnedIds,
   search,
   selectedId,
+  showPreviewed,
 }: Props) {
   const pinned = useMemo(() => new Set(pinnedIds), [pinnedIds]);
   const sectionRef = useRef<HTMLElement>(null);
@@ -215,9 +220,23 @@ export const FilesLibrary = memo(function FilesLibrary({
       style={filesColsStyle}
     >
       <header className="library-header">
-        <div>
-          <h1>Files</h1>
-          <p>Downloads from your Wrike tasks</p>
+        <div className="library-header-top">
+          <div>
+            <h1>Files</h1>
+            <p>Downloads from your Wrike tasks</p>
+          </div>
+          <label
+            className="files-previewed-toggle"
+            title="Include files opened via in-app preview in All and type tabs"
+          >
+            <input
+              checked={showPreviewed}
+              onChange={(event) => onShowPreviewedChange(event.target.checked)}
+              type="checkbox"
+            />
+            <span className="files-toggle-track" aria-hidden="true" />
+            <span>Previewed files</span>
+          </label>
         </div>
         <label className="search">
           <svg viewBox="0 0 24 24" className="icon" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -333,11 +352,11 @@ export const FilesLibrary = memo(function FilesLibrary({
                     <FolderIcon />
                   </button>
                   <button
-                    aria-label={`Remove ${file.fileName}`}
+                    aria-label={`Delete ${file.fileName} from your computer and Files list`}
                     className="row-action-button danger"
                     disabled={!!file.demo}
                     onClick={() => onDelete(file)}
-                    title="Remove file"
+                    title="Delete file from your computer and Files list"
                   >
                     <TrashIcon />
                   </button>

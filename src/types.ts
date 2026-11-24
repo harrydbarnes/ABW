@@ -11,6 +11,7 @@ export interface DownloadRecord {
   sizeBytes: number;
   sourceUrl: string | null;
   sourceLabel: string;
+  previewed?: boolean;
   demo?: boolean;
 }
 
@@ -174,7 +175,7 @@ export interface ClearDownloadsResult {
   freedBytes: number;
 }
 
-export type FileFilter = "all" | FileKind;
+export type FileFilter = "all" | FileKind | "previewed";
 
 export const APP_THEMES = [
   { id: "default", label: "Default" },

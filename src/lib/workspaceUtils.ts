@@ -35,13 +35,23 @@ export function filterAndSortDownloads(
   filter: FileFilter,
   search: string,
   pinnedDownloadIds: string[],
+  showPreviewed: boolean = false,
 ): DownloadRecord[] {
   const query = search.trim().toLowerCase();
   const pinnedIds = new Set(pinnedDownloadIds);
   const matching: Array<{ record: DownloadRecord; pinned: boolean; timestamp: number }> = [];
   for (const record of downloads) {
-    if (filter !== "all" && record.kind !== filter) {
-      continue;
+    if (filter === "previewed") {
+      if (!record.previewed) {
+        continue;
+      }
+    } else {
+      if (!showPreviewed && record.previewed) {
+        continue;
+      }
+      if (filter !== "all" && record.kind !== filter) {
+        continue;
+      }
     }
     if (
       query.length > 0 &&

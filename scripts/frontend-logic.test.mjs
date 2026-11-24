@@ -216,6 +216,33 @@ test("filterAndSortDownloads prioritizes pinned files then newest timestamp", ()
     filteredByKindAndSource.map((item) => item.id),
     ["old"],
   );
+
+  const mixed = [
+    ...downloads,
+    {
+      id: "previewed-img",
+      fileName: "snap.png",
+      extension: "png",
+      kind: "image",
+      downloadedAt: "2026-07-05T10:00:00Z",
+      sizeBytes: 512,
+      sourceUrl: null,
+      sourceLabel: "Creative",
+      previewed: true,
+    },
+  ];
+  assert.deepEqual(
+    filterAndSortDownloads(mixed, "all", "", [], false).map((item) => item.id),
+    ["newer", "new-pdf", "old"],
+  );
+  assert.deepEqual(
+    filterAndSortDownloads(mixed, "all", "", [], true).map((item) => item.id),
+    ["previewed-img", "newer", "new-pdf", "old"],
+  );
+  assert.deepEqual(
+    filterAndSortDownloads(mixed, "previewed", "", [], false).map((item) => item.id),
+    ["previewed-img"],
+  );
 });
 
 test("tab cycling and shortcut digit helpers handle wraparound and bounds", () => {

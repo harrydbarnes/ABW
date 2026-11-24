@@ -192,6 +192,7 @@ export function App() {
   const [isTopbarActionsMenuOpen, setIsTopbarActionsMenuOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [previewFromWrike, setPreviewFromWrike] = useState(false);
+  const [showPreviewedFiles, setShowPreviewedFiles] = useState(false);
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [filter, setFilter] = useState<FileFilter>("all");
@@ -857,12 +858,22 @@ export function App() {
   }, []);
 
   const visibleDownloads = useMemo(
-    () => filterAndSortDownloads(downloads, filter, deferredSearch, settings.pinnedDownloadIds),
-    [deferredSearch, downloads, filter, settings.pinnedDownloadIds],
+    () =>
+      filterAndSortDownloads(
+        downloads,
+        filter,
+        deferredSearch,
+        settings.pinnedDownloadIds,
+        showPreviewedFiles,
+      ),
+    [deferredSearch, downloads, filter, settings.pinnedDownloadIds, showPreviewedFiles],
   );
 
   const selectedRecord =
-    visibleDownloads.find((record) => record.id === selectedId) ?? visibleDownloads[0] ?? null;
+    (previewFromWrike ? downloads.find((record) => record.id === selectedId) : undefined) ??
+    visibleDownloads.find((record) => record.id === selectedId) ??
+    visibleDownloads[0] ??
+    null;
 
   function normalizedStartupUrls(urls = settingsRef.current.startupTabUrls) {
     return normalizeStartupUrlsShared(urls);
@@ -1902,9 +1913,9 @@ export function App() {
     void deleteDownload(record.id)
       .then(() => {
         setDownloads((current) => current.filter((item) => item.id !== record.id));
-        setNotice(`Removed ${record.fileName}.`);
+        setNotice(`Deleted ${record.fileName} from your computer.`);
       })
-      .catch((error) => setNotice(`Unable to remove ${record.fileName}: ${String(error)}`));
+      .catch((error) => setNotice(`Unable to delete ${record.fileName}: ${String(error)}`));
   }, []);
 
   const handleOpenDownloadsFolder = useCallback(() => {
@@ -2607,7 +2618,7 @@ export function App() {
           </section>
         ) : screen === "files" ? (
           <div
-            className="files-screen"
+            className={`files-screen ${previewFromWrike ? "preview-entering" : ""}`}
             style={{ "--files-split-percent": `${filesSplitPercent}%` } as React.CSSProperties}
           >
             <FilesLibrary
@@ -2619,10 +2630,12 @@ export function App() {
               onReveal={revealDownloadedFile}
               onSearchChange={setSearch}
               onSelect={setSelectedId}
+              onShowPreviewedChange={setShowPreviewedFiles}
               onTogglePin={togglePinnedDownload}
               pinnedIds={settings.pinnedDownloadIds}
               search={search}
               selectedId={selectedRecord?.id ?? null}
+              showPreviewed={showPreviewedFiles}
             />
             <div
               aria-label="Resize file list and preview pane"

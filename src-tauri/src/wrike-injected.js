@@ -1265,6 +1265,9 @@
         if (download) {
           window.clearInterval(abwPreviewDownloadTimer);
           abwExpectingDownloadUntil = Date.now() + 5000;
+          if (root !== document && typeof abwEmitScheme === "function") {
+            abwEmitScheme("abw-preview-intent://mark");
+          }
           download.click();
           if (root !== document) {
             window.setTimeout(() => abwDismissPreviewOverlay(root), 150);
@@ -1299,6 +1302,9 @@
           abwCancelQueuedPreviewDownload();
           abwShowPreviewLoading(matchedName);
           abwExpectingDownloadUntil = Date.now() + 5000;
+          if (typeof abwEmitScheme === "function") {
+            abwEmitScheme("abw-preview-intent://mark");
+          }
           inlineDownload.click();
         } else {
           abwQueuePreviewDownload(matchedName);
