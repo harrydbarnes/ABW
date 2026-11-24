@@ -152,6 +152,13 @@ const INITIAL_WRIKE_TAB: WrikeTab = {
   mode: "standard",
 };
 
+function isPrivacyErrorTab(tab: WrikeTab): boolean {
+  return (
+    tab.title.trim().toLowerCase() === "privacy error" ||
+    Boolean(tab.url?.trim().toLowerCase().startsWith("chrome-error://"))
+  );
+}
+
 function applyWrikeTabUpdate(tab: WrikeTab, update: WrikeTabUpdate): WrikeTab {
   const nextTitle = update.title.trim();
   const isTitleLoading = tab.mode === "readOnly" ? false : update.isTitleLoading;
@@ -231,6 +238,7 @@ export function App() {
   });
   const [notice, setNotice] = useState<string | null>(null);
   const [storageWarning, setStorageWarning] = useState<string | null>(null);
+  const [dismissedVpnPrompt, setDismissedVpnPrompt] = useState(false);
   const [sessionPrompt, setSessionPrompt] = useState<WrikeSession | null>(null);
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const [reloadingTabId, setReloadingTabId] = useState<string | null>(null);
@@ -261,15 +269,39 @@ export function App() {
   const launchStartedAtRef = useRef(Date.now());
   const shortcutHandlerRef = useRef<(shortcut: WrikeShortcutEvent) => void>(() => undefined);
 
+  const visiblePrivacyTabIds =
+    screen === "wrike"
+      ? wrikeSplit &&
+        wrikeTabs.some((tab) => tab.id === wrikeSplit.leftTabId) &&
+        wrikeTabs.some((tab) => tab.id === wrikeSplit.rightTabId)
+        ? [wrikeSplit.leftTabId, wrikeSplit.rightTabId]
+        : [wrikeTabs.find((tab) => tab.id === activeWrikeTabId)?.id ?? wrikeTabs[0]?.id].filter(
+            (id): id is string => Boolean(id),
+          )
+      : [];
+  const privacyErrorTabs = visiblePrivacyTabIds
+    .map((id) => wrikeTabs.find((tab) => tab.id === id))
+    .filter((tab): tab is WrikeTab => Boolean(tab && isPrivacyErrorTab(tab)));
+  const showVpnBanner =
+    screen === "wrike" && privacyErrorTabs.length > 0 && !dismissedVpnPrompt;
+
   const showUpdateBanner =
     (appUpdate.phase === "available" ||
       appUpdate.phase === "downloading" ||
       appUpdate.phase === "installing") &&
     !appUpdate.dismissedPrompt;
   const topBannerInset =
-    (showUpdateBanner ? TOP_BANNER_HEIGHT : 0) + (storageWarning ? TOP_BANNER_HEIGHT : 0);
+    (showUpdateBanner ? TOP_BANNER_HEIGHT : 0) +
+    (showVpnBanner ? TOP_BANNER_HEIGHT : 0) +
+    (storageWarning ? TOP_BANNER_HEIGHT : 0);
   const topBannerInsetRef = useRef(topBannerInset);
   topBannerInsetRef.current = topBannerInset;
+
+  useEffect(() => {
+    if (privacyErrorTabs.length === 0) {
+      setDismissedVpnPrompt(false);
+    }
+  }, [privacyErrorTabs.length]);
 
   useEffect(() => {
     if (storageWarning) setScreen("settings");
@@ -595,7 +627,8 @@ export function App() {
           !update.isTitleLoading &&
           cleanTitle &&
           cleanTitle !== "Wrike" &&
-          cleanTitle !== "Read Only Mode"
+          cleanTitle !== "Read Only Mode" &&
+          cleanTitle.toLowerCase() !== "privacy error"
         ) {
           const signature = `${targetUrl}::${cleanTitle}`;
           if (lastRecordedVisitRef.current.get(update.tabId) !== signature) {
@@ -2400,6 +2433,37 @@ export function App() {
                 <NavIcon kind="close" />
               </button>
             ) : null}
+          </div>
+        </div>
+      ) : null}
+      {showVpnBanner ? (
+        <div className="vpn-banner" role="alert" aria-live="assertive">
+          <div className="vpn-banner-copy">
+            <strong>Connection blocked — Connect to Cisco VPN</strong>
+            <span>
+              If you aren&apos;t connected to Cisco VPN yet, connect now and reload this tab.
+            </span>
+          </div>
+          <div className="vpn-banner-actions">
+            <button
+              className="vpn-banner-primary"
+              onClick={() => {
+                for (const tab of privacyErrorTabs) {
+                  void runWrikeTabAction(tab.id, "reload");
+                }
+              }}
+              type="button"
+            >
+              Reload tab
+            </button>
+            <button
+              aria-label="Dismiss Cisco VPN reminder"
+              className="vpn-banner-dismiss"
+              onClick={() => setDismissedVpnPrompt(true)}
+              type="button"
+            >
+              <NavIcon kind="close" />
+            </button>
           </div>
         </div>
       ) : null}
