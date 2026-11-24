@@ -14,7 +14,7 @@
   let lastPanelEl = null;
   let lastPanelFingerprint = '';
   let lastValues = null;
-  const requiredKeys = ['client', 'product', 'po', 'start', 'end', 'total', 'plan'];
+  const requiredKeys = ['client', 'po', 'start', 'end', 'total', 'plan'];
   const handoff = 'https://go.mediaocean.com/robots.txt#abw-check-po?';
   function setStatus(status) {
     const states = {
