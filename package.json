@@ -1,12 +1,12 @@
 {
   "name": "abw",
   "private": true,
-  "version": "0.1.45",
+  "version": "0.1.46",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
-    "test:smoke": "node --test scripts/dependency-smoke.test.mjs scripts/desktop-regressions.test.mjs scripts/frontend-logic.test.mjs",
+    "test:smoke": "node --test scripts/dependency-smoke.test.mjs scripts/desktop-regressions.test.mjs scripts/frontend-logic.test.mjs scripts/format-release-notes.test.mjs",
     "dependencies:report": "node scripts/dependency-report.mjs",
     "release:prepare": "node scripts/release-version.mjs",
     "release:check": "node scripts/release-version.mjs --check",

@@ -148,6 +148,46 @@ export interface PdfHeadLike {
   complete: boolean;
 }
 
+export function parseSpreadsheetNumber(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const negativeParens = /^\((.+)\)$/.test(trimmed);
+  const unwrapped = negativeParens ? trimmed.slice(1, -1).trim() : trimmed;
+  const cleaned = unwrapped.replace(/[£$€¥,\s%]/g, "");
+  if (!/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(cleaned)) {
+    return null;
+  }
+  const value = Number(cleaned);
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  return negativeParens ? -Math.abs(value) : value;
+}
+
+export function formatSummaryNumber(value: number): string {
+  return value.toLocaleString(undefined, {
+    maximumFractionDigits: 2,
+  });
+}
+
+export function formatSelectionAsCsv(rows: string[][]): string {
+  return rows
+    .map((row) =>
+      row
+        .map((cell) => {
+          const text = String(cell ?? "");
+          if (/[",\r\n]/.test(text)) {
+            return `"${text.replace(/"/g, '""')}"`;
+          }
+          return text;
+        })
+        .join(","),
+    )
+    .join("\r\n");
+}
+
 export interface PreviewCacheRecord {
   id: string;
   sizeBytes: number;

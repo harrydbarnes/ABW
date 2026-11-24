@@ -7,7 +7,10 @@ import {
   estimatePreviewSize,
   evictLruEntries,
   formatBytes,
+  formatSelectionAsCsv,
+  formatSummaryNumber,
   nextPdfRotation,
+  parseSpreadsheetNumber,
   PDF_PREVIEW_BYTE_LIMIT,
   toColumnLabel,
 } from "../src/features/preview/previewUtils.ts";
@@ -19,7 +22,6 @@ import {
   normalizeUrlInput,
   normalizedStartupUrls,
   tabIndexFromShortcutDigit,
-  wrikeSessionSignature,
 } from "../src/lib/workspaceUtils.ts";
 
 test("formatBytes formats KB and MB cleanly", () => {
@@ -147,7 +149,7 @@ test("URL normalization accepts web/blank URLs and rejects unsafe schemes", () =
   ]);
 });
 
-test("session helpers detect restorable sessions and produce stable signatures", () => {
+test("hasRestorableSession detects restorable sessions", () => {
   assert.equal(hasRestorableSession(null), false);
   assert.equal(
     hasRestorableSession({
@@ -167,15 +169,6 @@ test("session helpers detect restorable sessions and produce stable signatures",
     }),
     true,
   );
-
-  const tabs = [{ id: "home", title: "Wrike", url: null, mode: "standard" }];
-  const sigA = wrikeSessionSignature(tabs, "home", null);
-  const sigB = wrikeSessionSignature(
-    [{ id: "home", title: "Wrike", url: WRIKE_HOME, mode: "standard" }],
-    "home",
-    null,
-  );
-  assert.equal(sigA, sigB);
 });
 
 test("filterAndSortDownloads prioritizes pinned files then newest timestamp", () => {
@@ -296,6 +289,23 @@ test("createPreviewCache deduplicates in-flight loads, enforces limits, and evic
   cache.evictById("sheet-1");
   assert.equal(cache.pdfCacheSize(), 0);
   assert.equal(cache.spreadsheetCacheSize(), 0);
+});
+
+test("parseSpreadsheetNumber, formatSummaryNumber, and formatSelectionAsCsv handle spreadsheet values", () => {
+  assert.equal(parseSpreadsheetNumber("£42,000"), 42000);
+  assert.equal(parseSpreadsheetNumber("($1,234.50)"), -1234.5);
+  assert.equal(parseSpreadsheetNumber(" 18.75% "), 18.75);
+  assert.equal(parseSpreadsheetNumber(""), null);
+  assert.equal(parseSpreadsheetNumber("Pending"), null);
+  assert.equal(formatSummaryNumber(1234.567), "1,234.57");
+
+  assert.equal(
+    formatSelectionAsCsv([
+      ["Plain", 'Has "quotes"', "Has, comma"],
+      ["Line1\nLine2", "£100", "OK"],
+    ]),
+    'Plain,"Has ""quotes""","Has, comma"\r\n"Line1\nLine2",£100,OK',
+  );
 });
 
 test("createPreviewCache accounts for tailChunk byteLength when enforcing PDF cache entry budget", async () => {

@@ -2,18 +2,6 @@ import type { DownloadRecord, FileFilter, WrikeSession } from "../types";
 
 export const WRIKE_HOME = "https://www.wrike.com/workspace.htm";
 
-export interface SessionTabLike {
-  id: string;
-  title: string;
-  url: string | null;
-  mode: "standard" | "readOnly";
-}
-
-export interface SessionSplitLike {
-  leftTabId: string;
-  rightTabId: string;
-}
-
 export function normalizeUrlInput(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -40,19 +28,6 @@ export function normalizedStartupUrls(urls: string[]): string[] {
 
 export function hasRestorableSession(session: WrikeSession | null): session is WrikeSession {
   return Boolean(session?.tabs.some((tab) => normalizeUrlInput(tab.url ?? "")));
-}
-
-export function wrikeSessionSignature(
-  tabs: SessionTabLike[],
-  activeTabId: string,
-  split: SessionSplitLike | null,
-  fallbackUrl: string = WRIKE_HOME,
-): string {
-  return JSON.stringify({
-    tabs: tabs.map((tab) => [tab.id, tab.title, tab.url ?? fallbackUrl, tab.mode]),
-    activeTabId,
-    split: split ? [split.leftTabId, split.rightTabId] : null,
-  });
 }
 
 export function filterAndSortDownloads(

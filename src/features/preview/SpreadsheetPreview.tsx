@@ -18,10 +18,17 @@ import type {
 } from "../../types";
 import { loadSpreadsheetImages } from "../../lib/desktop";
 import { loadCachedSpreadsheetPreview, toColumnLabel } from "./previewCache";
+import {
+  formatSelectionAsCsv,
+  formatSummaryNumber,
+  parseSpreadsheetNumber,
+} from "./previewUtils";
 
 const ROW_HEADER_WIDTH_PX = 38;
 const COLUMN_HEADER_HEIGHT_PX = 28;
 const VIRTUAL_ROW_OVERSCAN = 12;
+const VIRTUAL_COL_THRESHOLD = 30;
+const VIRTUAL_COL_OVERSCAN = 6;
 
 type CellCoord = {
   row: number;
@@ -36,30 +43,6 @@ type CellSelection = {
 interface CellMatch {
   row: number;
   col: number;
-}
-
-function parseSpreadsheetNumber(raw: string): number | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const negativeParens = /^\((.+)\)$/.test(trimmed);
-  const unwrapped = negativeParens ? trimmed.slice(1, -1).trim() : trimmed;
-  const cleaned = unwrapped.replace(/[£$€¥,\s%]/g, "");
-  if (!/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(cleaned)) {
-    return null;
-  }
-  const value = Number(cleaned);
-  if (!Number.isFinite(value)) {
-    return null;
-  }
-  return negativeParens ? -Math.abs(value) : value;
-}
-
-function formatSummaryNumber(value: number): string {
-  return value.toLocaleString(undefined, {
-    maximumFractionDigits: 2,
-  });
 }
 
 const DEMO_PREVIEW: WorkbookPreview = {
@@ -95,6 +78,10 @@ const SheetRow = memo(function SheetRow({
   row,
   rowIndex,
   columns,
+  startCol,
+  endCol,
+  leftSpacerWidth,
+  rightSpacerWidth,
   stylesPalette,
   matchCols,
   activeMatchCol,
@@ -104,47 +91,56 @@ const SheetRow = memo(function SheetRow({
   row: WorkbookSheet["rows"][number];
   rowIndex: number;
   columns: WorkbookSheet["columns"];
+  startCol: number;
+  endCol: number;
+  leftSpacerWidth: number;
+  rightSpacerWidth: number;
   stylesPalette: CSSProperties[];
   matchCols: Set<number> | undefined;
   activeMatchCol: number;
   selMinCol: number;
   selMaxCol: number;
 }) {
+  const renderedCells = [];
+  for (let cellIndex = startCol; cellIndex < endCol; cellIndex += 1) {
+    const cell = row.cells[cellIndex];
+    if (!cell || cell.coveredByMerge) {
+      continue;
+    }
+    const isActiveMatch = cellIndex === activeMatchCol;
+    const isMatch = !isActiveMatch && Boolean(matchCols?.has(cellIndex));
+    const isSelected = selMinCol >= 0 && cellIndex >= selMinCol && cellIndex <= selMaxCol;
+    const className = [
+      isActiveMatch ? "sheet-match active" : isMatch ? "sheet-match" : "",
+      isSelected ? "cell-selected" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    renderedCells.push(
+      <td
+        className={className || undefined}
+        colSpan={cell.colSpan}
+        data-cell-key={isMatch || isActiveMatch ? `${rowIndex}:${cellIndex}` : undefined}
+        data-col={cellIndex}
+        data-row={rowIndex}
+        key={columns[cellIndex]?.index ?? cellIndex}
+        rowSpan={cell.rowSpan}
+        style={
+          cell.styleIndex !== undefined
+            ? stylesPalette[cell.styleIndex]
+            : cell.style
+        }
+      >
+        {cell.value ?? ""}
+      </td>,
+    );
+  }
   return (
     <tr style={{ height: row.heightPx }}>
       <th className="row-number">{row.index}</th>
-      {row.cells.map((cell, cellIndex) => {
-        if (cell.coveredByMerge) {
-          return null;
-        }
-        const isActiveMatch = cellIndex === activeMatchCol;
-        const isMatch = !isActiveMatch && Boolean(matchCols?.has(cellIndex));
-        const isSelected = selMinCol >= 0 && cellIndex >= selMinCol && cellIndex <= selMaxCol;
-        const className = [
-          isActiveMatch ? "sheet-match active" : isMatch ? "sheet-match" : "",
-          isSelected ? "cell-selected" : "",
-        ]
-          .filter(Boolean)
-          .join(" ");
-        return (
-          <td
-            className={className || undefined}
-            colSpan={cell.colSpan}
-            data-cell-key={isMatch || isActiveMatch ? `${rowIndex}:${cellIndex}` : undefined}
-            data-col={cellIndex}
-            data-row={rowIndex}
-            key={columns[cellIndex]?.index ?? cellIndex}
-            rowSpan={cell.rowSpan}
-            style={
-              cell.styleIndex !== undefined
-                ? stylesPalette[cell.styleIndex]
-                : cell.style
-            }
-          >
-            {cell.value ?? ""}
-          </td>
-        );
-      })}
+      {leftSpacerWidth > 0 ? <td aria-hidden="true" className="sheet-virtual-col-spacer" /> : null}
+      {renderedCells}
+      {rightSpacerWidth > 0 ? <td aria-hidden="true" className="sheet-virtual-col-spacer" /> : null}
     </tr>
   );
 });
@@ -167,7 +163,7 @@ export default memo(function SpreadsheetPreview({
   const [loading, setLoading] = useState(!demo);
   const [problem, setProblem] = useState<string | null>(null);
   const [selection, setSelection] = useState<CellSelection | null>(null);
-  const [copiedNotice, setCopiedNotice] = useState(false);
+  const [copiedNotice, setCopiedNotice] = useState<"tsv" | "csv" | null>(null);
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
   const deferredQuery = useDeferredValue(findQuery);
@@ -175,7 +171,7 @@ export default memo(function SpreadsheetPreview({
   const [showImages, setShowImages] = useState(false);
   const [imagesLoading, setImagesLoading] = useState(false);
   const [imagesByKey, setImagesByKey] = useState<Record<string, WorkbookImage[]>>({});
-  const [viewport, setViewport] = useState({ scrollTop: 0, height: 600 });
+  const [viewport, setViewport] = useState({ scrollTop: 0, scrollLeft: 0, height: 600, width: 800 });
   const activeRecordIdRef = useRef(record.id);
   activeRecordIdRef.current = record.id;
 
@@ -207,14 +203,14 @@ export default memo(function SpreadsheetPreview({
 
   useEffect(() => {
     setSelection(null);
-    setCopiedNotice(false);
+    setCopiedNotice(null);
   }, [active, record.id]);
 
   useEffect(() => {
     if (!copiedNotice) {
       return;
     }
-    const timer = window.setTimeout(() => setCopiedNotice(false), 1600);
+    const timer = window.setTimeout(() => setCopiedNotice(null), 1600);
     return () => window.clearTimeout(timer);
   }, [copiedNotice]);
 
@@ -226,7 +222,12 @@ export default memo(function SpreadsheetPreview({
     setShowImages(false);
     setImagesLoading(false);
     setImagesByKey({});
-    setViewport({ scrollTop: 0, height: scrollerRef.current?.clientHeight || 600 });
+    setViewport({
+      scrollTop: 0,
+      scrollLeft: 0,
+      height: scrollerRef.current?.clientHeight || 600,
+      width: scrollerRef.current?.clientWidth || 800,
+    });
     sheetScrollRef.current.clear();
     if (demo) {
       setPreview(DEMO_PREVIEW);
@@ -274,11 +275,16 @@ export default memo(function SpreadsheetPreview({
     let rafId = 0;
     const syncViewport = () => {
       const nextTop = scroller.scrollTop;
+      const nextLeft = scroller.scrollLeft;
       const nextHeight = scroller.clientHeight || 600;
+      const nextWidth = scroller.clientWidth || 800;
       setViewport((current) =>
-        Math.abs(current.scrollTop - nextTop) < 1 && Math.abs(current.height - nextHeight) < 1
+        Math.abs(current.scrollTop - nextTop) < 1 &&
+        Math.abs(current.scrollLeft - nextLeft) < 1 &&
+        Math.abs(current.height - nextHeight) < 1 &&
+        Math.abs(current.width - nextWidth) < 1
           ? current
-          : { scrollTop: nextTop, height: nextHeight },
+          : { scrollTop: nextTop, scrollLeft: nextLeft, height: nextHeight, width: nextWidth },
       );
     };
     const onScroll = () => {
@@ -398,6 +404,112 @@ export default memo(function SpreadsheetPreview({
     };
   }, [mergeOwnerStart, rowOffsets, sheet, totalRowsHeight, viewport.height, viewport.scrollTop, zoom]);
 
+  const { colOffsets, totalColsWidth, colMergeOwnerStart } = useMemo(() => {
+    if (!sheet) {
+      return {
+        colOffsets: [0],
+        totalColsWidth: 0,
+        colMergeOwnerStart: [] as number[],
+      };
+    }
+    const colCount = sheet.columns.length;
+    const offsets = new Array<number>(colCount + 1);
+    offsets[0] = 0;
+    const owners = new Array<number>(colCount);
+    for (let c = 0; c < colCount; c += 1) {
+      offsets[c + 1] = offsets[c] + sheet.columns[c].widthPx;
+      owners[c] = c;
+    }
+    for (let r = 0; r < sheet.rows.length; r += 1) {
+      const cells = sheet.rows[r].cells;
+      for (let c = 0; c < cells.length; c += 1) {
+        const span = cells[c].colSpan ?? 1;
+        if (span > 1) {
+          const maxC = Math.min(colCount - 1, c + span - 1);
+          for (let k = c + 1; k <= maxC; k += 1) {
+            if (c < owners[k]) {
+              owners[k] = c;
+            }
+          }
+        }
+      }
+    }
+    return {
+      colOffsets: offsets,
+      totalColsWidth: offsets[colCount],
+      colMergeOwnerStart: owners,
+    };
+  }, [sheet]);
+
+  const { startCol, endCol, leftSpacerWidth, rightSpacerWidth } = useMemo(() => {
+    if (!sheet || sheet.columns.length === 0) {
+      return { startCol: 0, endCol: 0, leftSpacerWidth: 0, rightSpacerWidth: 0 };
+    }
+    const colCount = sheet.columns.length;
+    if (colCount <= VIRTUAL_COL_THRESHOLD) {
+      return { startCol: 0, endCol: colCount, leftSpacerWidth: 0, rightSpacerWidth: 0 };
+    }
+    const scale = zoom / 100;
+    const unscaledLeft = Math.max(0, viewport.scrollLeft / scale - ROW_HEADER_WIDTH_PX);
+    const unscaledRight = Math.max(
+      unscaledLeft,
+      (viewport.scrollLeft + viewport.width) / scale - ROW_HEADER_WIDTH_PX,
+    );
+
+    let lo = 0;
+    let hi = colCount;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (colOffsets[mid + 1] <= unscaledLeft) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    let start = Math.max(0, lo - VIRTUAL_COL_OVERSCAN);
+    while (start > 0 && colMergeOwnerStart[start] < start) {
+      start = colMergeOwnerStart[start];
+    }
+
+    lo = start;
+    hi = colCount;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (colOffsets[mid] < unscaledRight) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    let end = Math.min(colCount, lo + VIRTUAL_COL_OVERSCAN);
+    for (let r = startRow; r < endRow; r += 1) {
+      const cells = sheet.rows[r].cells;
+      for (let c = start; c < end; c += 1) {
+        const span = cells[c]?.colSpan ?? 1;
+        if (span > 1) {
+          end = Math.max(end, Math.min(colCount, c + span));
+        }
+      }
+    }
+
+    return {
+      startCol: start,
+      endCol: end,
+      leftSpacerWidth: colOffsets[start],
+      rightSpacerWidth: totalColsWidth - colOffsets[end],
+    };
+  }, [
+    colMergeOwnerStart,
+    colOffsets,
+    endRow,
+    sheet,
+    startRow,
+    totalColsWidth,
+    viewport.scrollLeft,
+    viewport.width,
+    zoom,
+  ]);
+
   const { matches, matchesByRow } = useMemo(() => {
     const trimmed = deferredQuery.trim().toLowerCase();
     const byRow = new Map<number, Set<number>>();
@@ -444,14 +556,16 @@ export default memo(function SpreadsheetPreview({
     }
     const scale = zoom / 100;
     const rowY = (COLUMN_HEADER_HEIGHT_PX + (rowOffsets[activeMatch.row] ?? 0)) * scale;
+    const colX = (ROW_HEADER_WIDTH_PX + (colOffsets[activeMatch.col] ?? 0)) * scale;
     scroller.scrollTop = Math.max(0, rowY - scroller.clientHeight / 3);
+    scroller.scrollLeft = Math.max(0, colX - scroller.clientWidth / 3);
     window.requestAnimationFrame(() => {
       const mounted = scrollerRef.current?.querySelector<HTMLElement>(
         `td[data-cell-key="${activeMatchKey}"]`,
       );
       mounted?.scrollIntoView({ block: "nearest", inline: "nearest" });
     });
-  }, [activeMatch, activeMatchKey, rowOffsets, zoom]);
+  }, [activeMatch, activeMatchKey, colOffsets, rowOffsets, zoom]);
 
   const normalizedBounds = useMemo(() => {
     if (!selection) {
@@ -507,27 +621,34 @@ export default memo(function SpreadsheetPreview({
     };
   }, [normalizedBounds, sheet]);
 
-  const copySelection = useCallback(async () => {
-    if (!sheet || !normalizedBounds) {
-      return;
-    }
-    const rowsText: string[] = [];
-    for (let r = normalizedBounds.minRow; r <= normalizedBounds.maxRow; r += 1) {
-      const row = sheet.rows[r];
-      const rowValues: string[] = [];
-      for (let c = normalizedBounds.minCol; c <= normalizedBounds.maxCol; c += 1) {
-        const cell = row?.cells[c];
-        rowValues.push(cell && !cell.coveredByMerge ? cell.value ?? "" : "");
+  const copySelection = useCallback(
+    async (format: "tsv" | "csv" = "tsv") => {
+      if (!sheet || !normalizedBounds) {
+        return;
       }
-      rowsText.push(rowValues.join("\t"));
-    }
-    try {
-      await navigator.clipboard.writeText(rowsText.join("\n"));
-      setCopiedNotice(true);
-    } catch {
-      // Clipboard API unavailable
-    }
-  }, [normalizedBounds, sheet]);
+      const rows: string[][] = [];
+      for (let r = normalizedBounds.minRow; r <= normalizedBounds.maxRow; r += 1) {
+        const row = sheet.rows[r];
+        const rowValues: string[] = [];
+        for (let c = normalizedBounds.minCol; c <= normalizedBounds.maxCol; c += 1) {
+          const cell = row?.cells[c];
+          rowValues.push(cell && !cell.coveredByMerge ? cell.value ?? "" : "");
+        }
+        rows.push(rowValues);
+      }
+      const text =
+        format === "csv"
+          ? formatSelectionAsCsv(rows)
+          : rows.map((rowValues) => rowValues.join("\t")).join("\n");
+      try {
+        await navigator.clipboard.writeText(text);
+        setCopiedNotice(format);
+      } catch {
+        // Clipboard API unavailable
+      }
+    },
+    [normalizedBounds, sheet],
+  );
 
   const startSelection = useCallback((rowIndex: number, cellIndex: number, shiftKey: boolean) => {
     isSelectingRef.current = true;
@@ -613,11 +734,14 @@ export default memo(function SpreadsheetPreview({
       const saved = sheetScrollRef.current.get(nextIndex);
       if (scrollerRef.current) {
         const nextTop = saved?.top ?? 0;
+        const nextLeft = saved?.left ?? 0;
         scrollerRef.current.scrollTop = nextTop;
-        scrollerRef.current.scrollLeft = saved?.left ?? 0;
+        scrollerRef.current.scrollLeft = nextLeft;
         setViewport({
           scrollTop: nextTop,
+          scrollLeft: nextLeft,
           height: scrollerRef.current.clientHeight || 600,
+          width: scrollerRef.current.clientWidth || 800,
         });
       }
     });
@@ -679,8 +803,9 @@ export default memo(function SpreadsheetPreview({
     return <div className="unsupported-preview">This workbook has no visible worksheets.</div>;
   }
 
-  const totalTableWidth =
-    ROW_HEADER_WIDTH_PX + sheet.columns.reduce((sum, column) => sum + column.widthPx, 0);
+  const totalTableWidth = ROW_HEADER_WIDTH_PX + totalColsWidth;
+  const renderedColCount =
+    endCol - startCol + (leftSpacerWidth > 0 ? 1 : 0) + (rightSpacerWidth > 0 ? 1 : 0) + 1;
 
   return (
     <div
@@ -793,16 +918,24 @@ export default memo(function SpreadsheetPreview({
           <table className="sheet" style={{ width: totalTableWidth }}>
             <colgroup>
               <col className="row-number-column" />
-              {sheet.columns.map((column) => (
+              {leftSpacerWidth > 0 ? <col style={{ width: leftSpacerWidth }} /> : null}
+              {sheet.columns.slice(startCol, endCol).map((column) => (
                 <col key={column.index} style={{ width: column.widthPx }} />
               ))}
+              {rightSpacerWidth > 0 ? <col style={{ width: rightSpacerWidth }} /> : null}
             </colgroup>
             <thead>
               <tr>
                 <th className="row-number" />
-                {sheet.columns.map((column) => (
+                {leftSpacerWidth > 0 ? (
+                  <th aria-hidden="true" className="sheet-virtual-col-spacer" />
+                ) : null}
+                {sheet.columns.slice(startCol, endCol).map((column) => (
                   <th key={column.index}>{column.label}</th>
                 ))}
+                {rightSpacerWidth > 0 ? (
+                  <th aria-hidden="true" className="sheet-virtual-col-spacer" />
+                ) : null}
               </tr>
             </thead>
             <tbody
@@ -837,7 +970,7 @@ export default memo(function SpreadsheetPreview({
             >
               {topSpacerHeight > 0 ? (
                 <tr aria-hidden="true" className="sheet-virtual-spacer" style={{ height: topSpacerHeight }}>
-                  <td colSpan={sheet.columns.length + 1} />
+                  <td colSpan={renderedColCount} />
                 </tr>
               ) : null}
               {sheet.rows.slice(startRow, endRow).map((row, offset) => {
@@ -851,19 +984,23 @@ export default memo(function SpreadsheetPreview({
                   <SheetRow
                     activeMatchCol={activeMatch?.row === rowIndex ? activeMatch.col : -1}
                     columns={sheet.columns}
+                    endCol={endCol}
                     key={row.index}
+                    leftSpacerWidth={leftSpacerWidth}
                     matchCols={matchesByRow.get(rowIndex)}
+                    rightSpacerWidth={rightSpacerWidth}
                     row={row}
                     rowIndex={rowIndex}
                     selMaxCol={inSelectedRow && normalizedBounds ? normalizedBounds.maxCol : -1}
                     selMinCol={inSelectedRow && normalizedBounds ? normalizedBounds.minCol : -1}
+                    startCol={startCol}
                     stylesPalette={stylesPalette}
                   />
                 );
               })}
               {bottomSpacerHeight > 0 ? (
                 <tr aria-hidden="true" className="sheet-virtual-spacer" style={{ height: bottomSpacerHeight }}>
-                  <td colSpan={sheet.columns.length + 1} />
+                  <td colSpan={renderedColCount} />
                 </tr>
               ) : null}
             </tbody>
@@ -903,11 +1040,19 @@ export default memo(function SpreadsheetPreview({
           <div className="sheet-status-actions">
             <button
               className="sheet-copy-btn"
-              onClick={() => void copySelection()}
-              title="Copy selected cell(s) (Ctrl+C)"
+              onClick={() => void copySelection("tsv")}
+              title="Copy selected cell(s) as tab-separated values (Ctrl+C)"
               type="button"
             >
-              {copiedNotice ? "Copied!" : "Copy"}
+              {copiedNotice === "tsv" ? "Copied!" : "Copy"}
+            </button>
+            <button
+              className="sheet-copy-btn"
+              onClick={() => void copySelection("csv")}
+              title="Copy selected cell(s) as CSV"
+              type="button"
+            >
+              {copiedNotice === "csv" ? "Copied CSV!" : "Copy CSV"}
             </button>
           </div>
         </div>

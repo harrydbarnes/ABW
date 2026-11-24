@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 use std::{
     env, fs,
     io::{self, Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
 use uuid::Uuid;
@@ -17,13 +17,23 @@ fn folder() -> io::Result<PathBuf> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "LOCALAPPDATA unavailable"))
 }
 
-fn manifest_path() -> io::Result<PathBuf> {
-    Ok(folder()?.join("native-host.json"))
+fn paired_origin_in(root: &Path) -> Option<String> {
+    let config: Value =
+        serde_json::from_slice(&fs::read(root.join("native-host.json")).ok()?).ok()?;
+    Some(config.get("allowed_origins")?.get(0)?.as_str()?.to_owned())
 }
 
 fn paired_origin() -> Option<String> {
-    let config: Value = serde_json::from_slice(&fs::read(manifest_path().ok()?).ok()?).ok()?;
-    Some(config.get("allowed_origins")?.get(0)?.as_str()?.to_owned())
+    paired_origin_in(&folder().ok()?)
+}
+
+fn parse_verdict(raw: &str) -> &'static str {
+    match raw {
+        "\"checked\"" => "checked",
+        "\"review\"" => "review",
+        "\"signin\"" => "signin",
+        _ => "unavailable",
+    }
 }
 
 #[cfg(windows)]
@@ -35,8 +45,9 @@ pub fn register(extension_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err("Expected a 32-character Chrome extension ID".into());
     }
-    let path = manifest_path()?;
-    fs::create_dir_all(folder()?)?;
+    let root = folder()?;
+    let path = root.join("native-host.json");
+    fs::create_dir_all(&root)?;
     fs::write(
         &path,
         serde_json::to_vec(&json!({
@@ -109,12 +120,7 @@ pub fn run_job_for_tab(tab_id: &str, booking: Value) -> Option<&'static str> {
             break;
         }
         if let Ok(result) = fs::read_to_string(&completed) {
-            verdict = Some(match result.as_str() {
-                "\"checked\"" => "checked",
-                "\"review\"" => "review",
-                "\"signin\"" => "signin",
-                _ => "unavailable",
-            });
+            verdict = Some(parse_verdict(&result));
             break;
         }
         std::thread::sleep(Duration::from_secs(1));
@@ -124,12 +130,11 @@ pub fn run_job_for_tab(tab_id: &str, booking: Value) -> Option<&'static str> {
     verdict
 }
 
-fn process(request: Value) -> io::Result<Value> {
-    let root = folder()?;
+fn process_in(root: &Path, request: Value) -> io::Result<Value> {
     match request["action"].as_str() {
         Some("poll") => {
             let mut jobs = Vec::new();
-            for entry in fs::read_dir(&root)?.flatten() {
+            for entry in fs::read_dir(root)?.flatten() {
                 let path = entry.path();
                 if !matches!(
                     path.extension().and_then(|part| part.to_str()),
@@ -181,6 +186,10 @@ fn process(request: Value) -> io::Result<Value> {
     }
 }
 
+fn process(request: Value) -> io::Result<Value> {
+    process_in(&folder()?, request)
+}
+
 pub fn serve(origin: &str) -> io::Result<()> {
     if paired_origin().as_deref() != Some(origin) {
         return Err(io::ErrorKind::PermissionDenied.into());
@@ -203,4 +212,75 @@ pub fn serve(origin: &str) -> io::Result<()> {
     output.write_all(&(bytes.len() as u32).to_le_bytes())?;
     output.write_all(&bytes)?;
     output.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn paired_origin_in_reads_first_allowed_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(paired_origin_in(dir.path()), None);
+
+        fs::write(
+            dir.path().join("native-host.json"),
+            br#"{"allowed_origins":["chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            paired_origin_in(dir.path()).as_deref(),
+            Some("chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/")
+        );
+    }
+
+    #[test]
+    fn parse_verdict_maps_known_and_unknown_values() {
+        assert_eq!(parse_verdict("\"checked\""), "checked");
+        assert_eq!(parse_verdict("\"review\""), "review");
+        assert_eq!(parse_verdict("\"signin\""), "signin");
+        assert_eq!(parse_verdict("\"other\""), "unavailable");
+        assert_eq!(parse_verdict(""), "unavailable");
+    }
+
+    #[test]
+    fn process_in_polls_and_completes_jobs_and_rejects_invalid_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = Uuid::new_v4().to_string();
+        let job_path = dir.path().join(format!("{id}.job"));
+        write_new(&job_path, &json!({ "po": "61507" })).unwrap();
+        fs::write(dir.path().join("ignored.txt"), b"ignore").unwrap();
+
+        let polled = process_in(dir.path(), json!({ "action": "poll" })).unwrap();
+        assert_eq!(
+            polled,
+            json!({ "jobs": [{ "id": id, "booking": { "po": "61507" } }] })
+        );
+
+        let completed = process_in(
+            dir.path(),
+            json!({ "action": "complete", "id": id, "status": "checked" }),
+        )
+        .unwrap();
+        assert_eq!(completed, json!({ "ok": true }));
+        assert_eq!(
+            fs::read_to_string(dir.path().join(format!("{id}.result"))).unwrap(),
+            "\"checked\""
+        );
+
+        let polled_after = process_in(dir.path(), json!({ "action": "poll" })).unwrap();
+        assert_eq!(polled_after, json!({ "jobs": [] }));
+
+        assert!(process_in(dir.path(), json!({ "action": "unknown" })).is_err());
+        assert!(process_in(
+            dir.path(),
+            json!({ "action": "complete", "id": "not-a-uuid", "status": "checked" })
+        )
+        .is_err());
+        assert!(process_in(
+            dir.path(),
+            json!({ "action": "complete", "id": id, "status": "bogus" })
+        )
+        .is_err());
+    }
 }

@@ -221,6 +221,12 @@
   font-size: 11px;
 }
 
+.sheet-status-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .sheet-copy-btn {
   height: 25px;
   padding: 0 10px;
@@ -251,7 +257,8 @@
 }
 
 .sheet-virtual-spacer,
-.sheet-virtual-spacer td {
+.sheet-virtual-spacer td,
+.sheet-virtual-col-spacer {
   border: 0 !important;
   padding: 0 !important;
   background: transparent !important;
@@ -334,6 +341,60 @@
   display: flex;
   justify-content: center;
   background: #edf1f7;
+}
+
+.pdf-page-stage {
+  position: relative;
+  flex: none;
+  align-self: flex-start;
+  line-height: 0;
+}
+
+.pdf-page-stage canvas {
+  display: block;
+}
+
+.pdf-text-layer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-align: initial;
+  transform-origin: 0 0;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor, 1) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.pdf-text-layer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  user-select: text;
+}
+
+.pdf-text-layer > :not(.markedContent),
+.pdf-text-layer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.pdf-text-layer .markedContent {
+  display: contents;
+}
+
+.pdf-text-layer ::selection {
+  background: rgb(49 93 232 / 26%);
+  color: transparent;
 }
 
 .pdf-canvas canvas,

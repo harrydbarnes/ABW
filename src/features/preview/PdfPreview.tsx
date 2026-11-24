@@ -31,6 +31,14 @@ function loadPdfJs() {
   return pdfJsPromise;
 }
 
+type CachedPdfBitmap = {
+  bitmap: ImageBitmap;
+  cssWidth: number;
+  cssHeight: number;
+};
+
+const MAX_PAGE_BITMAP_CACHE = 3;
+
 export default memo(function PdfPreview({
   demo,
   record,
@@ -40,7 +48,9 @@ export default memo(function PdfPreview({
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
+  const textLayerRef = useRef<HTMLDivElement>(null);
   const canvasWrap = useRef<HTMLDivElement>(null);
+  const pageBitmapCacheRef = useRef<Map<string, CachedPdfBitmap>>(new Map());
   const [page, setPage] = useState(1);
   const [pageDraft, setPageDraft] = useState("1");
   const [pages, setPages] = useState(1);
@@ -261,6 +271,10 @@ export default memo(function PdfPreview({
     return () => {
       live = false;
       setPdfDocument(null);
+      for (const entry of pageBitmapCacheRef.current.values()) {
+        entry.bitmap.close();
+      }
+      pageBitmapCacheRef.current.clear();
       rangeTransport?.abort();
       if (loadingTask) {
         void loadingTask.destroy();
@@ -269,6 +283,7 @@ export default memo(function PdfPreview({
         canvas.current.width = 0;
         canvas.current.height = 0;
       }
+      textLayerRef.current?.replaceChildren();
     };
   }, [demo, record.id]);
 
@@ -278,8 +293,10 @@ export default memo(function PdfPreview({
     }
     let live = true;
     let renderTask: RenderTask | null = null;
+    let textLayer: InstanceType<PdfJs["TextLayer"]> | null = null;
     let activePage: PDFPageProxy | null = null;
     let prefetchHandle: number | null = null;
+    const textLayerEl = textLayerRef.current;
     const win = window as Window & {
       requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
       cancelIdleCallback?: (id: number) => void;
@@ -313,7 +330,8 @@ export default memo(function PdfPreview({
           minZoomPercent: MIN_ZOOM_PERCENT,
           maxZoomPercent: MAX_ZOOM_PERCENT,
         });
-        setDisplayedZoom(Math.round(targetScale * 100));
+        const roundedZoom = Math.round(targetScale * 100);
+        setDisplayedZoom(roundedZoom);
 
         const requestedViewport = pdfPage.getViewport({ scale: targetScale, rotation });
         const displayScale = Math.min(
@@ -329,35 +347,98 @@ export default memo(function PdfPreview({
         if (!context || !canvas.current) {
           return;
         }
-        const pixelBudgetScale = Math.sqrt(
-          MAX_CANVAS_PIXELS / Math.max(1, viewport.width * viewport.height),
-        );
-        const outputScale = Math.min(
-          window.devicePixelRatio || 1,
-          2,
-          pixelBudgetScale,
-          MAX_CANVAS_DIMENSION / viewport.width,
-          MAX_CANVAS_DIMENSION / viewport.height,
-        );
-        if (!Number.isFinite(outputScale) || outputScale <= 0) {
-          throw new Error("PDF page dimensions are invalid.");
+
+        const cacheKey = `${targetPage}@${roundedZoom}@${rotation}`;
+        const cachedBitmap = pageBitmapCacheRef.current.get(cacheKey);
+        const cssWidth = Math.floor(viewport.width);
+        const cssHeight = Math.floor(viewport.height);
+
+        if (cachedBitmap) {
+          pageBitmapCacheRef.current.delete(cacheKey);
+          pageBitmapCacheRef.current.set(cacheKey, cachedBitmap);
+          canvas.current.width = cachedBitmap.bitmap.width;
+          canvas.current.height = cachedBitmap.bitmap.height;
+          canvas.current.style.width = `${cachedBitmap.cssWidth}px`;
+          canvas.current.style.height = `${cachedBitmap.cssHeight}px`;
+          context.clearRect(0, 0, canvas.current.width, canvas.current.height);
+          context.drawImage(cachedBitmap.bitmap, 0, 0);
+        } else {
+          const pixelBudgetScale = Math.sqrt(
+            MAX_CANVAS_PIXELS / Math.max(1, viewport.width * viewport.height),
+          );
+          const outputScale = Math.min(
+            window.devicePixelRatio || 1,
+            2,
+            pixelBudgetScale,
+            MAX_CANVAS_DIMENSION / viewport.width,
+            MAX_CANVAS_DIMENSION / viewport.height,
+          );
+          if (!Number.isFinite(outputScale) || outputScale <= 0) {
+            throw new Error("PDF page dimensions are invalid.");
+          }
+          canvas.current.width = Math.max(1, Math.floor(viewport.width * outputScale));
+          canvas.current.height = Math.max(1, Math.floor(viewport.height * outputScale));
+          canvas.current.style.width = `${cssWidth}px`;
+          canvas.current.style.height = `${cssHeight}px`;
+          const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined;
+          renderTask = pdfPage.render({
+            canvas: canvas.current,
+            canvasContext: context,
+            transform,
+            viewport,
+          });
+          await renderTask.promise;
+          if (!live) {
+            return;
+          }
+          if (typeof createImageBitmap === "function" && canvas.current) {
+            try {
+              const bitmap = await createImageBitmap(canvas.current);
+              if (!live) {
+                bitmap.close();
+                return;
+              }
+              const cache = pageBitmapCacheRef.current;
+              if (cache.size >= MAX_PAGE_BITMAP_CACHE) {
+                const oldestKey = cache.keys().next().value;
+                if (oldestKey !== undefined) {
+                  cache.get(oldestKey)?.bitmap.close();
+                  cache.delete(oldestKey);
+                }
+              }
+              cache.set(cacheKey, { bitmap, cssWidth, cssHeight });
+            } catch {
+              // Ignore ImageBitmap creation failures; canvas already holds the rendered page.
+            }
+          }
         }
-        canvas.current.width = Math.max(1, Math.floor(viewport.width * outputScale));
-        canvas.current.height = Math.max(1, Math.floor(viewport.height * outputScale));
-        canvas.current.style.width = `${Math.floor(viewport.width)}px`;
-        canvas.current.style.height = `${Math.floor(viewport.height)}px`;
-        const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined;
-        renderTask = pdfPage.render({
-          canvas: canvas.current,
-          canvasContext: context,
-          transform,
-          viewport,
-        });
-        await renderTask.promise;
         if (!live) {
           return;
         }
         setRendering(false);
+
+        if (textLayerEl) {
+          textLayerEl.replaceChildren();
+          textLayerEl.style.width = `${cssWidth}px`;
+          textLayerEl.style.height = `${cssHeight}px`;
+          textLayerEl.style.setProperty("--total-scale-factor", String(viewport.scale));
+          const [pdfjs, textContent] = await Promise.all([
+            loadPdfJs(),
+            pdfPage.getTextContent(),
+          ]);
+          if (!live) {
+            return;
+          }
+          textLayer = new pdfjs.TextLayer({
+            textContentSource: textContent,
+            container: textLayerEl,
+            viewport,
+          });
+          await textLayer.render().catch(() => {});
+          if (!live) {
+            return;
+          }
+        }
 
         const nextPage = targetPage + 1;
         if (nextPage <= pdfDocument.numPages) {
@@ -401,6 +482,8 @@ export default memo(function PdfPreview({
         }
       }
       renderTask?.cancel();
+      textLayer?.cancel();
+      textLayerEl?.replaceChildren();
       activePage?.cleanup();
     };
   }, [containerSize, demo, fitMode, page, pdfDocument, rotation, zoom]);
@@ -544,13 +627,20 @@ export default memo(function PdfPreview({
       ) : null}
       <div
         className="pdf-canvas"
-        onClick={() => rootRef.current?.focus({ preventScroll: true })}
+        onClick={() => {
+          if (window.getSelection()?.isCollapsed !== false) {
+            rootRef.current?.focus({ preventScroll: true });
+          }
+        }}
         ref={canvasWrap}
       >
         {demo ? (
           <DemoPdf fileName={record.fileName} />
         ) : (
-          <canvas ref={canvas} aria-label="PDF page preview" />
+          <div className="pdf-page-stage">
+            <canvas ref={canvas} aria-label="PDF page preview" />
+            <div className="pdf-text-layer" ref={textLayerRef} />
+          </div>
         )}
         {rendering && !problem ? (
           <div className="rendering-badge" role="status">
