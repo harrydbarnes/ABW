@@ -86,6 +86,11 @@
   const name = el => ['aria-label','title','data-test-id','data-testid'].map(a => el.getAttribute(a) || '').concat((el.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => document.getElementById(id)?.textContent || '')).join(' ');
   function sync() {
     if (document.hidden) return;
+    if (document.querySelector('wrike-proofing-app, proofing-viewer')) {
+      button.style.display = 'none';
+      return;
+    }
+    button.style.display = '';
     let anchor = null;
     panel = null;
     for (const close of [...document.querySelectorAll(actionSelector)].reverse()) {

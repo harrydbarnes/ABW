@@ -348,13 +348,21 @@ test('preview installer hooks target abw.exe and injected script gates hidden ta
   assert.match(source, /abwCornerDragActive/);
 });
 
-test('injected file preview dismissal targets fullscreen viewers only and never dispatches Escape', () => {
-  const fnStart = source.indexOf('const abwIsFullscreenFileViewer =');
-  const fnEnd = source.indexOf('const abwKeepDownloadsInWebview =', fnStart);
-  assert.ok(fnStart >= 0 && fnEnd > fnStart, 'Fullscreen preview helpers must exist');
+test('injected file preview dismissal targets Wrike proofing viewer only and ignores Show more', () => {
+  const fnStart = source.indexOf('const abwProofingViewerSelector =');
+  const fnEnd = source.indexOf('const abwPatchWindowOpen =', fnStart);
+  assert.ok(fnStart >= 0 && fnEnd > fnStart, 'Proofing viewer download helpers must exist');
   const snippet = source.slice(fnStart, fnEnd);
-  assert.match(snippet, /abwIsFullscreenFileViewer\(root\)/);
+  assert.match(snippet, /wrike-proofing-app/);
+  assert.match(snippet, /proofing-header-close/);
+  assert.match(snippet, /file-list-expander/);
+  assert.match(snippet, /wrike-attachments-list-item/);
+  assert.match(snippet, /attachment-list-item-download/);
+  assert.doesNotMatch(snippet, /\[role="dialog"\]/);
   assert.doesNotMatch(snippet, /KeyboardEvent\(["']keydown["']/);
+
+  const poSource = readFileSync(new URL('../src-tauri/src/task-po.js', import.meta.url), 'utf8');
+  assert.match(poSource, /wrike-proofing-app,\s*proofing-viewer/);
 });
 
 

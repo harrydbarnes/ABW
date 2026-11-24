@@ -1079,7 +1079,6 @@
   };
   const abwSupportedFileName = /[^\r\n]{1,180}[.](pdf|doc|docx|xls|xlsx|xlsm|xlsb|ods|csv|tsv|rtf|txt|png|jpg|jpeg|gif|webp|bmp|svg)/i;
   const abwDownloadWord = /download/i;
-  const abwCloseWord = /^(?:close|dismiss|×|✕)$/i;
   const abwIsVisible = (element) => {
     if (!(element instanceof Element)) return false;
     const rect = element.getBoundingClientRect();
@@ -1101,6 +1100,9 @@
   };
   const abwFindSupportedFileName = (element) => {
     for (let current = element; current && current !== document.body; current = current.parentElement) {
+      if (current.matches?.('wrike-attachments-common-list, [data-application="common-attachments-list"]')) {
+        break;
+      }
       const text = (current.textContent || "").trim();
       if (text.length > 240) continue;
       const match = text.match(abwSupportedFileName);
@@ -1110,45 +1112,29 @@
   };
   const abwNormalizeFileName = (value) =>
     String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
-  const abwIsFullscreenFileViewer = (element) => {
-    if (!(element instanceof Element)) return false;
-    if (element === document.body || element === document.documentElement) return false;
-    if (!abwIsVisible(element)) return false;
-    const rect = element.getBoundingClientRect();
-    return rect.width >= window.innerWidth * 0.8 && rect.height >= window.innerHeight * 0.8;
-  };
-  const abwPreviewRootSelector =
-    '.cdk-overlay-pane, [role="dialog"], [aria-modal="true"], [class*="preview" i], [class*="viewer" i], [class*="lightbox" i]';
+  const abwProofingViewerSelector =
+    'wrike-proofing-app, proofing-viewer, [data-application="proofing-dialog-content"]';
   const abwDismissPreviewOverlay = (root) => {
-    if (!abwIsFullscreenFileViewer(root)) return;
-    const closeBtn = Array.from(root.querySelectorAll('button, a, [role="button"]')).find((control) => {
-      if (!abwIsVisible(control)) return false;
-      const aria = (control.getAttribute("aria-label") || "").trim();
-      const title = (control.getAttribute("title") || "").trim();
-      const tooltip = (control.getAttribute("data-tooltip") || "").trim();
-      const text = (control.textContent || "").trim();
-      return (
-        abwCloseWord.test(aria) ||
-        abwCloseWord.test(title) ||
-        abwCloseWord.test(tooltip) ||
-        abwCloseWord.test(text) ||
-        /\bclose\b/i.test(aria || title)
-      );
-    });
-    if (closeBtn) {
+    if (!(root instanceof Element)) return;
+    const closeBtn = root.querySelector('button[data-application="proofing-header-close"]');
+    if (closeBtn && abwIsVisible(closeBtn)) {
       closeBtn.click();
     }
   };
   let abwPreviewDownloadTimer = 0;
   let abwPreviewDownloadRequest = 0;
   let abwExpectingDownloadUntil = 0;
+  const abwCancelQueuedPreviewDownload = () => {
+    window.clearInterval(abwPreviewDownloadTimer);
+    abwPreviewDownloadRequest += 1;
+  };
   const abwQueuePreviewDownload = (fileName = "") => {
     window.clearInterval(abwPreviewDownloadTimer);
     const request = ++abwPreviewDownloadRequest;
     const expectedFileName = abwNormalizeFileName(fileName);
     const previousDialogs = new Map(
-      Array.from(document.querySelectorAll(abwPreviewRootSelector))
-        .filter(abwIsFullscreenFileViewer)
+      Array.from(document.querySelectorAll(abwProofingViewerSelector))
+        .filter(abwIsVisible)
         .map((root) => [root, abwNormalizeFileName(root.textContent)])
     );
     let attempts = 0;
@@ -1158,8 +1144,8 @@
         return;
       }
       attempts += 1;
-      const roots = Array.from(document.querySelectorAll(abwPreviewRootSelector))
-        .filter(abwIsFullscreenFileViewer)
+      const roots = Array.from(document.querySelectorAll(abwProofingViewerSelector))
+        .filter(abwIsVisible)
         .reverse();
       if (abwAutoDownload) roots.push(document);
       for (const root of roots) {
@@ -1175,25 +1161,11 @@
             if (!abwIsVisible(control)) {
               return false;
             }
-            const isDownloadControl =
+            return (
               abwDownloadWord.test(abwControlLabel(control)) ||
               control.hasAttribute("download") ||
-              abwLooksLikeDownloadUrl(control.getAttribute("href"));
-            if (!isDownloadControl) {
-              return false;
-            }
-            if (!expectedFileName || isNewOrChangedDialog) return true;
-            for (
-              let current = control;
-              current && current !== root.parentElement;
-              current = current.parentElement
-            ) {
-              if (abwNormalizeFileName(current.textContent).includes(expectedFileName)) {
-                return true;
-              }
-              if (current === root) break;
-            }
-            return false;
+              abwLooksLikeDownloadUrl(control.getAttribute("href"))
+            );
           });
         if (download) {
           window.clearInterval(abwPreviewDownloadTimer);
@@ -1205,16 +1177,41 @@
           return;
         }
       }
-      if (attempts >= 32) window.clearInterval(abwPreviewDownloadTimer);
-    }, 250);
+      if (attempts >= 60) window.clearInterval(abwPreviewDownloadTimer);
+    }, 100);
   };
   const abwKeepDownloadsInWebview = (event) => {
     abwScheduleThemeDetect(220);
     const target = event.target instanceof Element ? event.target : null;
-    const control = target?.closest?.('a, button, [role="button"], [role="link"]');
+    if (!target) return;
+    if (target.closest('[data-application="file-list-expander"], wrike-checkbox-v2, input[type="checkbox"]')) {
+      abwCancelQueuedPreviewDownload();
+      return;
+    }
+    const attachmentItem = target.closest('wrike-attachments-list-item, wrike-attachments-list-item-wrapper');
+    if (attachmentItem && !target.closest('[data-application="attachment-list-item-download"]')) {
+      const rawName = (attachmentItem.querySelector('wrike-attachments-filename')?.textContent || "").trim();
+      const matchedName = rawName.match(abwSupportedFileName)?.[0]?.trim() || abwFindSupportedFileName(attachmentItem);
+      if (matchedName) {
+        const inlineDownload = attachmentItem.querySelector('button[data-application="attachment-list-item-download"]');
+        if (inlineDownload && abwIsVisible(inlineDownload)) {
+          event.preventDefault();
+          event.stopPropagation();
+          abwCancelQueuedPreviewDownload();
+          abwExpectingDownloadUntil = Date.now() + 5000;
+          inlineDownload.click();
+        } else {
+          abwQueuePreviewDownload(matchedName);
+        }
+      } else {
+        abwCancelQueuedPreviewDownload();
+      }
+      return;
+    }
+    const control = target.closest('a, button, [role="button"], [role="link"]');
     if (!control) return;
     const label = abwControlLabel(control);
-    const link = control.closest?.('a') || control.querySelector?.('a');
+    const link = control.closest('a') || control.querySelector('a');
     if (abwDownloadWord.test(label) || abwLooksLikeDownloadUrl(link?.href)) {
       abwExpectingDownloadUntil = Date.now() + 5000;
       if (link) {
@@ -1227,8 +1224,7 @@
     if (fileName) {
       abwQueuePreviewDownload(fileName);
     } else {
-      window.clearInterval(abwPreviewDownloadTimer);
-      abwPreviewDownloadRequest += 1;
+      abwCancelQueuedPreviewDownload();
     }
   };
   const abwPatchWindowOpen = () => {
