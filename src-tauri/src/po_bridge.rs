@@ -8,6 +8,9 @@ use std::{
 use uuid::Uuid;
 
 #[cfg(windows)]
+pub mod discovery;
+
+#[cfg(windows)]
 const HOST: &str = "net.insidemedia.abw.po_check";
 const MAX_AGE: Duration = Duration::from_secs(120);
 
@@ -38,26 +41,24 @@ fn parse_verdict(raw: &str) -> &'static str {
 
 #[cfg(windows)]
 pub fn register(extension_id: &str) -> Result<(), Box<dyn std::error::Error>> {
-    if extension_id.len() != 32
-        || !extension_id
-            .bytes()
-            .all(|byte| (b'a'..=b'p').contains(&byte))
-    {
+    if !discovery::valid_extension_id(extension_id) {
         return Err("Expected a 32-character Chrome extension ID".into());
     }
     let root = folder()?;
     let path = root.join("native-host.json");
     fs::create_dir_all(&root)?;
-    fs::write(
-        &path,
-        serde_json::to_vec(&json!({
-            "name": HOST,
-            "description": "ABW automatic PO checks for Ops Toolshed",
-            "path": env::current_exe()?,
-            "type": "stdio",
-            "allowed_origins": [format!("chrome-extension://{extension_id}/")],
-        }))?,
-    )?;
+    let manifest = serde_json::to_vec(&json!({
+        "name": HOST,
+        "description": "ABW automatic PO checks for Ops Toolshed",
+        "path": env::current_exe()?,
+        "type": "stdio",
+        "allowed_origins": [format!("chrome-extension://{extension_id}/")],
+    }))?;
+    if fs::read(&path).as_deref().ok() != Some(manifest.as_slice()) {
+        let mut temp = tempfile::NamedTempFile::new_in(&root)?;
+        temp.write_all(&manifest)?;
+        temp.persist(&path).map_err(|error| error.error)?;
+    }
     let (key, _) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER).create_subkey(
         format!(r"Software\Google\Chrome\NativeMessagingHosts\{HOST}"),
     )?;

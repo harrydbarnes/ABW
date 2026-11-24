@@ -3022,6 +3022,11 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             trace_native_event(app.handle(), "setup");
+            #[cfg(windows)]
+            if app.config().identifier == "net.insidemedia.abw" {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || po_bridge::discovery::pair_on_startup(&handle));
+            }
             let show_item = MenuItem::with_id(app, "show", "Show ABW", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit ABW", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &quit_item])?;

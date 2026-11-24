@@ -48,5 +48,8 @@ FunctionEnd
   StrCmp $UpdateMode 1 abw_uninstall_done
     DeleteRegValue HKCU "${ABW_RUN_KEY}" "ABW"
     DeleteRegKey HKCU "${ABW_PREF_KEY}"
+    DeleteRegKey HKCU "Software\Google\Chrome\NativeMessagingHosts\net.insidemedia.abw.po_check"
+    Delete "$LOCALAPPDATA\ABW\po-check\native-host.json"
+    Delete "$LOCALAPPDATA\ABW\po-check\declined-chrome-extension"
   abw_uninstall_done:
 !macroend
