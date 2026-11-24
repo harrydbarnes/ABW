@@ -167,7 +167,7 @@ body,
 }
 
 body {
-  min-width: 1100px;
+  min-width: 760px;
 }
 
 button,
@@ -214,6 +214,11 @@ input:focus-visible {
   background: var(--surface-soft);
   opacity: 0;
   animation: app-view-reveal 720ms ease 2100ms forwards;
+}
+
+.app-shell.is-ready {
+  opacity: 1;
+  animation: none;
 }
 
 .launch-splash {
@@ -1329,4 +1334,24 @@ input:focus-visible {
 .wrike-surface p {
   margin: 0;
   font-size: 14px;
+}
+
+@media (max-width: 960px) {
+  .taskbar {
+    padding-left: 10px;
+    gap: 6px;
+  }
+
+  .brand {
+    padding-right: 6px;
+  }
+
+  .brand-wordmark {
+    width: 82px;
+  }
+
+  .workspace-tab {
+    min-width: 72px;
+    padding: 0 54px 0 10px;
+  }
 }

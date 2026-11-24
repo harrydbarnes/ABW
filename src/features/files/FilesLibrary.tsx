@@ -4,6 +4,7 @@ import type { DownloadRecord, FileFilter } from "../../types";
 interface Props {
   downloads: DownloadRecord[];
   filter: FileFilter;
+  onActivate?: (id: string) => void;
   onDelete: (record: DownloadRecord) => void;
   onFilterChange: (filter: FileFilter) => void;
   onOpenSourceTask: (record: DownloadRecord) => void;
@@ -66,6 +67,7 @@ const TIME_FORMATTER = new Intl.DateTimeFormat(undefined, { hour: "2-digit", min
 export const FilesLibrary = memo(function FilesLibrary({
   downloads,
   filter,
+  onActivate,
   onDelete,
   onFilterChange,
   onOpenSourceTask,
@@ -197,7 +199,11 @@ export const FilesLibrary = memo(function FilesLibrary({
       onSelect(next.id);
       window.requestAnimationFrame(() => {
         const rows = listRef.current?.querySelectorAll<HTMLElement>("[data-download-id]");
-        rows?.[nextIndex]?.scrollIntoView({ block: "nearest" });
+        const targetRow = rows?.[nextIndex];
+        targetRow?.scrollIntoView({ block: "nearest" });
+        if (!isTextInput) {
+          targetRow?.querySelector<HTMLButtonElement>(".file-select")?.focus({ preventScroll: true });
+        }
       });
       return;
     }
@@ -320,7 +326,13 @@ export const FilesLibrary = memo(function FilesLibrary({
                 key={file.id}
                 role="listitem"
               >
-                <button className="file-select" onClick={() => onSelect(file.id)}>
+                <button
+                  className="file-select"
+                  onClick={() => {
+                    onSelect(file.id);
+                    onActivate?.(file.id);
+                  }}
+                >
                   <FileGlyph kind={file.kind} />
                   <strong>{file.fileName}</strong>
                 </button>
