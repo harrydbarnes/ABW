@@ -1050,13 +1050,16 @@ fn parse_wrike_deep_link(raw: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    let normalized = if trimmed.len() >= 11 && trimmed[..11].eq_ignore_ascii_case("wrikeapp://") {
-        format!("https://{}", &trimmed[11..])
-    } else {
-        trimmed.to_owned()
+    let normalized = match trimmed.split_once("://") {
+        Some((scheme, destination)) if scheme.eq_ignore_ascii_case("wrikeapp") => {
+            format!("https://{destination}")
+        }
+        _ => trimmed.to_owned(),
     };
     let parsed = Url::parse(&normalized).ok()?;
-    is_wrike_workspace_destination(&parsed).then(|| parsed.to_string())
+    (is_https_wrike_url(&parsed)
+        && (parsed.path() == "/open.htm" || parsed.path().ends_with("/workspace.htm")))
+    .then(|| parsed.to_string())
 }
 
 #[tauri::command]
@@ -3008,10 +3011,14 @@ fn open_po_in_chrome(url: &Url) -> std::io::Result<()> {
 }
 
 fn is_wrike_workspace_destination(url: &Url) -> bool {
-    let is_wrike = url
-        .host_str()
-        .is_some_and(|host| host == "wrike.com" || host.ends_with(".wrike.com"));
-    url.scheme() == "https" && is_wrike && url.path().ends_with("/workspace.htm")
+    is_https_wrike_url(url) && url.path().ends_with("/workspace.htm")
+}
+
+fn is_https_wrike_url(url: &Url) -> bool {
+    url.scheme() == "https"
+        && url
+            .host_str()
+            .is_some_and(|host| host == "wrike.com" || host.ends_with(".wrike.com"))
 }
 
 fn is_internal_wrike_or_auth_host(host: &str) -> bool {
@@ -3335,7 +3342,16 @@ mod tests {
             parse_wrike_deep_link("https://www.wrike.com/workspace.htm").as_deref(),
             Some("https://www.wrike.com/workspace.htm")
         );
-        assert_eq!(parse_wrike_deep_link("wrikeapp://evil.example/x"), None);
+        assert_eq!(
+            parse_wrike_deep_link("wrikeapp://evil.example/open.htm"),
+            None
+        );
+        assert_eq!(parse_wrike_deep_link("http://www.wrike.com/open.htm"), None);
+        assert_eq!(
+            parse_wrike_deep_link("https://www.wrike.com/other.htm"),
+            None
+        );
+        assert_eq!(parse_wrike_deep_link("abcdefghijé"), None);
         assert_eq!(parse_wrike_deep_link("javascript:alert(1)"), None);
     }
 }
