@@ -59,6 +59,7 @@ export const DEFAULT_SETTINGS: Settings = {
   openDownloadedFilesAutomatically: false,
   openExternalLinksInBrowser: true,
   customContextMenu: true,
+  useNativeWrikeImageViewer: true,
   autoCheckForUpdates: true,
   autoMatchWrikeTheme: true,
   suspendInactiveTabsMinutes: 0,
