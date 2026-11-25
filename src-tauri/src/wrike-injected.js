@@ -1078,6 +1078,9 @@
     showLinkContextMenu(linkUrl, event);
   };
   const abwSupportedFileName = /[^\r\n]{1,180}[.](pdf|doc|docx|xls|xlsx|xlsm|xlsb|ods|csv|tsv|rtf|txt|png|jpg|jpeg|gif|webp|bmp|svg)/i;
+  const abwImageFileName = /[.](png|jpg|jpeg|gif|webp|bmp|svg)$/i;
+  const abwShouldUseNativeImageViewer = (fileName) =>
+    window.__abwUseNativeWrikeImageViewer !== false && abwImageFileName.test(String(fileName || "").trim());
   const abwDownloadWord = /download/i;
   const abwIsVisible = (element) => {
     if (!(element instanceof Element)) return false;
@@ -1337,6 +1340,10 @@
       const rawName = (attachmentItem.querySelector('wrike-attachments-filename')?.textContent || "").trim();
       const matchedName = rawName.match(abwSupportedFileName)?.[0]?.trim() || abwFindSupportedFileName(attachmentItem);
       if (matchedName) {
+        if (abwShouldUseNativeImageViewer(matchedName)) {
+          abwCancelQueuedPreviewDownload();
+          return;
+        }
         const inlineDownload = abwFindAttachmentDownloadControl(attachmentItem);
         if (inlineDownload) {
           event.preventDefault();
@@ -1369,8 +1376,12 @@
       }
       return;
     }
+    if (target.closest(abwProofingViewerSelector)) {
+      abwCancelQueuedPreviewDownload();
+      return;
+    }
     const fileName = abwFindSupportedFileName(target) || abwFindSupportedFileName(control);
-    if (fileName) {
+    if (fileName && !abwShouldUseNativeImageViewer(fileName)) {
       abwQueuePreviewDownload(fileName);
     } else {
       abwCancelQueuedPreviewDownload();

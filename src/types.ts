@@ -46,6 +46,7 @@ export interface Settings {
   openDownloadedFilesAutomatically: boolean;
   openExternalLinksInBrowser: boolean;
   customContextMenu: boolean;
+  useNativeWrikeImageViewer: boolean;
   autoCheckForUpdates: boolean;
   autoMatchWrikeTheme: boolean;
   suspendInactiveTabsMinutes: number;

@@ -150,6 +150,11 @@ export const SettingsPanel = memo(function SettingsPanel({
     "Custom right-click menu",
     "Show ABW's custom right-click menu in Wrike with Open in new tab and Share shortcuts. Turn off to use the default browser menu.",
   );
+  const showNativeImageViewer = matchesSearch(
+    query,
+    "Use native Wrike viewer for images",
+    "Open image attachments in Wrike's built-in viewer instead of downloading them into ABW's file preview.",
+  );
   const showSuspendInactiveTabs = matchesSearch(
     query,
     "Suspend inactive background tabs",
@@ -175,6 +180,7 @@ export const SettingsPanel = memo(function SettingsPanel({
     showConfirmClose ||
     showExternalLinks ||
     showCustomContextMenu ||
+    showNativeImageViewer ||
     showSuspendInactiveTabs ||
     showStartupTabs;
 
@@ -378,6 +384,17 @@ export const SettingsPanel = memo(function SettingsPanel({
               description="Show ABW's custom right-click menu in Wrike with Open in new tab and Share shortcuts. Turn off to use the default browser menu."
               label="Custom right-click menu"
               onChange={(customContextMenu) => onChange({ ...settings, customContextMenu })}
+              query={query}
+            />
+          </AnimatedSettingItem>
+          <AnimatedSettingItem visible={showNativeImageViewer || showAbwPrefsHeader}>
+            <SettingToggle
+              checked={settings.useNativeWrikeImageViewer}
+              description="Open image attachments in Wrike's built-in viewer instead of downloading them into ABW's file preview."
+              label="Use native Wrike viewer for images"
+              onChange={(useNativeWrikeImageViewer) =>
+                onChange({ ...settings, useNativeWrikeImageViewer })
+              }
               query={query}
             />
           </AnimatedSettingItem>
