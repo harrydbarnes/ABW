@@ -366,7 +366,8 @@ test('injected file preview dismissal targets Wrike proofing viewer only and ign
   assert.doesNotMatch(snippet, /KeyboardEvent\(["']keydown["']/);
 
   const poSource = readFileSync(new URL('../src-tauri/src/task-po.js', import.meta.url), 'utf8');
-  assert.match(poSource, /wrike-proofing-app,\s*proofing-viewer/);
+  assert.match(poSource, /wrike-proofing-app,\s*proofing-viewer,\s*#abw-preview-loading-overlay/);
+  assert.match(poSource, /button\.style\.zIndex\s*=\s*'2147483645'/);
 
   const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   const dlStart = appSource.indexOf('subscribeToDownloadCompleted(');
