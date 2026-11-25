@@ -598,15 +598,19 @@ export function App() {
     registerUnsubscriber(subscribeToDownloads(refresh));
     registerUnsubscriber(
       subscribeToDownloadCompleted((record) => {
+        setDownloads((current) =>
+          current.some((item) => item.id === record.id) ? current : [record, ...current],
+        );
         setSelectedId(record.id);
         if (record.kind === "pdf" || record.kind === "spreadsheet" || record.kind === "image") {
           setIsTopbarActionsMenuOpen(false);
           setTicketModal(null);
           setPreviewFromWrike(true);
+          setPreviewRevealKey((current) => current + 1);
           setScreen("files");
           window.requestAnimationFrame(() => {
-            void hideWrike(wrikeTabsRef.current.map((tab) => tab.id)).finally(() => {
-              setPreviewRevealKey((current) => current + 1);
+            window.requestAnimationFrame(() => {
+              void hideWrike(wrikeTabsRef.current.map((tab) => tab.id));
             });
           });
         } else if (!record.previewed) {
