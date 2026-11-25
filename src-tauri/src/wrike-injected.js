@@ -1281,6 +1281,49 @@
       }
     }, 50);
   };
+  const abwFindAttachmentDownloadControl = (attachmentItem) => {
+    if (!(attachmentItem instanceof Element)) return null;
+    const isUsable = (el) =>
+      el instanceof Element &&
+      !el.disabled &&
+      el.getAttribute("aria-disabled") !== "true";
+    const direct = attachmentItem.querySelector('[data-application="attachment-list-item-download"]');
+    if (isUsable(direct)) return direct;
+    const inlineFallback = Array.from(
+      attachmentItem.querySelectorAll('button, a, [role="button"], [role="link"]')
+    ).find(
+      (control) =>
+        isUsable(control) &&
+        (abwDownloadWord.test(abwControlLabel(control)) ||
+          control.hasAttribute("download") ||
+          abwLooksLikeDownloadUrl(control.getAttribute("href")))
+    );
+    if (inlineFallback) return inlineFallback;
+    const listRoot = attachmentItem.closest(
+      'wrike-attachments-common-list, [data-application="common-attachments-list"]'
+    );
+    if (listRoot) {
+      const checkedSelector =
+        'input[type="checkbox"]:checked, wrike-checkbox-v2[aria-checked="true"], [role="checkbox"][aria-checked="true"]';
+      const itemChecked = Boolean(attachmentItem.querySelector(checkedSelector));
+      const allChecked = listRoot.querySelectorAll(checkedSelector);
+      if (itemChecked && allChecked.length === 1) {
+        const bulkDownload = Array.from(
+          listRoot.querySelectorAll('button, a, [role="button"], [role="link"]')
+        ).find(
+          (control) =>
+            !control.closest('wrike-attachments-list-item, wrike-attachments-list-item-wrapper') &&
+            isUsable(control) &&
+            abwIsVisible(control) &&
+            (abwDownloadWord.test(abwControlLabel(control)) ||
+              control.hasAttribute("download") ||
+              abwLooksLikeDownloadUrl(control.getAttribute("href")))
+        );
+        if (bulkDownload) return bulkDownload;
+      }
+    }
+    return null;
+  };
   const abwKeepDownloadsInWebview = (event) => {
     abwScheduleThemeDetect(220);
     const target = event.target instanceof Element ? event.target : null;
@@ -1294,8 +1337,8 @@
       const rawName = (attachmentItem.querySelector('wrike-attachments-filename')?.textContent || "").trim();
       const matchedName = rawName.match(abwSupportedFileName)?.[0]?.trim() || abwFindSupportedFileName(attachmentItem);
       if (matchedName) {
-        const inlineDownload = attachmentItem.querySelector('button[data-application="attachment-list-item-download"]');
-        if (inlineDownload && abwIsVisible(inlineDownload)) {
+        const inlineDownload = abwFindAttachmentDownloadControl(attachmentItem);
+        if (inlineDownload) {
           event.preventDefault();
           event.stopPropagation();
           event.stopImmediatePropagation();
