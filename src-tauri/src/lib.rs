@@ -142,6 +142,8 @@ struct Settings {
     suspend_inactive_tabs_minutes: u32,
     #[serde(default = "default_true")]
     custom_context_menu: bool,
+    #[serde(default = "default_true")]
+    use_native_wrike_image_viewer: bool,
     #[serde(default = "default_theme")]
     theme: String,
     custom_dictionary: Vec<String>,
@@ -211,6 +213,7 @@ impl Default for Settings {
             auto_match_wrike_theme: true,
             suspend_inactive_tabs_minutes: 0,
             custom_context_menu: true,
+            use_native_wrike_image_viewer: true,
             theme: "default".to_owned(),
             custom_dictionary: Vec::new(),
             startup_tab_urls: default_startup_tab_urls(),
@@ -248,6 +251,7 @@ impl Settings {
             && self.auto_match_wrike_theme == other.auto_match_wrike_theme
             && self.suspend_inactive_tabs_minutes == other.suspend_inactive_tabs_minutes
             && self.custom_context_menu == other.custom_context_menu
+            && self.use_native_wrike_image_viewer == other.use_native_wrike_image_viewer
             && self.theme == other.theme
             && self.custom_dictionary == other.custom_dictionary
             && self.startup_tab_urls == other.startup_tab_urls
@@ -958,6 +962,14 @@ async fn update_settings(app: AppHandle, mut settings: Settings) -> Result<Setti
             };
             broadcast_to_wrike_webviews(&app, state.inner(), context_script);
         }
+        if previous.use_native_wrike_image_viewer != settings.use_native_wrike_image_viewer {
+            let image_viewer_script = if settings.use_native_wrike_image_viewer {
+                "window.__abwUseNativeWrikeImageViewer = true;"
+            } else {
+                "window.__abwUseNativeWrikeImageViewer = false;"
+            };
+            broadcast_to_wrike_webviews(&app, state.inner(), image_viewer_script);
+        }
         if settings.auto_match_wrike_theme && !previous.auto_match_wrike_theme {
             broadcast_to_wrike_webviews(
                 &app,
@@ -1035,8 +1047,14 @@ async fn reset_app(app: AppHandle) -> Result<Settings, String> {
         } else {
             "window.__abwCustomContextMenuEnabled = false;"
         };
+        let image_viewer_script = if defaults.use_native_wrike_image_viewer {
+            "window.__abwUseNativeWrikeImageViewer = true;"
+        } else {
+            "window.__abwUseNativeWrikeImageViewer = false;"
+        };
         broadcast_to_wrike_webviews(&app, state.inner(), spell_script);
         broadcast_to_wrike_webviews(&app, state.inner(), context_script);
+        broadcast_to_wrike_webviews(&app, state.inner(), image_viewer_script);
         app.emit("settings-updated", defaults.clone())
             .map_err(|error| format!("Unable to refresh settings: {error}"))?;
         Ok(defaults)
@@ -1646,9 +1664,16 @@ fn open_wrike_at(
         .get_window("main")
         .ok_or_else(|| "Unable to locate the ABW application window.".to_owned())?;
     let (content_position, content_size) = wrike_content_geometry(app, WrikePane::Full)?;
-    let (spell_check, custom_context_menu) = get_cached_settings(app)
-        .map(|stored| (stored.spell_check, stored.custom_context_menu))
-        .unwrap_or((true, true));
+    let (spell_check, custom_context_menu, use_native_wrike_image_viewer) =
+        get_cached_settings(app)
+            .map(|stored| {
+                (
+                    stored.spell_check,
+                    stored.custom_context_menu,
+                    stored.use_native_wrike_image_viewer,
+                )
+            })
+            .unwrap_or((true, true, true));
     let context = Arc::new(CaptureContext::new(tab_id, destination));
     let title_context = Arc::clone(&context);
     let title_app = app.clone();
@@ -1674,6 +1699,11 @@ fn open_wrike_at(
             "window.__abwCustomContextMenuEnabled = true;"
         } else {
             "window.__abwCustomContextMenuEnabled = false;"
+        })
+        .initialization_script(if use_native_wrike_image_viewer {
+            "window.__abwUseNativeWrikeImageViewer = true;"
+        } else {
+            "window.__abwUseNativeWrikeImageViewer = false;"
         })
         .initialization_script(apply_spell_check_script(spell_check, false))
         .on_navigation(move |url| {
@@ -1849,9 +1879,16 @@ fn open_wrike_at(
             let label = format!("wrike-popup-{}", Uuid::new_v4());
             let completion_app = popup_app.clone();
             let completion_workspace_label = popup_workspace_label.clone();
-            let (popup_spell_check, popup_custom_menu) = get_cached_settings(&popup_app)
-                .map(|stored| (stored.spell_check, stored.custom_context_menu))
-                .unwrap_or((true, true));
+            let (popup_spell_check, popup_custom_menu, popup_native_image_viewer) =
+                get_cached_settings(&popup_app)
+                    .map(|stored| {
+                        (
+                            stored.spell_check,
+                            stored.custom_context_menu,
+                            stored.use_native_wrike_image_viewer,
+                        )
+                    })
+                    .unwrap_or((true, true, true));
             let child_builder = WebviewWindowBuilder::new(
                 &popup_app,
                 label,
@@ -1867,6 +1904,11 @@ fn open_wrike_at(
                 "window.__abwCustomContextMenuEnabled = true;"
             } else {
                 "window.__abwCustomContextMenuEnabled = false;"
+            })
+            .initialization_script(if popup_native_image_viewer {
+                "window.__abwUseNativeWrikeImageViewer = true;"
+            } else {
+                "window.__abwUseNativeWrikeImageViewer = false;"
             })
             .initialization_script(apply_spell_check_script(popup_spell_check, true))
             .on_navigation(is_safe_remote_destination)
