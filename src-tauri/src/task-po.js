@@ -92,7 +92,7 @@
   const name = el => ['aria-label','title','data-test-id','data-testid'].map(a => el.getAttribute(a) || '').concat((el.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => document.getElementById(id)?.textContent || '')).join(' ');
   function sync() {
     if (document.hidden) return;
-    if (document.querySelector('wrike-proofing-app, proofing-viewer')) {
+    if (document.querySelector('wrike-proofing-app, proofing-viewer, #abw-preview-loading-overlay')) {
       button.style.display = 'none';
       return;
     }
@@ -112,7 +112,7 @@
     }
     if (!anchor) {button.remove(); lastBooking = ''; clearPending(); pendingManualCheck = undefined; expandedMoreFor = ''; lastPanelEl = null; lastPanelFingerprint = ''; lastValues = null; return;}
     const r = anchor.getBoundingClientRect();
-    button.style.zIndex = '2147483647';
+    button.style.zIndex = '2147483645';
     button.style.top = (r.bottom + 8) + 'px';
     button.style.right = Math.max(8, innerWidth-r.right) + 'px';
     const host = anchor.closest('dialog:modal') || document.body;
