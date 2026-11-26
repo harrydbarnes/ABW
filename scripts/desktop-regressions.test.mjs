@@ -352,6 +352,9 @@ test('preview installer hooks target abw.exe and injected script gates hidden ta
 
   assert.match(source, /document\.hidden/);
   assert.match(source, /abwCornerDragActive/);
+  const dragDecl = source.indexOf('let abwCornerDragActive = false;');
+  const cornerFn = source.indexOf('const abwSyncWrikeContentCorner =');
+  assert.ok(dragDecl >= 0 && cornerFn > dragDecl, 'abwCornerDragActive must be declared before abwSyncWrikeContentCorner');
 });
 
 test('injected file preview dismissal targets Wrike proofing viewer only and ignores Show more', () => {

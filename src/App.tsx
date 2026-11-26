@@ -121,7 +121,7 @@ function extractWrikeTicketMetadata(title: string, url: string): { client?: stri
   }
   return {
     client,
-    details: detailsParts.length ? detailsParts.join(" · ") : undefined,
+    details: detailsParts.length ? detailsParts.join(" Â· ") : undefined,
   };
 }
 const READ_ONLY_URL = "https://login.wrike.com/login/?forceLogin=false&read";
@@ -354,7 +354,7 @@ export function App() {
   useEffect(() => {
     const splashTimer = window.setTimeout(
       () => setIsLaunchSplashVisible(false),
-      LAUNCH_SPLASH_FALLBACK_MS,
+      LAUNCH_SPLASH_FALLBACK_MS + 1500,
     );
     return () => window.clearTimeout(splashTimer);
   }, []);
@@ -593,16 +593,17 @@ export function App() {
           });
         }
       }
-      setIsLaunchSplashVisible(false);
       if (next.launchWrikeOnStart) {
         await openStartupTabs(next.startupTabUrls);
         setStartupReadyMs(Date.now() - launchBootAtRef.current);
+        setIsLaunchSplashVisible(false);
         if (!canRestoreSession) {
           canPersistSessionRef.current = true;
         }
       } else {
         setScreen("files");
         setStartupReadyMs(Date.now() - launchBootAtRef.current);
+        setIsLaunchSplashVisible(false);
         if (!canRestoreSession) {
           canPersistSessionRef.current = true;
         }
@@ -2389,7 +2390,7 @@ export function App() {
                 title="Swap left and right tabs"
                 type="button"
               >
-                ⇄
+                â‡„
               </button>
               <button
                 aria-label="Exit split view"
@@ -2629,7 +2630,7 @@ export function App() {
       {showVpnBanner ? (
         <div className="vpn-banner" role="alert" aria-live="assertive">
           <div className="vpn-banner-copy">
-            <strong>Connection blocked — Connect to Cisco VPN</strong>
+            <strong>Connection blocked â€” Connect to Cisco VPN</strong>
             <span>
               If you aren&apos;t connected to Cisco VPN yet, connect now and reload this tab.
             </span>
@@ -2766,7 +2767,7 @@ export function App() {
                 onDoubleClick={() => void resetWrikeSplitRatio()}
                 onPointerDown={startWrikeSplitResize}
                 role="separator"
-                title="Drag to resize split · Double-click to reset 50/50"
+                title="Drag to resize split Â· Double-click to reset 50/50"
               />
             ) : null}
             {draggedTabId && wrikeTabs.length > 1 ? (
