@@ -156,6 +156,7 @@ test('injected download detector recognizes supported extensions including csv a
   for (const name of [
     'report.pdf',
     'budget.xlsx',
+    'Nuffield Health_Hospitals_Youtube Media Plan_Jul-Oct 26_V9.xlsx',
     'export.csv',
     'data.tsv',
     'notes.docx',
@@ -165,6 +166,7 @@ test('injected download detector recognizes supported extensions including csv a
     'anim.gif',
   ]) {
     assert.match(name, abwSupportedFileName);
+    assert.equal(name.match(abwSupportedFileName)?.[0], name);
     assert.equal(abwLooksLikeDownloadUrl(`https://www.wrike.com/files/${encodeURIComponent(name)}`), true);
   }
   assert.doesNotMatch('archive.zip', abwSupportedFileName);

@@ -1468,6 +1468,7 @@ fn hide_wrike_tabs(
     for tab_id in tab_ids {
         let label = wrike_tab_label(&tab_id)?;
         if let Some(webview) = app.get_webview(&label) {
+            let _ = webview.eval("window.__abwHidePreviewLoading?.();");
             webview
                 .hide()
                 .map_err(|error| format!("Unable to hide the Wrike workspace: {error}"))?;
@@ -1511,7 +1512,7 @@ fn focus_wrike_tab(
         }
         emit_wrike_tab_update(&app, &context);
     }
-    let _ = webview.eval("window.__abwDetectWrikeTheme?.();");
+    let _ = webview.eval("window.__abwHidePreviewLoading?.(); window.__abwDetectWrikeTheme?.();");
     Ok(())
 }
 
@@ -1656,7 +1657,8 @@ fn open_wrike_at(
             }
             emit_wrike_tab_update(app, &context);
         }
-        let _ = webview.eval("window.__abwDetectWrikeTheme?.();");
+        let _ =
+            webview.eval("window.__abwHidePreviewLoading?.(); window.__abwDetectWrikeTheme?.();");
         return Ok(());
     }
 
@@ -2401,12 +2403,12 @@ fn request_quit(app: &AppHandle, explicit: bool) {
             .map(|tabs| tabs.keys().cloned().collect::<Vec<_>>())
             .unwrap_or_default();
         for tab_id in tab_ids {
-            if suspended.contains(&tab_id) {
-                continue;
-            }
             if let Ok(label) = wrike_tab_label(&tab_id) {
                 if let Some(webview) = app.get_webview(&label) {
-                    set_native_memory_target_level(&webview, true);
+                    let _ = webview.eval("window.__abwHidePreviewLoading?.();");
+                    if !suspended.contains(&tab_id) {
+                        set_native_memory_target_level(&webview, true);
+                    }
                 }
             }
         }
