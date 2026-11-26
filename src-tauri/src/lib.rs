@@ -2480,7 +2480,7 @@ fn request_quit(app: &AppHandle, explicit: bool) {
                                 }
                                 if let Ok(mut guard) = state.suspended_tabs.lock() {
                                     guard.insert(tab_id_clone);
-                                }
+                                };
                             });
                         }
                     }
