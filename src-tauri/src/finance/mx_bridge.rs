@@ -427,6 +427,34 @@ if ($rows.Count -gt 0) {
     exit 0
   }
 }
+# Fallback for legacy VB6 owner-drawn grid: focus MX, copy grid via Ctrl+A / Ctrl+C, restore clipboard
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class AbwMxFocus {
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+}
+"@
+$prevClip = $null
+try { if ([System.Windows.Forms.Clipboard]::ContainsText()) { $prevClip = [System.Windows.Forms.Clipboard]::GetText() } } catch {}
+try { [System.Windows.Forms.Clipboard]::Clear() } catch {}
+[AbwMxFocus]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
+[AbwMxFocus]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
+Start-Sleep -Milliseconds 300
+[System.Windows.Forms.SendKeys]::SendWait('^a')
+Start-Sleep -Milliseconds 200
+[System.Windows.Forms.SendKeys]::SendWait('^c')
+Start-Sleep -Milliseconds 350
+$copied = ''
+try { if ([System.Windows.Forms.Clipboard]::ContainsText()) { $copied = [System.Windows.Forms.Clipboard]::GetText() } } catch {}
+try {
+  if ($null -ne $prevClip) { [System.Windows.Forms.Clipboard]::SetText($prevClip) }
+} catch {}
+if ($copied -and $copied.Trim().Length -gt 0) {
+  Write-Output $copied
+  exit 0
+}
 Write-Error "UIA_NO_ROWS"
 exit 2
 "#;

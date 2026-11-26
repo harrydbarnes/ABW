@@ -363,7 +363,7 @@ pub async fn finance_sync_prisma(app: AppHandle) -> Result<FinanceSnapshot, Stri
         let response = po_bridge::run_finance_job(
             "prisma_orders_sync",
             json!({ "includeAccepted": true }),
-            45,
+            70,
         );
         let (state, alerts) = store::update(&dir, |s| {
             s.sync_status.prisma_paired = po_bridge::is_paired();
