@@ -125,6 +125,8 @@ struct Settings {
     #[serde(default)]
     show_spell_check_in_topbar: bool,
     launch_wrike_on_start: bool,
+    #[serde(default = "default_true")]
+    show_launch_splash: bool,
     download_notifications: bool,
     open_abw_at_system_startup: bool,
     #[serde(default)]
@@ -205,6 +207,7 @@ impl Default for Settings {
             spell_check: true,
             show_spell_check_in_topbar: false,
             launch_wrike_on_start: true,
+            show_launch_splash: true,
             download_notifications: true,
             open_abw_at_system_startup: false,
             start_minimized_to_tray: false,
@@ -244,6 +247,7 @@ impl Settings {
         self.spell_check == other.spell_check
             && self.show_spell_check_in_topbar == other.show_spell_check_in_topbar
             && self.launch_wrike_on_start == other.launch_wrike_on_start
+            && self.show_launch_splash == other.show_launch_splash
             && self.download_notifications == other.download_notifications
             && self.open_abw_at_system_startup == other.open_abw_at_system_startup
             && self.start_minimized_to_tray == other.start_minimized_to_tray

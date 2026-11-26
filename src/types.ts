@@ -38,6 +38,7 @@ export interface Settings {
   spellCheck: boolean;
   showSpellCheckInTopbar: boolean;
   launchWrikeOnStart: boolean;
+  showLaunchSplash: boolean;
   downloadNotifications: boolean;
   openAbwAtSystemStartup: boolean;
   startMinimizedToTray: boolean;

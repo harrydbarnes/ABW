@@ -582,17 +582,27 @@ export function App() {
       if (canRestoreSession) {
         setSessionPrompt(next.lastWrikeSession);
       }
+      if (next.showLaunchSplash) {
+        const remainingSplashMs = Math.max(
+          0,
+          LAUNCH_SPLASH_FALLBACK_MS - (Date.now() - launchBootAtRef.current),
+        );
+        if (remainingSplashMs > 0) {
+          await new Promise<void>((resolve) => {
+            window.setTimeout(resolve, remainingSplashMs);
+          });
+        }
+      }
+      setIsLaunchSplashVisible(false);
       if (next.launchWrikeOnStart) {
         await openStartupTabs(next.startupTabUrls);
         setStartupReadyMs(Date.now() - launchBootAtRef.current);
-        setIsLaunchSplashVisible(false);
         if (!canRestoreSession) {
           canPersistSessionRef.current = true;
         }
       } else {
         setScreen("files");
         setStartupReadyMs(Date.now() - launchBootAtRef.current);
-        setIsLaunchSplashVisible(false);
         if (!canRestoreSession) {
           canPersistSessionRef.current = true;
         }

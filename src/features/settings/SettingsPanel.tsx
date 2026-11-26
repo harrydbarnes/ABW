@@ -134,6 +134,11 @@ export const SettingsPanel = memo(function SettingsPanel({
     "Show Wrike workspace on launch",
     "Open your startup tabs whenever ABW starts. You can still reopen the previous session from the launch toast.",
   );
+  const showLaunchSplash = matchesSearch(
+    query,
+    "Show launch splash screen",
+    "Play the ABW startup splash animation when opening the app. Turn off to open your workspace immediately.",
+  );
   const showSystemStartup = matchesSearch(
     query,
     "Open ABW app at system startup",
@@ -193,6 +198,7 @@ export const SettingsPanel = memo(function SettingsPanel({
   const showAbwPrefsSection =
     showAbwPrefsHeader ||
     showLaunchWrike ||
+    showLaunchSplash ||
     showSystemStartup ||
     showStartMinimized ||
     showCloseToTray ||
@@ -359,6 +365,15 @@ export const SettingsPanel = memo(function SettingsPanel({
               description="Open your startup tabs whenever ABW starts. You can still reopen the previous session from the launch toast."
               label="Show Wrike workspace on launch"
               onChange={(launchWrikeOnStart) => onChange({ ...settings, launchWrikeOnStart })}
+              query={query}
+            />
+          </AnimatedSettingItem>
+          <AnimatedSettingItem visible={showLaunchSplash || showAbwPrefsHeader}>
+            <SettingToggle
+              checked={settings.showLaunchSplash}
+              description="Play the ABW startup splash animation when opening the app. Turn off to open your workspace immediately."
+              label="Show launch splash screen"
+              onChange={(showLaunchSplash) => onChange({ ...settings, showLaunchSplash })}
               query={query}
             />
           </AnimatedSettingItem>

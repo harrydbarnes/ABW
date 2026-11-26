@@ -51,6 +51,7 @@ export const DEFAULT_SETTINGS: Settings = {
   spellCheck: true,
   showSpellCheckInTopbar: false,
   launchWrikeOnStart: true,
+  showLaunchSplash: true,
   downloadNotifications: true,
   openAbwAtSystemStartup: false,
   startMinimizedToTray: false,
