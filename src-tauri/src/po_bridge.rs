@@ -30,6 +30,10 @@ fn paired_origin() -> Option<String> {
     paired_origin_in(&folder().ok()?)
 }
 
+pub fn is_paired() -> bool {
+    paired_origin().is_some()
+}
+
 fn parse_verdict(raw: &str) -> &'static str {
     match raw {
         "\"checked\"" => "checked",
@@ -131,16 +135,51 @@ pub fn run_job_for_tab(tab_id: &str, booking: Value) -> Option<&'static str> {
     verdict
 }
 
+pub fn run_finance_job(kind: &str, payload: Value, timeout_secs: u64) -> Result<Value, String> {
+    if paired_origin().is_none() {
+        return Err("Ops Toolshed Chrome extension is not paired with ABW.".to_owned());
+    }
+    let root = folder().map_err(|e| format!("Native bridge folder unavailable: {e}"))?;
+    fs::create_dir_all(&root).map_err(|e| format!("Could not prepare bridge folder: {e}"))?;
+    let id = Uuid::new_v4().to_string();
+    let pending = root.join(format!("{id}.finjob"));
+    let completed = root.join(format!("{id}.finresult"));
+    write_new(
+        &pending,
+        &json!({
+            "kind": kind,
+            "payload": payload,
+        }),
+    )
+    .map_err(|e| format!("Could not queue Prisma job: {e}"))?;
+
+    let mut result: Option<Result<Value, String>> = None;
+    for _ in 0..timeout_secs.max(5) {
+        if let Ok(raw) = fs::read_to_string(&completed) {
+            result = Some(
+                serde_json::from_str::<Value>(&raw)
+                    .map_err(|e| format!("Invalid Prisma response from Ops Toolshed: {e}")),
+            );
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    let _ = fs::remove_file(pending);
+    let _ = fs::remove_file(completed);
+    result.unwrap_or_else(|| {
+        Err("Timed out waiting for Ops Toolshed in Chrome. Ensure Chrome is open with Prisma signed in.".to_owned())
+    })
+}
+
 fn process_in(root: &Path, request: Value) -> io::Result<Value> {
     match request["action"].as_str() {
         Some("poll") => {
             let mut jobs = Vec::new();
+            let mut finance_jobs = Vec::new();
             for entry in fs::read_dir(root)?.flatten() {
                 let path = entry.path();
-                if !matches!(
-                    path.extension().and_then(|part| part.to_str()),
-                    Some("job" | "result")
-                ) {
+                let ext = path.extension().and_then(|part| part.to_str());
+                if !matches!(ext, Some("job" | "result" | "finjob" | "finresult")) {
                     continue;
                 }
                 let Some(id) = path
@@ -154,20 +193,31 @@ fn process_in(root: &Path, request: Value) -> io::Result<Value> {
                     let _ = fs::remove_file(&path);
                     continue;
                 }
-                if path.extension().and_then(|part| part.to_str()) != Some("job")
-                    || root.join(format!("{id}.result")).exists()
-                    || jobs.len() >= 8
+                if ext == Some("job")
+                    && !root.join(format!("{id}.result")).exists()
+                    && jobs.len() < 8
                 {
-                    continue;
-                }
-                let Ok(bytes) = fs::read(path) else {
-                    continue;
-                };
-                if let Ok(booking) = serde_json::from_slice::<Value>(&bytes) {
-                    jobs.push(json!({ "id": id.to_string(), "booking": booking }));
+                    if let Ok(bytes) = fs::read(&path) {
+                        if let Ok(booking) = serde_json::from_slice::<Value>(&bytes) {
+                            jobs.push(json!({ "id": id.to_string(), "booking": booking }));
+                        }
+                    }
+                } else if ext == Some("finjob")
+                    && !root.join(format!("{id}.finresult")).exists()
+                    && finance_jobs.len() < 4
+                {
+                    if let Ok(bytes) = fs::read(&path) {
+                        if let Ok(job) = serde_json::from_slice::<Value>(&bytes) {
+                            finance_jobs.push(json!({
+                                "id": id.to_string(),
+                                "kind": job["kind"],
+                                "payload": job["payload"],
+                            }));
+                        }
+                    }
                 }
             }
-            Ok(json!({ "jobs": jobs }))
+            Ok(json!({ "jobs": jobs, "financeJobs": finance_jobs }))
         }
         Some("complete") => {
             let id = request["id"]
@@ -180,6 +230,16 @@ fn process_in(root: &Path, request: Value) -> io::Result<Value> {
                 .ok_or(io::ErrorKind::InvalidInput)?;
             if fresh(&root.join(format!("{id}.job"))) {
                 let _ = write_new(&root.join(format!("{id}.result")), &json!(status));
+            }
+            Ok(json!({ "ok": true }))
+        }
+        Some("complete_finance") => {
+            let id = request["id"]
+                .as_str()
+                .and_then(|id| Uuid::parse_str(id).ok())
+                .ok_or(io::ErrorKind::InvalidInput)?;
+            if fresh(&root.join(format!("{id}.finjob"))) {
+                let _ = write_new(&root.join(format!("{id}.finresult")), &request["result"]);
             }
             Ok(json!({ "ok": true }))
         }

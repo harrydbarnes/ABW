@@ -87,6 +87,7 @@ import type {
 
 const PreviewPanel = lazy(() => import("./features/preview/PreviewPanel"));
 const TicketDrawerModal = lazy(() => import("./features/tickets/TicketDrawerModal"));
+const FinanceDashboard = lazy(() => import("./features/finance/FinanceDashboard"));
 const WRIKE_HOME = "https://www.wrike.com/workspace.htm";
 
 function extractWrikeTicketMetadata(title: string, url: string): { client?: string; details?: string } {
@@ -121,7 +122,7 @@ function extractWrikeTicketMetadata(title: string, url: string): { client?: stri
   }
   return {
     client,
-    details: detailsParts.length ? detailsParts.join(" Ã‚Â· ") : undefined,
+    details: detailsParts.length ? detailsParts.join(" · ") : undefined,
   };
 }
 const READ_ONLY_URL = "https://login.wrike.com/login/?forceLogin=false&read";
@@ -132,7 +133,7 @@ const PERIODIC_UPDATE_CHECK_MS = 4 * 60 * 60 * 1000;
 const FOCUS_UPDATE_CHECK_MIN_AGE_MS = 60 * 60 * 1000;
 const TOP_BANNER_HEIGHT = 42;
 
-type Screen = "wrike" | "files" | "settings";
+type Screen = "wrike" | "files" | "finance" | "settings";
 type WrikeTabMode = "standard" | "readOnly";
 type WrikePaneSide = "left" | "right";
 type WrikeSplit = {
@@ -188,6 +189,7 @@ function applyWrikeTabUpdate(tab: WrikeTab, update: WrikeTabUpdate): WrikeTab {
 export function App() {
   const [isLaunchSplashVisible, setIsLaunchSplashVisible] = useState(true);
   const [screen, setScreen] = useState<Screen>("wrike");
+  const [financeBadgeCount, setFinanceBadgeCount] = useState(0);
   const [wrikeTabs, setWrikeTabs] = useState<WrikeTab[]>([INITIAL_WRIKE_TAB]);
   const [activeWrikeTabId, setActiveWrikeTabId] = useState(INITIAL_WRIKE_TAB.id);
   const [wrikeSplit, setWrikeSplit] = useState<WrikeSplit | null>(null);
@@ -2391,7 +2393,7 @@ export function App() {
                 title="Swap left and right tabs"
                 type="button"
               >
-                Ã¢â€¡â€ž
+                ⇄
               </button>
               <button
                 aria-label="Exit split view"
@@ -2483,6 +2485,17 @@ export function App() {
               Files
             </button>
             <button
+              className={`nav-item ${!ticketModal && screen === "finance" ? "selected" : ""}`}
+              onClick={() => void showLocalScreen("finance")}
+              title="MQS Invoice Queries & Prisma Orders"
+            >
+              <MaterialIcon kind="finance" />
+              Finance
+              {financeBadgeCount > 0 ? (
+                <span className="finance-nav-badge">{financeBadgeCount}</span>
+              ) : null}
+            </button>
+            <button
               className={`nav-item ${!ticketModal && screen === "settings" ? "selected" : ""}`}
               onClick={() => void showLocalScreen("settings")}
               title={
@@ -2550,6 +2563,16 @@ export function App() {
             >
               <MaterialIcon kind="description" />
               <span>Files</span>
+            </button>
+            <button
+              className={`topbar-menu-item ${!ticketModal && screen === "finance" ? "selected" : ""}`}
+              onClick={() => void showLocalScreen("finance")}
+            >
+              <MaterialIcon kind="finance" />
+              <span>Finance</span>
+              {financeBadgeCount > 0 ? (
+                <span className="finance-nav-badge">{financeBadgeCount}</span>
+              ) : null}
             </button>
             <button
               className={`topbar-menu-item ${!ticketModal && screen === "settings" ? "selected" : ""}`}
@@ -2631,7 +2654,7 @@ export function App() {
       {showVpnBanner ? (
         <div className="vpn-banner" role="alert" aria-live="assertive">
           <div className="vpn-banner-copy">
-            <strong>Connection blocked Ã¢â‚¬â€ Connect to Cisco VPN</strong>
+            <strong>Connection blocked — Connect to Cisco VPN</strong>
             <span>
               If you aren&apos;t connected to Cisco VPN yet, connect now and reload this tab.
             </span>
@@ -2768,7 +2791,7 @@ export function App() {
                 onDoubleClick={() => void resetWrikeSplitRatio()}
                 onPointerDown={startWrikeSplitResize}
                 role="separator"
-                title="Drag to resize split Ã‚Â· Double-click to reset 50/50"
+                title="Drag to resize split · Double-click to reset 50/50"
               />
             ) : null}
             {draggedTabId && wrikeTabs.length > 1 ? (
@@ -2892,6 +2915,13 @@ export function App() {
               />
             </Suspense>
           </div>
+        ) : screen === "finance" ? (
+          <Suspense fallback={<div className="finance-screen">Loading Finance dashboard...</div>}>
+            <FinanceDashboard
+              onBadgeCountChange={setFinanceBadgeCount}
+              onNotify={(message) => setNotice(message)}
+            />
+          </Suspense>
         ) : (
           <div className="settings-screen">
             <SettingsPanel

@@ -204,3 +204,147 @@ export const APP_THEMES = [
 ] as const;
 
 export type AppThemeId = (typeof APP_THEMES)[number]["id"];
+
+export type MqsSource = "mxLive" | "emailDigest" | "manualImport";
+
+export interface MqsTicket {
+  ticketNo: string;
+  toBuyer: string;
+  advertiser: string;
+  payee: string;
+  invoiceNo: string;
+  created: string;
+  lineNo: string;
+  currency: string;
+  queriedPayable: number;
+  queriedGross: number;
+  bookingReference: string;
+  reason: string;
+  status: string;
+  priority: string;
+  owner: string;
+  operatingCo: string;
+  buyingAgency: string;
+  clientCode: string;
+  issuedDate: string;
+  invoiceGross: number | null;
+  invoiceNetPayable: number | null;
+  invoiceTotalPayable: number | null;
+  attachments: string[];
+  localNotes: string;
+  source: MqsSource;
+  lastSeenAt: string;
+}
+
+export interface PrismaOrder {
+  orderVer: string;
+  orderBase: string;
+  status: string;
+  dueLabel: string;
+  dueInDays: number | null;
+  media: string;
+  orderType: string;
+  seller: string;
+  mediaId: string;
+  clientId: string;
+  productId: string;
+  estimateId: string;
+  orderTotal: number;
+  currency: string;
+  campaign: string;
+  campaignId: string;
+  dates: string;
+  startDate: string;
+  endDate: string;
+  buyer: string;
+  agency: string;
+  orderUrl: string;
+  lastSeenAt: string;
+}
+
+export interface FinanceFavouriteFilter {
+  id: string;
+  name: string;
+  buyers: string[];
+  clients: string[];
+  agencies: string[];
+  notify: boolean;
+  builtIn: boolean;
+}
+
+export type OrderRiskLevel =
+  | "accepted_with_mqs"
+  | "rejected"
+  | "sent_urgent"
+  | "sent_watch"
+  | "healthy";
+
+export interface MatchedOrderView {
+  order: PrismaOrder;
+  riskLevel: OrderRiskLevel;
+  riskReason: string;
+  linkedTicketNos: string[];
+  linkedQueriedTotal: number;
+}
+
+export interface MatchedTicketView {
+  ticket: MqsTicket;
+  normalizedRefs: string[];
+  linkedOrderVer: string | null;
+  linkedOrderStatus: string | null;
+  linkedCampaign: string | null;
+  linkedSeller: string | null;
+}
+
+export interface MxBuyerEntry {
+  code: string;
+  name: string;
+}
+
+export interface FinanceSyncStatus {
+  mxRunning: boolean;
+  mxLastSyncAt: string | null;
+  mxLastSource: MqsSource | null;
+  mxEnvironment: string | null;
+  prismaPaired: boolean;
+  prismaLastSyncAt: string | null;
+  digestFolder: string | null;
+  lastError: string | null;
+}
+
+export interface FinanceSnapshot {
+  tickets: MatchedTicketView[];
+  orders: MatchedOrderView[];
+  favourites: FinanceFavouriteFilter[];
+  activeFavouriteId: string;
+  digestFolder: string | null;
+  syncStatus: FinanceSyncStatus;
+  notifyBadgeCount: number;
+}
+
+export interface MqsActionRequest {
+  ticketNo: string;
+  action: string;
+  comments: string;
+  toBuyer: string;
+  serial: string;
+  submit: boolean;
+}
+
+export interface MqsActionResult {
+  ok: boolean;
+  message: string;
+  submitted: boolean;
+}
+
+export interface PrismaOrderActionRequest {
+  orderVer: string;
+  action: "agency_accept" | "request_revision";
+  reason: string;
+}
+
+export interface PrismaOrderActionResult {
+  ok: boolean;
+  status: string;
+  message: string;
+}

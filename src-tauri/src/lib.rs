@@ -25,6 +25,7 @@ use url::Url;
 use uuid::Uuid;
 
 mod close_policy;
+mod finance;
 mod persistence;
 mod spreadsheet;
 mod startup;
@@ -3378,7 +3379,20 @@ pub fn run() {
             take_pending_deep_link,
             update_last_wrike_session,
             update_settings,
-            wrike_tab_action
+            wrike_tab_action,
+            finance::commands::finance_load_state,
+            finance::commands::finance_save_favourites,
+            finance::commands::finance_update_ticket_note,
+            finance::commands::finance_list_mx_buyers,
+            finance::commands::finance_sync_mx,
+            finance::commands::finance_import_mqs_text,
+            finance::commands::finance_import_mqs_file,
+            finance::commands::finance_pick_digest_folder,
+            finance::commands::finance_sync_prisma,
+            finance::commands::finance_focus_mx,
+            finance::commands::finance_run_mx_action,
+            finance::commands::finance_run_prisma_action,
+            finance::commands::finance_export_xlsx
         ])
         .build(tauri::generate_context!())
         .expect("error while building ABW")

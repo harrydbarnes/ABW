@@ -6,6 +6,7 @@ export type MaterialIconKind =
   | "arrow_forward"
   | "close"
   | "description"
+  | "finance"
   | "history"
   | "home"
   | "keyboard_arrow_left"
@@ -33,6 +34,9 @@ export function MaterialIcon({ kind }: { kind: MaterialIconKind }) {
     ),
     description: (
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Zm1 7V3.5L20.5 9ZM16 18H8v-2h8Zm0-4H8v-2h8Z" />
+    ),
+    finance: (
+      <path d="M4 10v7h3v-7Zm6 0v7h3v-7Zm-8 9v2h20v-2Zm14-9v7h3v-7ZM12 2 2 7v2h20V7Z" />
     ),
     history: (
       <path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18Zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8Z" />

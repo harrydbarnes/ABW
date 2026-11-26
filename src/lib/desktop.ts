@@ -429,3 +429,124 @@ function normalizeDictionary(words: string[]): string[] {
   return [...new Set(words.map((word) => word.trim()).filter(Boolean))]
     .sort((first, second) => first.localeCompare(second, undefined, { sensitivity: "base" }));
 }
+
+import type {
+  FinanceFavouriteFilter,
+  FinanceSnapshot,
+  MqsActionRequest,
+  MqsActionResult,
+  MqsSource,
+  MxBuyerEntry,
+  PrismaOrderActionRequest,
+  PrismaOrderActionResult,
+} from "../types";
+
+const EMPTY_FINANCE_SNAPSHOT: FinanceSnapshot = {
+  tickets: [],
+  orders: [],
+  favourites: [
+    { id: "all", name: "Whole Company", buyers: [], clients: [], agencies: [], notify: false, builtIn: true },
+    { id: "me", name: "Me", buyers: [], clients: [], agencies: [], notify: true, builtIn: true },
+    { id: "my-team", name: "My Team", buyers: [], clients: [], agencies: [], notify: true, builtIn: true },
+  ],
+  activeFavouriteId: "all",
+  digestFolder: null,
+  syncStatus: {
+    mxRunning: false,
+    mxLastSyncAt: null,
+    mxLastSource: null,
+    mxEnvironment: null,
+    prismaPaired: false,
+    prismaLastSyncAt: null,
+    digestFolder: null,
+    lastError: null,
+  },
+  notifyBadgeCount: 0,
+};
+
+export async function financeLoadState(): Promise<FinanceSnapshot> {
+  if (!desktopRuntime) return EMPTY_FINANCE_SNAPSHOT;
+  return invokeDesktop<FinanceSnapshot>("finance_load_state");
+}
+
+export async function financeSaveFavourites(
+  favourites: FinanceFavouriteFilter[],
+  activeFavouriteId: string,
+  digestFolder?: string | null,
+): Promise<FinanceSnapshot> {
+  if (!desktopRuntime) {
+    return { ...EMPTY_FINANCE_SNAPSHOT, favourites, activeFavouriteId, digestFolder: digestFolder ?? null };
+  }
+  return invokeDesktop<FinanceSnapshot>("finance_save_favourites", {
+    favourites,
+    activeFavouriteId,
+    digestFolder: digestFolder ?? null,
+  });
+}
+
+export async function financeUpdateTicketNote(
+  ticketNo: string,
+  notes: string,
+): Promise<FinanceSnapshot> {
+  if (!desktopRuntime) return EMPTY_FINANCE_SNAPSHOT;
+  return invokeDesktop<FinanceSnapshot>("finance_update_ticket_note", { ticketNo, notes });
+}
+
+export async function financeListMxBuyers(limit = 5000): Promise<MxBuyerEntry[]> {
+  if (!desktopRuntime) return [];
+  return invokeDesktop<MxBuyerEntry[]>("finance_list_mx_buyers", { limit });
+}
+
+export async function financeSyncMx(): Promise<FinanceSnapshot> {
+  if (!desktopRuntime) return EMPTY_FINANCE_SNAPSHOT;
+  return invokeDesktop<FinanceSnapshot>("finance_sync_mx");
+}
+
+export async function financeImportMqsText(
+  rawText: string,
+  source: MqsSource = "manualImport",
+): Promise<FinanceSnapshot> {
+  if (!desktopRuntime) return EMPTY_FINANCE_SNAPSHOT;
+  return invokeDesktop<FinanceSnapshot>("finance_import_mqs_text", { rawText, source });
+}
+
+export async function financeImportMqsFile(filePath?: string): Promise<FinanceSnapshot> {
+  if (!desktopRuntime) return EMPTY_FINANCE_SNAPSHOT;
+  return invokeDesktop<FinanceSnapshot>("finance_import_mqs_file", { filePath: filePath ?? null });
+}
+
+export async function financePickDigestFolder(): Promise<FinanceSnapshot> {
+  if (!desktopRuntime) return EMPTY_FINANCE_SNAPSHOT;
+  return invokeDesktop<FinanceSnapshot>("finance_pick_digest_folder");
+}
+
+export async function financeSyncPrisma(): Promise<FinanceSnapshot> {
+  if (!desktopRuntime) return EMPTY_FINANCE_SNAPSHOT;
+  return invokeDesktop<FinanceSnapshot>("finance_sync_prisma");
+}
+
+export async function financeFocusMx(): Promise<string> {
+  if (!desktopRuntime) return "";
+  return invokeDesktop<string>("finance_focus_mx");
+}
+
+export async function financeRunMxAction(request: MqsActionRequest): Promise<MqsActionResult> {
+  if (!desktopRuntime) {
+    return { ok: false, submitted: false, message: "Desktop runtime required for MX actions." };
+  }
+  return invokeDesktop<MqsActionResult>("finance_run_mx_action", { request });
+}
+
+export async function financeRunPrismaAction(
+  request: PrismaOrderActionRequest,
+): Promise<PrismaOrderActionResult> {
+  if (!desktopRuntime) {
+    return { ok: false, status: "unavailable", message: "Desktop runtime required for Prisma actions." };
+  }
+  return invokeDesktop<PrismaOrderActionResult>("finance_run_prisma_action", { request });
+}
+
+export async function financeExportXlsx(favouriteId: string): Promise<string | null> {
+  if (!desktopRuntime) return null;
+  return invokeDesktop<string | null>("finance_export_xlsx", { favouriteId });
+}
