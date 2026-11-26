@@ -1220,32 +1220,58 @@ fn set_update_badge(app: AppHandle, state: State<'_, AppState>, available: bool)
 }
 
 #[cfg(windows)]
-fn suspend_native_webview(webview: &Webview) -> Result<(), String> {
+fn suspend_native_webview(
+    webview: &Webview,
+) -> Result<std::sync::mpsc::Receiver<Result<bool, String>>, String> {
     use webview2_com::{
         Microsoft::Web::WebView2::Win32::ICoreWebView2_3, TrySuspendCompletedHandler,
     };
     use windows_core::Interface;
 
     let _ = webview.hide();
+    let (tx, rx) = std::sync::mpsc::channel();
     webview
-        .with_webview(|platform_webview| unsafe {
-            if let Ok(core) = platform_webview.controller().CoreWebView2() {
-                if let Ok(webview3) = core.cast::<ICoreWebView2_3>() {
-                    let handler = TrySuspendCompletedHandler::create(Box::new(
-                        |_res: windows_core::Result<()>, _is_successful: bool| Ok(()),
-                    ));
-                    let _ = webview3.TrySuspend(&handler);
-                }
+        .with_webview(move |platform_webview| unsafe {
+            let result = (|| -> Result<(), String> {
+                let core = platform_webview
+                    .controller()
+                    .CoreWebView2()
+                    .map_err(|error| format!("Unable to access CoreWebView2: {error}"))?;
+                let webview3 = core
+                    .cast::<ICoreWebView2_3>()
+                    .map_err(|error| format!("ICoreWebView2_3 unavailable: {error}"))?;
+                let callback_tx = tx.clone();
+                let handler = TrySuspendCompletedHandler::create(Box::new(
+                    move |res: windows_core::Result<()>, is_successful: bool| {
+                        let outcome = res
+                            .map(|()| is_successful)
+                            .map_err(|error| format!("TrySuspend failed: {error}"));
+                        let _ = callback_tx.send(outcome);
+                        Ok(())
+                    },
+                ));
+                webview3
+                    .TrySuspend(&handler)
+                    .map_err(|error| format!("Unable to start TrySuspend: {error}"))
+            })();
+            if let Err(error) = result {
+                let _ = tx.send(Err(error));
             }
         })
-        .map_err(|error| format!("Unable to suspend Wrike tab: {error}"))
+        .map_err(|error| format!("Unable to suspend Wrike tab: {error}"))?;
+    Ok(rx)
 }
 
 #[cfg(not(windows))]
-fn suspend_native_webview(webview: &Webview) -> Result<(), String> {
+fn suspend_native_webview(
+    webview: &Webview,
+) -> Result<std::sync::mpsc::Receiver<Result<bool, String>>, String> {
     webview
         .hide()
-        .map_err(|error| format!("Unable to hide Wrike tab: {error}"))
+        .map_err(|error| format!("Unable to hide Wrike tab: {error}"))?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let _ = tx.send(Ok(true));
+    Ok(rx)
 }
 
 #[cfg(windows)]
@@ -1291,7 +1317,7 @@ fn set_native_memory_target_level(webview: &Webview, low: bool) {
 fn set_native_memory_target_level(_webview: &Webview, _low: bool) {}
 
 #[tauri::command]
-fn suspend_wrike_tab(
+async fn suspend_wrike_tab(
     app: AppHandle,
     state: State<'_, AppState>,
     tab_id: String,
@@ -1300,13 +1326,46 @@ fn suspend_wrike_tab(
     let Some(webview) = app.get_webview(&label) else {
         return Ok(false);
     };
-    if let Ok(mut suspended) = state.suspended_tabs.lock() {
-        suspended.insert(tab_id.clone());
+    if state
+        .visible_wrike_tabs
+        .lock()
+        .is_ok_and(|visible| visible.contains(&tab_id))
+    {
+        return Ok(false);
+    }
+    let rx = suspend_native_webview(&webview)?;
+    let suspended = tauri::async_runtime::spawn_blocking(move || {
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+    })
+    .await
+    .map_err(|error| format!("Suspend task failed: {error}"))?;
+
+    let is_successful = match suspended {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => return Err(error),
+        Err(_) => return Ok(false),
+    };
+    if !is_successful {
+        return Ok(false);
+    }
+
+    let became_visible = state
+        .visible_wrike_tabs
+        .lock()
+        .is_ok_and(|visible| visible.contains(&tab_id));
+    if became_visible {
+        resume_native_webview(&webview);
+        set_native_memory_target_level(&webview, false);
+        let _ = webview.show();
+        return Ok(false);
+    }
+
+    if let Ok(mut suspended_tabs) = state.suspended_tabs.lock() {
+        suspended_tabs.insert(tab_id.clone());
     }
     if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
         visible.remove(&tab_id);
     }
-    suspend_native_webview(&webview)?;
     Ok(true)
 }
 
@@ -3184,7 +3243,7 @@ pub fn run() {
                 if let Ok(path) = workspace_state_path(app.handle()) {
                     if let Ok(workspace) = persistence::read::<WorkspaceState>(&path) {
                         if let Some(bounds) = workspace.window_bounds {
-                            if bounds.width >= 1100 && bounds.height >= 620 {
+                            if bounds.width >= 760 && bounds.height >= 620 {
                                 let _ =
                                     window.set_size(PhysicalSize::new(bounds.width, bounds.height));
                                 let _ =

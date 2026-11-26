@@ -308,10 +308,11 @@ test('task-po script detects task panels without URL id gate and waits for the S
   assert.match(poSource, /panel\.textContent/);
 });
 
-test('startup opens Wrike after the splash through its normal tab path', () => {
+test('startup opens Wrike immediately through its normal tab path', () => {
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   const native = readFileSync(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf8');
-  assert.match(app, /if \(next\.launchWrikeOnStart\) \{\s+await waitForLaunchSplash\(\);\s+await openStartupTabs/);
+  assert.match(app, /if \(next\.launchWrikeOnStart\) \{\s+await openStartupTabs/);
+  assert.doesNotMatch(app, /waitForLaunchSplash/);
   assert.doesNotMatch(native, /start_hidden/);
 });
 

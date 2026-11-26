@@ -7,6 +7,70 @@
   overflow: hidden;
 }
 
+.files-compact-bar {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  .files-screen {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .files-compact-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .files-compact-bar button {
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 7px;
+    font-size: 13px;
+    font-weight: 550;
+    color: var(--muted);
+    background: var(--surface-soft);
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .files-compact-bar button.active {
+    color: #fff;
+    background: var(--accent);
+  }
+
+  .files-compact-bar button:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  .files-resizer {
+    display: none;
+  }
+
+  .files-library {
+    border-right: 0;
+  }
+
+  .files-screen.compact-pane-list .preview-panel {
+    display: none;
+  }
+
+  .files-screen.compact-pane-preview .files-library {
+    display: none;
+  }
+
+  .files-screen.compact-pane-preview .preview-panel {
+    margin: 10px 12px 12px;
+  }
+}
+
 .files-resizer {
   cursor: col-resize;
   background: transparent;

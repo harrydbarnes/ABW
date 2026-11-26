@@ -17,7 +17,7 @@
         "title": "ABW",
         "width": 1380,
         "height": 880,
-        "minWidth": 1100,
+        "minWidth": 760,
         "minHeight": 620,
         "dragDropEnabled": false,
         "decorations": false,
