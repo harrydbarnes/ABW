@@ -19,6 +19,14 @@ export function evictPreviewById(id: string) {
   previewCache.evictById(id);
 }
 
+export function getPreviewCacheStats() {
+  return previewCache.getStats();
+}
+
+export function clearAllPreviewCaches() {
+  previewCache.clear();
+}
+
 export function loadCachedPdfHead(record: DownloadRecord): Promise<PdfHeadResult | null> {
   return previewCache.loadPdfHead(record);
 }

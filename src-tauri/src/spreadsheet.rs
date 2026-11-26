@@ -60,6 +60,8 @@ pub struct WorkbookSheet {
     pub truncated_columns: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub has_images: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub deferred: bool,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -244,6 +246,7 @@ fn load_calamine_fallback(path: &Path) -> Result<WorkbookPreview, String> {
                 truncated_rows,
                 truncated_columns,
                 has_images: false,
+                deferred: false,
             }
         })
         .collect();
@@ -401,6 +404,7 @@ fn load_delimited_spreadsheet(path: &Path, force_tab: bool) -> Result<WorkbookPr
             truncated_rows,
             truncated_columns,
             has_images: false,
+            deferred: false,
         }],
         active_sheet: 0,
         styles,
@@ -622,7 +626,18 @@ fn optional_ooxml_part<T: Default>(
     }
 }
 
-fn load_styled_ooxml(file: File) -> Result<WorkbookPreview, PreviewParseOutcome> {
+struct OoxmlContext {
+    archive: ZipArchive<BufReader<File>>,
+    entry_lookup: HashMap<String, usize>,
+    workbook_meta: WorkbookMeta,
+    rels: HashMap<String, String>,
+    shared_strings: Vec<String>,
+    stylesheet: Stylesheet,
+    palette: Vec<WorkbookCellStyle>,
+    xf_style_indices: Vec<Option<usize>>,
+}
+
+fn load_ooxml_context(file: File) -> Result<OoxmlContext, PreviewParseOutcome> {
     let mut archive =
         ZipArchive::new(BufReader::new(file)).map_err(|_| PreviewParseOutcome::Fallback)?;
     let mut entry_lookup = HashMap::with_capacity(archive.len());
@@ -670,71 +685,175 @@ fn load_styled_ooxml(file: File) -> Result<WorkbookPreview, PreviewParseOutcome>
     };
     let (palette, xf_style_indices) = stylesheet.build_palette();
 
-    let visible_sheets: Vec<(usize, &WorkbookSheetEntry)> = workbook_meta
+    Ok(OoxmlContext {
+        archive,
+        entry_lookup,
+        workbook_meta,
+        rels,
+        shared_strings,
+        stylesheet,
+        palette,
+        xf_style_indices,
+    })
+}
+
+fn load_styled_ooxml(file: File) -> Result<WorkbookPreview, PreviewParseOutcome> {
+    let mut ctx = load_ooxml_context(file)?;
+
+    let visible_sheets: Vec<(usize, WorkbookSheetEntry)> = ctx
+        .workbook_meta
         .sheets
         .iter()
         .enumerate()
         .filter(|(_, sheet)| sheet.visible)
+        .map(|(idx, sheet)| (idx, sheet.clone()))
         .collect();
 
     let active_sheet = visible_sheets
         .iter()
-        .position(|(original_idx, _)| *original_idx == workbook_meta.active_tab)
+        .position(|(original_idx, _)| *original_idx == ctx.workbook_meta.active_tab)
         .unwrap_or(0);
 
-    let mut sheets = Vec::with_capacity(visible_sheets.len());
-    for (_, sheet_entry) in visible_sheets {
-        let Some(target) = rels.get(&sheet_entry.rel_id) else {
+    let mut resolved_targets = Vec::with_capacity(visible_sheets.len());
+    for (_, sheet_entry) in &visible_sheets {
+        let Some(target) = ctx.rels.get(&sheet_entry.rel_id) else {
             return Err(PreviewParseOutcome::Fallback);
         };
-        let Some(&sheet_idx) = entry_lookup.get(&target.to_ascii_lowercase()) else {
+        let Some(&sheet_idx) = ctx.entry_lookup.get(&target.to_ascii_lowercase()) else {
             return Err(PreviewParseOutcome::Fallback);
         };
-        let has_images = sheet_has_images(&mut archive, &entry_lookup, target);
+        resolved_targets.push((sheet_entry.name.clone(), target.clone(), sheet_idx));
+    }
+
+    let defer_inactive = resolved_targets.len() > 1;
+    let mut sheets = Vec::with_capacity(resolved_targets.len());
+    for (visible_idx, (name, target, sheet_idx)) in resolved_targets.into_iter().enumerate() {
+        if defer_inactive && visible_idx != active_sheet {
+            sheets.push(WorkbookSheet {
+                name,
+                columns: Vec::new(),
+                rows: Vec::new(),
+                truncated_rows: false,
+                truncated_columns: false,
+                has_images: false,
+                deferred: true,
+            });
+            continue;
+        }
+        let has_images = sheet_has_images(&mut ctx.archive, &ctx.entry_lookup, &target);
         let mut sheet = parse_worksheet(
-            &mut archive,
+            &mut ctx.archive,
             sheet_idx,
-            &sheet_entry.name,
-            &shared_strings,
-            &stylesheet,
-            &xf_style_indices,
-            workbook_meta.date_1904,
+            &name,
+            &ctx.shared_strings,
+            &ctx.stylesheet,
+            &ctx.xf_style_indices,
+            ctx.workbook_meta.date_1904,
         )?;
         sheet.has_images = has_images;
         sheets.push(sheet);
     }
 
-    // Prune styles not referenced by any rendered cell to minimize IPC payload size.
-    let mut remapped_styles = Vec::new();
-    let mut style_remap: Vec<Option<usize>> = vec![None; palette.len()];
-    for sheet in &mut sheets {
-        for row in &mut sheet.rows {
-            for cell in &mut row.cells {
-                if let Some(old_idx) = cell.style_index {
-                    if let Some(slot) = style_remap.get_mut(old_idx) {
-                        let new_idx = match *slot {
-                            Some(existing) => existing,
-                            None => {
-                                let idx = remapped_styles.len();
-                                remapped_styles.push(palette[old_idx].clone());
-                                *slot = Some(idx);
-                                idx
-                            }
-                        };
-                        cell.style_index = Some(new_idx);
-                    } else {
-                        cell.style_index = None;
+    let styles = if defer_inactive {
+        ctx.palette
+    } else {
+        // Prune styles not referenced by any rendered cell when all sheets are already parsed.
+        let mut remapped_styles = Vec::new();
+        let mut style_remap: Vec<Option<usize>> = vec![None; ctx.palette.len()];
+        for sheet in &mut sheets {
+            for row in &mut sheet.rows {
+                for cell in &mut row.cells {
+                    if let Some(old_idx) = cell.style_index {
+                        if let Some(slot) = style_remap.get_mut(old_idx) {
+                            let new_idx = match *slot {
+                                Some(existing) => existing,
+                                None => {
+                                    let idx = remapped_styles.len();
+                                    remapped_styles.push(ctx.palette[old_idx].clone());
+                                    *slot = Some(idx);
+                                    idx
+                                }
+                            };
+                            cell.style_index = Some(new_idx);
+                        } else {
+                            cell.style_index = None;
+                        }
                     }
                 }
             }
         }
-    }
+        remapped_styles
+    };
 
     Ok(WorkbookPreview {
         sheets,
         active_sheet,
-        styles: remapped_styles,
+        styles,
     })
+}
+
+pub fn load_sheet(path: &Path, sheet_index: usize) -> Result<WorkbookSheet, String> {
+    let size = std::fs::metadata(path)
+        .map_err(|error| format!("Unable to inspect spreadsheet: {error}"))?
+        .len();
+    if size > MAX_SPREADSHEET_PREVIEW_BYTES {
+        return Err(format!(
+            "This spreadsheet is {} MB. In-app preview supports files up to 64 MB; open it in Windows instead.",
+            size.div_ceil(1024 * 1024)
+        ));
+    }
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if !matches!(extension.as_str(), "xlsx" | "xlsm" | "xltx" | "xltm") {
+        return Err("On-demand sheet loading is only supported for OOXML workbooks.".into());
+    }
+    let mut file =
+        File::open(path).map_err(|error| format!("Unable to open spreadsheet: {error}"))?;
+    validate_spreadsheet_archive_file(&mut file)?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| format!("Unable to read spreadsheet: {error}"))?;
+
+    let mut ctx = load_ooxml_context(file).map_err(|outcome| match outcome {
+        PreviewParseOutcome::Safety(msg) => msg,
+        PreviewParseOutcome::Fallback => "Unable to load worksheet.".to_owned(),
+    })?;
+    let sheet_entry = ctx
+        .workbook_meta
+        .sheets
+        .iter()
+        .filter(|sheet| sheet.visible)
+        .nth(sheet_index)
+        .cloned()
+        .ok_or_else(|| "Requested worksheet was not found.".to_owned())?;
+    let target = ctx
+        .rels
+        .get(&sheet_entry.rel_id)
+        .cloned()
+        .ok_or_else(|| "Unable to locate worksheet data.".to_owned())?;
+    let &sheet_idx = ctx
+        .entry_lookup
+        .get(&target.to_ascii_lowercase())
+        .ok_or_else(|| "Unable to locate worksheet entry.".to_owned())?;
+    let has_images = sheet_has_images(&mut ctx.archive, &ctx.entry_lookup, &target);
+    let mut sheet = parse_worksheet(
+        &mut ctx.archive,
+        sheet_idx,
+        &sheet_entry.name,
+        &ctx.shared_strings,
+        &ctx.stylesheet,
+        &ctx.xf_style_indices,
+        ctx.workbook_meta.date_1904,
+    )
+    .map_err(|outcome| match outcome {
+        PreviewParseOutcome::Safety(msg) => msg,
+        PreviewParseOutcome::Fallback => "Unable to parse worksheet.".to_owned(),
+    })?;
+    sheet.has_images = has_images;
+    sheet.deferred = false;
+    Ok(sheet)
 }
 
 struct WorkbookMeta {
@@ -743,6 +862,7 @@ struct WorkbookMeta {
     sheets: Vec<WorkbookSheetEntry>,
 }
 
+#[derive(Clone)]
 struct WorkbookSheetEntry {
     name: String,
     rel_id: String,
@@ -1929,6 +2049,7 @@ fn parse_worksheet<R: Read + Seek>(
         truncated_rows,
         truncated_columns,
         has_images: false,
+        deferred: false,
     })
 }
 
@@ -3485,5 +3606,65 @@ mod tests {
         assert_eq!(images[0].width_px, 100.0);
         assert_eq!(images[0].height_px, 50.0);
         assert!(images[0].left_px > 96.0);
+    }
+
+    #[test]
+    fn defers_non_active_ooxml_sheets_and_loads_them_on_demand() {
+        let workbook_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/relationships">
+  <bookViews><workbookView activeTab="1"/></bookViews>
+  <sheets>
+    <sheet name="First" sheetId="1" r:id="rId1"/>
+    <sheet name="Second" sheetId="2" r:id="rId2"/>
+  </sheets>
+</workbook>"#;
+        let rels_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+</Relationships>"#;
+        let sst_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="2">
+  <si><t>Deferred Cell</t></si>
+  <si><t>Active Cell</t></si>
+</sst>"#;
+        let styles_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="1"><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>
+  <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+  <borders count="1"><border><left/><right/><top/><bottom/></border></borders>
+  <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>
+</styleSheet>"#;
+        let sheet1_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData><row r="1"><c r="A1" t="s" s="0"><v>0</v></c></row></sheetData>
+</worksheet>"#;
+        let sheet2_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData><row r="1"><c r="A1" t="s" s="0"><v>1</v></c></row></sheetData>
+</worksheet>"#;
+        let file = write_test_xlsx(&[
+            ("xl/workbook.xml", workbook_xml),
+            ("xl/_rels/workbook.xml.rels", rels_xml),
+            ("xl/sharedStrings.xml", sst_xml),
+            ("xl/styles.xml", styles_xml),
+            ("xl/worksheets/sheet1.xml", sheet1_xml),
+            ("xl/worksheets/sheet2.xml", sheet2_xml),
+        ]);
+        let preview = preview_file(file.path()).unwrap();
+        assert_eq!(preview.active_sheet, 1);
+        assert_eq!(preview.sheets.len(), 2);
+        assert!(preview.sheets[0].deferred);
+        assert!(preview.sheets[0].rows.is_empty());
+        assert!(!preview.sheets[1].deferred);
+        assert_eq!(preview.sheets[1].rows[0].cells[0].value, "Active Cell");
+
+        let loaded_first = load_sheet(file.path(), 0).unwrap();
+        assert!(!loaded_first.deferred);
+        assert_eq!(loaded_first.name, "First");
+        assert_eq!(loaded_first.rows[0].cells[0].value, "Deferred Cell");
+        let style_idx = loaded_first.rows[0].cells[0].style_index.unwrap();
+        assert_eq!(preview.styles[style_idx].font_weight, Some(700));
     }
 }

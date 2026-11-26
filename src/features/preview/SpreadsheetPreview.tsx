@@ -16,7 +16,7 @@ import type {
   WorkbookPreview,
   WorkbookSheet,
 } from "../../types";
-import { loadSpreadsheetImages } from "../../lib/desktop";
+import { loadSpreadsheetImages, loadSpreadsheetSheet } from "../../lib/desktop";
 import { loadCachedSpreadsheetPreview, toColumnLabel } from "./previewCache";
 import {
   formatSelectionAsCsv,
@@ -161,6 +161,8 @@ export default memo(function SpreadsheetPreview({
   const [active, setActive] = useState(demo ? DEMO_PREVIEW.activeSheet : 0);
   const [zoom, setZoom] = useState(100);
   const [loading, setLoading] = useState(!demo);
+  const [sheetLoading, setSheetLoading] = useState(false);
+  const [sheetError, setSheetError] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [selection, setSelection] = useState<CellSelection | null>(null);
   const [copiedNotice, setCopiedNotice] = useState<"tsv" | "csv" | null>(null);
@@ -217,6 +219,8 @@ export default memo(function SpreadsheetPreview({
   useEffect(() => {
     let live = true;
     setProblem(null);
+    setSheetLoading(false);
+    setSheetError(null);
     setFindQuery("");
     setMatchCursor(0);
     setShowImages(false);
@@ -266,6 +270,56 @@ export default memo(function SpreadsheetPreview({
   const stylesPalette = preview?.styles ?? [];
   const imageCacheKey = `${record.id}:${active}`;
   const currentImages = imagesByKey[imageCacheKey] ?? [];
+
+  useEffect(() => {
+    if (demo || !preview || !sheet?.deferred) {
+      setSheetLoading(false);
+      setSheetError(null);
+      return;
+    }
+    let live = true;
+    const targetSheetIndex = active;
+    setSheetLoading(true);
+    setSheetError(null);
+    void loadSpreadsheetSheet(record.id, targetSheetIndex)
+      .then((loaded) => {
+        if (!live) {
+          return;
+        }
+        if (!loaded) {
+          setSheetError("Unable to load this worksheet.");
+          setSheetLoading(false);
+          return;
+        }
+        setPreview((current) => {
+          if (!current) {
+            return current;
+          }
+          current.sheets[targetSheetIndex] = loaded;
+          return {
+            ...current,
+            sheets: [...current.sheets],
+          };
+        });
+        setSheetLoading(false);
+      })
+      .catch((error: unknown) => {
+        if (!live) {
+          return;
+        }
+        const message =
+          error instanceof Error
+            ? error.message
+            : typeof error === "string"
+              ? error
+              : "Unable to load this worksheet.";
+        setSheetError(message);
+        setSheetLoading(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [active, demo, preview, record.id, sheet?.deferred]);
 
   useEffect(() => {
     const scroller = scrollerRef.current;
@@ -909,6 +963,20 @@ export default memo(function SpreadsheetPreview({
         className={`sheet-scroller ${isMultiCellSelection ? "sheet-range-selecting" : ""}`}
         ref={scrollerRef}
       >
+        {sheetError ? (
+          <div className="preview-error preview-status">
+            <strong>Worksheet unavailable</strong>
+            <p>{sheetError}</p>
+          </div>
+        ) : sheetLoading || sheet.deferred ? (
+          <div className="document-loading preview-status">
+            <span className="preview-spinner" aria-hidden="true" />
+            <div>
+              <strong>Loading worksheet</strong>
+              <p>Reading {sheet.name || "worksheet"}...</p>
+            </div>
+          </div>
+        ) : (
         <div
           className="sheet-stage"
           style={{
@@ -1024,6 +1092,7 @@ export default memo(function SpreadsheetPreview({
               ))
             : null}
         </div>
+        )}
       </div>
       {selectionSummary ? (
         <div className="sheet-status-bar" role="status" aria-live="polite">

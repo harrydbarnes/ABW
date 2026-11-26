@@ -61,7 +61,12 @@ import {
   type WrikeTabLayout,
   type WrikeTabUpdate,
 } from "./lib/desktop";
-import { evictPreviewById, formatBytes } from "./features/preview/previewCache";
+import {
+  clearAllPreviewCaches,
+  evictPreviewById,
+  formatBytes,
+  getPreviewCacheStats,
+} from "./features/preview/previewCache";
 import {
   filterAndSortDownloads,
   nextTabIndexForCycle,
@@ -193,6 +198,8 @@ export function App() {
   const [isTopbarActionsMenuOpen, setIsTopbarActionsMenuOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [compactFilesPane, setCompactFilesPane] = useState<"list" | "preview">("list");
+  const [startupReadyMs, setStartupReadyMs] = useState<number | null>(null);
+  const [diagnosticsVersion, setDiagnosticsVersion] = useState(0);
   const [previewFromWrike, setPreviewFromWrike] = useState(false);
   const [previewRevealKey, setPreviewRevealKey] = useState(0);
   const [showPreviewedFiles, setShowPreviewedFiles] = useState(false);
@@ -273,6 +280,7 @@ export function App() {
   const sessionSaveTimerRef = useRef<number | undefined>(undefined);
   const closingTabIdsRef = useRef(new Set<string>());
   const tabIdCounterRef = useRef(0);
+  const launchBootAtRef = useRef(Date.now());
   const shortcutHandlerRef = useRef<(shortcut: WrikeShortcutEvent) => void>(() => undefined);
 
   const visiblePrivacyTabIds =
@@ -576,12 +584,14 @@ export function App() {
       }
       if (next.launchWrikeOnStart) {
         await openStartupTabs(next.startupTabUrls);
+        setStartupReadyMs(Date.now() - launchBootAtRef.current);
         setIsLaunchSplashVisible(false);
         if (!canRestoreSession) {
           canPersistSessionRef.current = true;
         }
       } else {
         setScreen("files");
+        setStartupReadyMs(Date.now() - launchBootAtRef.current);
         setIsLaunchSplashVisible(false);
         if (!canRestoreSession) {
           canPersistSessionRef.current = true;
@@ -2180,6 +2190,12 @@ export function App() {
     }
   };
 
+  const cacheStats = useMemo(
+    () => getPreviewCacheStats(),
+    // Recompute when switching to Settings, downloads change, or caches are cleared.
+    [diagnosticsVersion, downloads.length, screen, selectedId],
+  );
+
   return (
     <>
     <div
@@ -2865,6 +2881,21 @@ export function App() {
             <SettingsPanel
               appVersion={APP_VERSION}
               clearingDownloads={clearingDownloads}
+              diagnostics={{
+                totalTabs: wrikeTabs.length,
+                initializedTabs: wrikeTabs.filter((tab) => initializedTabIdsRef.current.has(tab.id)).length,
+                suspendedTabs: suspendedTabIds.length,
+                startupReadyMs,
+                pdfCacheEntries: cacheStats.pdfEntries,
+                pdfCacheBytes: cacheStats.pdfBytes,
+                spreadsheetCacheEntries: cacheStats.spreadsheetEntries,
+                spreadsheetCacheBytes: cacheStats.spreadsheetBytes,
+                onClearPreviewCaches: () => {
+                  clearAllPreviewCaches();
+                  setDiagnosticsVersion((current) => current + 1);
+                  setNotice("In-memory preview caches cleared.");
+                },
+              }}
               downloadsStats={downloadsStats}
               settings={settings}
               updateState={appUpdate}

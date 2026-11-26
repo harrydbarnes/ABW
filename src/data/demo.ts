@@ -55,6 +55,7 @@ export const DEFAULT_SETTINGS: Settings = {
   openAbwAtSystemStartup: false,
   startMinimizedToTray: false,
   closeToNotificationArea: true,
+  suspendTabsOnTrayHide: true,
   confirmBeforeClosingTabs: false,
   openDownloadedFilesAutomatically: false,
   openExternalLinksInBrowser: true,

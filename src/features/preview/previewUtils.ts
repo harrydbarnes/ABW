@@ -299,8 +299,36 @@ export function createPreviewCache<
     return entry.promise;
   }
 
+  function clear() {
+    pdfCache.clear();
+    spreadsheetCache.clear();
+  }
+
+  function getStats() {
+    let pdfBytes = 0;
+    for (const entry of pdfCache.values()) {
+      if (entry.ready) {
+        pdfBytes += entry.sizeBytes;
+      }
+    }
+    let spreadsheetBytes = 0;
+    for (const entry of spreadsheetCache.values()) {
+      if (entry.ready) {
+        spreadsheetBytes += entry.sizeBytes;
+      }
+    }
+    return {
+      pdfEntries: pdfCache.size,
+      pdfBytes,
+      spreadsheetEntries: spreadsheetCache.size,
+      spreadsheetBytes,
+    };
+  }
+
   return {
+    clear,
     evictById,
+    getStats,
     loadPdfHead,
     loadSpreadsheetPreview,
     pdfCacheSize: () => pdfCache.size,

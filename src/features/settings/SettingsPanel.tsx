@@ -8,9 +8,22 @@ import {
   type Settings,
 } from "../../types";
 
+export interface WorkspaceDiagnostics {
+  totalTabs: number;
+  initializedTabs: number;
+  suspendedTabs: number;
+  startupReadyMs: number | null;
+  pdfCacheEntries: number;
+  pdfCacheBytes: number;
+  spreadsheetCacheEntries: number;
+  spreadsheetCacheBytes: number;
+  onClearPreviewCaches: () => void;
+}
+
 interface Props {
   appVersion: string;
   clearingDownloads: boolean;
+  diagnostics?: WorkspaceDiagnostics;
   downloadsStats: DownloadsStorageStats | null;
   settings: Settings;
   updateState: AppUpdateState;
@@ -76,6 +89,7 @@ function AnimatedSettingItem({
 export const SettingsPanel = memo(function SettingsPanel({
   appVersion,
   clearingDownloads,
+  diagnostics,
   downloadsStats,
   settings,
   updateState,
@@ -135,6 +149,11 @@ export const SettingsPanel = memo(function SettingsPanel({
     "Close app to notification area (higher memory usage)",
     "Keep ABW running in the notification area when its window is closed so it can reopen quickly. This uses more memory.",
   );
+  const showSuspendOnTrayHide = matchesSearch(
+    query,
+    "Suspend tabs when minimized to notification area",
+    "Suspend Wrike tabs when ABW hides to the notification area to reclaim WebView2 memory while minimized.",
+  );
   const showConfirmClose = matchesSearch(
     query,
     "Confirm before closing with multiple tabs open",
@@ -177,6 +196,7 @@ export const SettingsPanel = memo(function SettingsPanel({
     showSystemStartup ||
     showStartMinimized ||
     showCloseToTray ||
+    showSuspendOnTrayHide ||
     showConfirmClose ||
     showExternalLinks ||
     showCustomContextMenu ||
@@ -255,6 +275,17 @@ export const SettingsPanel = memo(function SettingsPanel({
   );
   const showSpellSection =
     showSpellHeader || showSpellCheckToggle || showSpellCheckTopbar || showDictionary;
+
+  const showDiagnosticsSection =
+    Boolean(diagnostics) &&
+    matchesSearch(
+      query,
+      "Workspace diagnostics",
+      "Startup time",
+      "Wrike tabs",
+      "Preview caches",
+      "Clear preview caches",
+    );
 
   const hasAnyMatches =
     showUpdatesSection ||
@@ -355,6 +386,15 @@ export const SettingsPanel = memo(function SettingsPanel({
               description="Keep ABW running in the notification area when its window is closed so it can reopen quickly. This uses more memory."
               label="Close app to notification area (higher memory usage)"
               onChange={(closeToNotificationArea) => onChange({ ...settings, closeToNotificationArea })}
+              query={query}
+            />
+          </AnimatedSettingItem>
+          <AnimatedSettingItem visible={showSuspendOnTrayHide || showAbwPrefsHeader}>
+            <SettingToggle
+              checked={settings.closeToNotificationArea && settings.suspendTabsOnTrayHide}
+              description="Suspend Wrike tabs when ABW hides to the notification area to reclaim WebView2 memory while minimized."
+              label="Suspend tabs when minimized to notification area"
+              onChange={(suspendTabsOnTrayHide) => onChange({ ...settings, suspendTabsOnTrayHide })}
               query={query}
             />
           </AnimatedSettingItem>
@@ -578,6 +618,48 @@ export const SettingsPanel = memo(function SettingsPanel({
           </AnimatedSettingItem>
         </div>
       </AnimatedSettingItem>
+
+      {diagnostics ? (
+        <AnimatedSettingItem className="setting-section-item" visible={showDiagnosticsSection}>
+          <div className="setting-group">
+            <div className="setting-group-header">
+              <h2><HighlightText query={query} text="Workspace diagnostics" /></h2>
+              <p><HighlightText query={query} text="Local tab lifecycle, startup timing, and in-memory preview cache telemetry." /></p>
+            </div>
+            <div className="notification-note">
+              <div className="diagnostics-grid">
+                <div>
+                  <strong><HighlightText query={query} text="Startup time" /></strong>
+                  <span>{diagnostics.startupReadyMs !== null ? `${diagnostics.startupReadyMs} ms` : "Pending"}</span>
+                </div>
+                <div>
+                  <strong><HighlightText query={query} text="Wrike tabs" /></strong>
+                  <span>
+                    {diagnostics.totalTabs} total · {diagnostics.initializedTabs} initialized ·{" "}
+                    {Math.max(0, diagnostics.totalTabs - diagnostics.initializedTabs)} lazy ·{" "}
+                    {diagnostics.suspendedTabs} suspended
+                  </span>
+                </div>
+                <div>
+                  <strong><HighlightText query={query} text="Preview caches" /></strong>
+                  <span>
+                    PDF: {diagnostics.pdfCacheEntries} ({formatStorageBytes(diagnostics.pdfCacheBytes)}) ·
+                    Spreadsheets: {diagnostics.spreadsheetCacheEntries} ({formatStorageBytes(diagnostics.spreadsheetCacheBytes)})
+                  </span>
+                </div>
+              </div>
+              <button
+                className="secondary-action"
+                disabled={diagnostics.pdfCacheEntries === 0 && diagnostics.spreadsheetCacheEntries === 0}
+                onClick={diagnostics.onClearPreviewCaches}
+                type="button"
+              >
+                <HighlightText query={query} text="Clear preview caches" />
+              </button>
+            </div>
+          </div>
+        </AnimatedSettingItem>
+      ) : null}
 
       <footer className="settings-footer">
         <span className="settings-footer-meta">

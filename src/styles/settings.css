@@ -1436,6 +1436,27 @@
   margin-left: auto;
 }
 
+.diagnostics-grid {
+  display: grid;
+  gap: 6px;
+}
+
+.diagnostics-grid > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.diagnostics-grid strong {
+  color: #192943;
+  min-width: 112px;
+}
+
+.diagnostics-grid span {
+  color: var(--muted);
+}
+
 .sheet td.sheet-match {
   background-color: #fff3bf !important;
 }

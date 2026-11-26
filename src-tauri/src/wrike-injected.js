@@ -242,8 +242,9 @@
       abwSyncWrikeContentCorner(true);
     });
   };
+  let abwLastFullCornerSyncAt = 0;
   const abwSyncWrikeContentCorner = (fast = false) => {
-    if (abwAutoDownload || !abwIsWrikeHost() || document.hidden || !document.body) return;
+    if (abwAutoDownload || !abwIsWrikeHost() || document.hidden || abwCornerDragActive || !document.body) return;
     const cornerId = "abw-wrike-corner";
     const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || 0;
     const viewportWidth = window.innerWidth || document.documentElement?.clientWidth || 0;
@@ -270,6 +271,12 @@
         return;
       }
     }
+
+    const now = Date.now();
+    if (!fast && now - abwLastFullCornerSyncAt < 500 && abwCornerObservedContent?.isConnected) {
+      return;
+    }
+    abwLastFullCornerSyncAt = now;
 
     const parseRgb = (color) => {
       const match = String(color || "").match(
@@ -621,6 +628,9 @@
     return "";
   };
   let abwLastFullReportAt = 0;
+  let abwLastThemeEmitAt = 0;
+  let abwPendingThemeCandidate = null;
+  let abwPendingThemeHits = 0;
   const abwReportWrikeTheme = (force = false) => {
     if (abwAutoDownload || !abwIsWrikeHost() || (!force && document.hidden)) return null;
     abwSyncWrikeContentCorner();
@@ -655,9 +665,27 @@
     }
     const detected = abwDetectWrikeThemeFromDom();
     if (!detected) return null;
-    if (!force && window.__abwLastDetectedWrikeTheme === detected) {
-      return detected;
+    if (window.__abwLastDetectedWrikeTheme === detected) {
+      abwPendingThemeCandidate = null;
+      abwPendingThemeHits = 0;
+      if (!force) {
+        return detected;
+      }
+    } else if (!force && typeof window.__abwLastDetectedWrikeTheme === "string") {
+      if (abwPendingThemeCandidate === detected) {
+        abwPendingThemeHits += 1;
+      } else {
+        abwPendingThemeCandidate = detected;
+        abwPendingThemeHits = 1;
+      }
+      if (abwPendingThemeHits < 2 || now - abwLastThemeEmitAt < 1500) {
+        abwScheduleThemeDetect(450);
+        return window.__abwLastDetectedWrikeTheme;
+      }
     }
+    abwPendingThemeCandidate = null;
+    abwPendingThemeHits = 0;
+    abwLastThemeEmitAt = now;
     window.__abwLastDetectedWrikeTheme = detected;
     abwEmitScheme(`abw-theme://detected?theme=${encodeURIComponent(detected)}`);
     return detected;

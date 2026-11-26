@@ -42,6 +42,7 @@ export interface Settings {
   openAbwAtSystemStartup: boolean;
   startMinimizedToTray: boolean;
   closeToNotificationArea: boolean;
+  suspendTabsOnTrayHide: boolean;
   confirmBeforeClosingTabs: boolean;
   openDownloadedFilesAutomatically: boolean;
   openExternalLinksInBrowser: boolean;
@@ -135,6 +136,7 @@ export interface WorkbookSheet {
   truncatedRows?: boolean;
   truncatedColumns?: boolean;
   hasImages?: boolean;
+  deferred?: boolean;
 }
 
 export interface WorkbookColumn {

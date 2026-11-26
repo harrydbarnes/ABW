@@ -129,7 +129,10 @@ struct Settings {
     open_abw_at_system_startup: bool,
     #[serde(default)]
     start_minimized_to_tray: bool,
+    #[serde(default)]
     close_to_notification_area: bool,
+    #[serde(default = "default_true")]
+    suspend_tabs_on_tray_hide: bool,
     confirm_before_closing_tabs: bool,
     open_downloaded_files_automatically: bool,
     #[serde(default = "default_true")]
@@ -206,6 +209,7 @@ impl Default for Settings {
             open_abw_at_system_startup: false,
             start_minimized_to_tray: false,
             close_to_notification_area: true,
+            suspend_tabs_on_tray_hide: true,
             confirm_before_closing_tabs: false,
             open_downloaded_files_automatically: false,
             open_external_links_in_browser: true,
@@ -244,6 +248,7 @@ impl Settings {
             && self.open_abw_at_system_startup == other.open_abw_at_system_startup
             && self.start_minimized_to_tray == other.start_minimized_to_tray
             && self.close_to_notification_area == other.close_to_notification_area
+            && self.suspend_tabs_on_tray_hide == other.suspend_tabs_on_tray_hide
             && self.confirm_before_closing_tabs == other.confirm_before_closing_tabs
             && self.open_downloaded_files_automatically == other.open_downloaded_files_automatically
             && self.open_external_links_in_browser == other.open_external_links_in_browser
@@ -323,6 +328,7 @@ struct AppState {
     top_inset: Mutex<f64>,
     wrike_split_ratio: Mutex<f64>,
     quit_prompt_open: AtomicBool,
+    main_window_hidden: AtomicBool,
     wrike_inbox_unread: AtomicBool,
     update_available_badge: AtomicBool,
     open_external_links_in_browser: AtomicBool,
@@ -342,6 +348,7 @@ impl Default for AppState {
             top_inset: Mutex::new(0.0),
             wrike_split_ratio: Mutex::new(0.5),
             quit_prompt_open: AtomicBool::new(false),
+            main_window_hidden: AtomicBool::new(false),
             wrike_inbox_unread: AtomicBool::new(false),
             update_available_badge: AtomicBool::new(false),
             open_external_links_in_browser: AtomicBool::new(true),
@@ -566,6 +573,27 @@ async fn preview_spreadsheet(
     })
     .await
     .map_err(|error| format!("Unable to preview spreadsheet: {error}"))?
+}
+
+#[tauri::command]
+async fn load_spreadsheet_sheet(
+    app: AppHandle,
+    id: String,
+    sheet_index: usize,
+) -> Result<spreadsheet::WorkbookSheet, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = resolve_tracked_path(&app, &id)?;
+        match spreadsheet::load_sheet(&path, sheet_index) {
+            Err(_) if !path.exists() => {
+                invalidate_tracked_paths(&app, Some(&id));
+                let refreshed = resolve_tracked_path(&app, &id)?;
+                spreadsheet::load_sheet(&refreshed, sheet_index)
+            }
+            result => result,
+        }
+    })
+    .await
+    .map_err(|error| format!("Unable to load spreadsheet worksheet: {error}"))?
 }
 
 #[tauri::command]
@@ -2341,6 +2369,7 @@ fn save_main_window_bounds(app: &AppHandle) {
 
 fn show_main_window(app: &AppHandle) {
     if let Some(state) = app.try_state::<AppState>() {
+        state.main_window_hidden.store(false, Ordering::SeqCst);
         let suspended = state
             .suspended_tabs
             .lock()
@@ -2352,12 +2381,16 @@ fn show_main_window(app: &AppHandle) {
             .map(|tabs| tabs.clone())
             .unwrap_or_default();
         for tab_id in visible {
-            if suspended.contains(&tab_id) {
-                continue;
-            }
             if let Ok(label) = wrike_tab_label(&tab_id) {
                 if let Some(webview) = app.get_webview(&label) {
+                    if suspended.contains(&tab_id) {
+                        if let Ok(mut guard) = state.suspended_tabs.lock() {
+                            guard.remove(&tab_id);
+                        }
+                        resume_native_webview(&webview);
+                    }
                     set_native_memory_target_level(&webview, false);
+                    let _ = webview.show();
                 }
             }
         }
@@ -2389,6 +2422,7 @@ fn request_quit(app: &AppHandle, explicit: bool) {
         ),
     );
     if action == close_policy::CloseAction::Hide {
+        state.main_window_hidden.store(true, Ordering::SeqCst);
         if let Some(window) = app.get_window("main") {
             let _ = window.hide();
         }
@@ -2406,8 +2440,49 @@ fn request_quit(app: &AppHandle, explicit: bool) {
             if let Ok(label) = wrike_tab_label(&tab_id) {
                 if let Some(webview) = app.get_webview(&label) {
                     let _ = webview.eval("window.__abwHidePreviewLoading?.();");
-                    if !suspended.contains(&tab_id) {
-                        set_native_memory_target_level(&webview, true);
+                    if suspended.contains(&tab_id) {
+                        continue;
+                    }
+                    set_native_memory_target_level(&webview, true);
+                    if settings.suspend_tabs_on_tray_hide {
+                        if let Ok(rx) = suspend_native_webview(&webview) {
+                            let app_clone = app.clone();
+                            let tab_id_clone = tab_id.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let suspended_ok =
+                                    tauri::async_runtime::spawn_blocking(move || {
+                                        rx.recv_timeout(std::time::Duration::from_secs(5))
+                                    })
+                                    .await
+                                    .ok()
+                                    .and_then(|res| res.ok())
+                                    .and_then(|res| res.ok())
+                                    .unwrap_or(false);
+                                if !suspended_ok {
+                                    return;
+                                }
+                                let state = app_clone.state::<AppState>();
+                                if !state.main_window_hidden.load(Ordering::SeqCst) {
+                                    if let Ok(label) = wrike_tab_label(&tab_id_clone) {
+                                        if let Some(wv) = app_clone.get_webview(&label) {
+                                            resume_native_webview(&wv);
+                                            set_native_memory_target_level(&wv, false);
+                                            if state
+                                                .visible_wrike_tabs
+                                                .lock()
+                                                .is_ok_and(|v| v.contains(&tab_id_clone))
+                                            {
+                                                let _ = wv.show();
+                                            }
+                                        }
+                                    }
+                                    return;
+                                }
+                                if let Ok(mut guard) = state.suspended_tabs.lock() {
+                                    guard.insert(tab_id_clone);
+                                }
+                            });
+                        }
                     }
                 }
             }
@@ -3279,6 +3354,7 @@ pub fn run() {
             launch_wrike,
             list_downloads,
             load_spreadsheet_images,
+            load_spreadsheet_sheet,
             notify_update_available,
             open_download,
             open_downloads_folder,

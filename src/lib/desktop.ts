@@ -7,6 +7,7 @@ import type {
   Settings,
   WorkbookImage,
   WorkbookPreview,
+  WorkbookSheet,
   WrikeSession,
 } from "../types";
 import { DEFAULT_SETTINGS, DEMO_DOWNLOADS } from "../data/demo";
@@ -157,6 +158,16 @@ export async function previewSpreadsheet(id: string): Promise<WorkbookPreview | 
     return null;
   }
   return invokeDesktop<WorkbookPreview>("preview_spreadsheet", { id });
+}
+
+export async function loadSpreadsheetSheet(
+  id: string,
+  sheetIndex: number,
+): Promise<WorkbookSheet | null> {
+  if (!desktopRuntime) {
+    return null;
+  }
+  return invokeDesktop<WorkbookSheet>("load_spreadsheet_sheet", { id, sheetIndex });
 }
 
 export async function loadSpreadsheetImages(
