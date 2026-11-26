@@ -894,6 +894,7 @@ export default memo(function SpreadsheetPreview({
             Next
           </button>
           <button
+            className="sheet-find-close"
             onClick={() => {
               setFindOpen(false);
               setFindQuery("");
