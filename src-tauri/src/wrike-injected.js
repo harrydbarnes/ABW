@@ -1103,7 +1103,7 @@
     event.preventDefault();
     showLinkContextMenu(linkUrl, event);
   };
-  const abwSupportedFileName = /[^\r\n]{1,180}[.](pdf|doc|docx|xls|xlsx|xlsm|xlsb|ods|csv|tsv|rtf|txt|png|jpg|jpeg|gif|webp|bmp|svg)/i;
+  const abwSupportedFileName = /[^\r\n]{1,180}[.](pdf|docx|doc|xlsx|xlsm|xlsb|xls|ods|csv|tsv|rtf|txt|png|jpeg|jpg|gif|webp|bmp|svg)(?![a-z0-9])/i;
   const abwImageFileName = /[.](png|jpg|jpeg|gif|webp|bmp|svg)$/i;
   const abwShouldUseNativeImageViewer = (fileName) =>
     window.__abwUseNativeWrikeImageViewer !== false && abwImageFileName.test(String(fileName || "").trim());
@@ -1160,6 +1160,7 @@
     const existing = document.getElementById("abw-preview-loading-overlay");
     if (existing) existing.remove();
   };
+  window.__abwHidePreviewLoading = abwHidePreviewLoading;
   const abwShowPreviewLoading = (fileName = "") => {
     if (!document.body || abwAutoDownload) return;
     if (!document.getElementById("abw-preview-loading-style")) {
@@ -1315,8 +1316,15 @@
     const isUsable = (el) =>
       el instanceof Element &&
       !el.disabled &&
-      el.getAttribute("aria-disabled") !== "true";
-    const direct = attachmentItem.querySelector('[data-application="attachment-list-item-download"]');
+      el.getAttribute("aria-disabled") !== "true" &&
+      abwIsVisible(el);
+    const direct =
+      attachmentItem.querySelector(
+        'button[data-application="attachment-list-item-download"], a[data-application="attachment-list-item-download"]'
+      ) ||
+      attachmentItem
+        .querySelector('[data-application="attachment-list-item-download"]')
+        ?.querySelector('button, a, [role="button"], [role="link"]');
     if (isUsable(direct)) return direct;
     const inlineFallback = Array.from(
       attachmentItem.querySelectorAll('button, a, [role="button"], [role="link"]')
@@ -1343,7 +1351,6 @@
           (control) =>
             !control.closest('wrike-attachments-list-item, wrike-attachments-list-item-wrapper') &&
             isUsable(control) &&
-            abwIsVisible(control) &&
             (abwDownloadWord.test(abwControlLabel(control)) ||
               control.hasAttribute("download") ||
               abwLooksLikeDownloadUrl(control.getAttribute("href")))
