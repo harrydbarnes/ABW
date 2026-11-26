@@ -32,6 +32,7 @@ interface Props {
   onClearUnpinnedDownloads: () => void;
   onInstallUpdate: () => void;
   onOpenDownloadsFolder: () => void;
+  onPreviewOnboarding: () => void;
   onResetApp: () => void;
   onTestNotification: () => void;
 }
@@ -98,6 +99,7 @@ export const SettingsPanel = memo(function SettingsPanel({
   onClearUnpinnedDownloads,
   onInstallUpdate,
   onOpenDownloadsFolder,
+  onPreviewOnboarding,
   onResetApp,
   onTestNotification,
 }: Props) {
@@ -289,6 +291,8 @@ export const SettingsPanel = memo(function SettingsPanel({
     "MQS",
     "Prisma",
     "Beta",
+    "Preview onboarding",
+    "View the first-launch welcome dialog.",
   );
 
   const showDiagnosticsSection =
@@ -665,6 +669,15 @@ export const SettingsPanel = memo(function SettingsPanel({
             onChange={(enableFinanceTab) => onChange({ ...settings, enableFinanceTab })}
             query={query}
           />
+          <div className="setting">
+            <span>
+              <strong><HighlightText query={query} text="Onboarding" /></strong>
+              <small><HighlightText query={query} text="View the first-launch welcome dialog." /></small>
+            </span>
+            <button className="secondary-action" onClick={onPreviewOnboarding} type="button">
+              <HighlightText query={query} text="Preview onboarding" />
+            </button>
+          </div>
         </div>
       </AnimatedSettingItem>
 

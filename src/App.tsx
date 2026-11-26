@@ -243,7 +243,7 @@ export function App() {
   const [downloadsStats, setDownloadsStats] = useState<DownloadsStorageStats | null>(null);
   const [clearingDownloads, setClearingDownloads] = useState(false);
   const [ticketModal, setTicketModal] = useState<"favorites" | "history" | null>(null);
-  const [showWelcomeModal, setShowWelcomeModal] = useState(false);
+  const [welcomeMode, setWelcomeMode] = useState<"first-launch" | "preview" | null>(null);
   const pendingStartupLinksRef = useRef<string[] | null>([]);
   const [appUpdate, setAppUpdate] = useState<AppUpdateState>({
     phase: "idle",
@@ -584,7 +584,7 @@ export function App() {
       const shouldShowWelcome = !next.hasSeenWelcome;
       const finishStartup = () => {
         if (shouldShowWelcome) {
-          setShowWelcomeModal(true);
+          setWelcomeMode("first-launch");
           void markWelcomeSeen().then(() => {
             setSettings((current) => ({ ...current, hasSeenWelcome: true }));
           }).catch((error) => setNotice(`Unable to record onboarding: ${String(error)}`));
@@ -1345,7 +1345,8 @@ export function App() {
   }
 
   async function dismissWelcomeModal(openSettings: boolean) {
-    setShowWelcomeModal(false);
+    setWelcomeMode(null);
+    if (welcomeMode === "preview") return;
     try {
       if (openSettings) {
         await showLocalScreen("settings");
@@ -3014,6 +3015,7 @@ export function App() {
               onClearUnpinnedDownloads={handleClearUnpinnedDownloads}
               onInstallUpdate={() => void startUpdateInstall()}
               onOpenDownloadsFolder={handleOpenDownloadsFolder}
+              onPreviewOnboarding={() => setWelcomeMode("preview")}
               onResetApp={() => void handleResetApp()}
               onTestNotification={() => void testNotification()}
             />
@@ -3033,7 +3035,7 @@ export function App() {
           />
         </Suspense>
       ) : null}
-      {showWelcomeModal && !isLaunchSplashVisible ? (
+      {welcomeMode && !isLaunchSplashVisible ? (
         <WelcomeModal onContinue={(openSettings) => void dismissWelcomeModal(openSettings)} />
       ) : null}
     </div>
