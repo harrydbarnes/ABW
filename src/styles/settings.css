@@ -1418,6 +1418,13 @@
   color: #43536b;
   font-size: 12px;
   cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.sheet-find-bar button:hover:not(:disabled) {
+  background: #f1f5fb;
+  border-color: #c8d2e6;
+  color: #162238;
 }
 
 .sheet-find-bar button:disabled {
