@@ -649,22 +649,13 @@ export const SettingsPanel = memo(function SettingsPanel({
             <h2><HighlightText query={query} text="Advanced" /></h2>
             <p><HighlightText query={query} text="Experimental and opt-in workspace features." /></p>
           </div>
-          <label className="setting-row">
-            <div>
-              <strong><HighlightText query={query} text="Finance tab (Beta)" /></strong>
-              <p>
-                <HighlightText
-                  query={query}
-                  text="Show the Finance tab for MX MQS invoice queries, Prisma Orders risk tracking, and Excel exports."
-                />
-              </p>
-            </div>
-            <input
-              checked={settings.enableFinanceTab}
-              onChange={(event) => onChange({ ...settings, enableFinanceTab: event.target.checked })}
-              type="checkbox"
-            />
-          </label>
+          <SettingToggle
+            checked={settings.enableFinanceTab}
+            description="Show the Finance tab for MX MQS invoice queries, Prisma Orders risk tracking, and Excel exports."
+            label="Finance tab (Beta)"
+            onChange={(enableFinanceTab) => onChange({ ...settings, enableFinanceTab })}
+            query={query}
+          />
         </div>
       </AnimatedSettingItem>
 
