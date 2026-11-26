@@ -53,6 +53,7 @@ export interface Settings {
   autoCheckForUpdates: boolean;
   autoMatchWrikeTheme: boolean;
   enableFinanceTab: boolean;
+  hasSeenWelcome: boolean;
   suspendInactiveTabsMinutes: number;
   theme: AppThemeId;
   customDictionary: string[];

@@ -15,6 +15,7 @@ import {
 import { Menu } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { MaterialIcon, NavIcon, WindowControls } from "./components/AppIcons";
+import { WelcomeModal } from "./components/WelcomeModal";
 import { DEFAULT_SETTINGS } from "./data/demo";
 import { FilesLibrary } from "./features/files/FilesLibrary";
 import { SettingsPanel } from "./features/settings/SettingsPanel";
@@ -240,6 +241,7 @@ export function App() {
   const [downloadsStats, setDownloadsStats] = useState<DownloadsStorageStats | null>(null);
   const [clearingDownloads, setClearingDownloads] = useState(false);
   const [ticketModal, setTicketModal] = useState<"favorites" | "history" | null>(null);
+  const [showWelcomeModal, setShowWelcomeModal] = useState(false);
   const [appUpdate, setAppUpdate] = useState<AppUpdateState>({
     phase: "idle",
     latestVersion: null,
@@ -565,6 +567,9 @@ export function App() {
     refresh();
     void Promise.all([loadSettings(), loadStorageHealth()]).then(async ([next, warnings]) => {
       setSettings(next);
+      if (!next.hasSeenWelcome) {
+        setShowWelcomeModal(true);
+      }
       if (warnings.length) {
         setStorageWarning(warnings.join(" "));
         setScreen("settings");
@@ -598,6 +603,9 @@ export function App() {
       }
       if (next.launchWrikeOnStart) {
         await openStartupTabs(next.startupTabUrls);
+        if (!next.hasSeenWelcome) {
+          await hideWrike(wrikeTabsRef.current.map((tab) => tab.id));
+        }
         setStartupReadyMs(Date.now() - launchBootAtRef.current);
         setIsLaunchSplashVisible(false);
         if (!canRestoreSession) {
@@ -728,6 +736,9 @@ export function App() {
       subscribeToSettingsUpdates((next) => {
         settingsRef.current = next;
         setSettings(next);
+        if (!next.hasSeenWelcome) {
+          setShowWelcomeModal(true);
+        }
       }),
     );
     registerUnsubscriber(
@@ -1302,6 +1313,16 @@ export function App() {
   async function closeTicketModal() {
     setTicketModal(null);
     if (screen === "wrike") {
+      await restoreWrikeView();
+    }
+  }
+
+  async function dismissWelcomeModal(openSettings: boolean) {
+    setShowWelcomeModal(false);
+    await updateSettings({ ...settings, hasSeenWelcome: true });
+    if (openSettings) {
+      await showLocalScreen("settings");
+    } else if (screen === "wrike") {
       await restoreWrikeView();
     }
   }
@@ -2979,6 +3000,12 @@ export function App() {
             onRemoveFavorite={removeFavoriteUrl}
           />
         </Suspense>
+      ) : null}
+      {showWelcomeModal && !isLaunchSplashVisible ? (
+        <WelcomeModal
+          onDismiss={() => void dismissWelcomeModal(false)}
+          onOpenSettings={() => void dismissWelcomeModal(true)}
+        />
       ) : null}
     </div>
     {isLaunchSplashVisible ? (

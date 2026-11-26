@@ -149,6 +149,8 @@ struct Settings {
     #[serde(default)]
     enable_finance_tab: bool,
     #[serde(default)]
+    has_seen_welcome: bool,
+    #[serde(default)]
     suspend_inactive_tabs_minutes: u32,
     #[serde(default = "default_true")]
     custom_context_menu: bool,
@@ -225,6 +227,7 @@ impl Default for Settings {
             auto_check_for_updates: true,
             auto_match_wrike_theme: true,
             enable_finance_tab: false,
+            has_seen_welcome: false,
             suspend_inactive_tabs_minutes: 30,
             custom_context_menu: true,
             use_native_wrike_image_viewer: true,
@@ -267,6 +270,7 @@ impl Settings {
             && self.auto_check_for_updates == other.auto_check_for_updates
             && self.auto_match_wrike_theme == other.auto_match_wrike_theme
             && self.enable_finance_tab == other.enable_finance_tab
+            && self.has_seen_welcome == other.has_seen_welcome
             && self.suspend_inactive_tabs_minutes == other.suspend_inactive_tabs_minutes
             && self.custom_context_menu == other.custom_context_menu
             && self.use_native_wrike_image_viewer == other.use_native_wrike_image_viewer

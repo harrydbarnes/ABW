@@ -66,6 +66,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoCheckForUpdates: true,
   autoMatchWrikeTheme: true,
   enableFinanceTab: false,
+  hasSeenWelcome: false,
   suspendInactiveTabsMinutes: 30,
   theme: "default",
   customDictionary: [],
