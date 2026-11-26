@@ -15,6 +15,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 const desktopRuntime = "__TAURI_INTERNALS__" in window;
+const welcomeSeenKey = "abw.welcomeSeen";
 
 export type WrikeTabAction = "back" | "forward" | "reload";
 export type WrikePane = "full" | "left" | "right";
@@ -72,7 +73,25 @@ export async function loadDownloads(): Promise<DownloadRecord[]> {
 export async function loadSettings(): Promise<Settings> {
   return desktopRuntime
     ? invokeDesktop<Settings>("get_settings")
-    : Promise.resolve(DEFAULT_SETTINGS);
+    : { ...DEFAULT_SETTINGS, hasSeenWelcome: localStorage.getItem(welcomeSeenKey) === "true" };
+}
+
+export async function markWelcomeSeen(): Promise<void> {
+  if (desktopRuntime) {
+    await invokeDesktop("mark_welcome_seen");
+  } else {
+    localStorage.setItem(welcomeSeenKey, "true");
+  }
+}
+
+export async function openFeedback(channel: "teams" | "email"): Promise<void> {
+  if (desktopRuntime) {
+    await invokeDesktop("open_feedback", { channel });
+  } else if (channel === "teams") {
+    window.open("https://teams.microsoft.com/l/chat/0/0?users=harry.barnes%40wppmedia.com", "_blank", "noopener,noreferrer");
+  } else {
+    window.location.href = "mailto:harry.barnes@wppmedia.com?subject=ABW%20feedback";
+  }
 }
 
 export async function loadStorageHealth(): Promise<string[]> {
@@ -277,11 +296,12 @@ export async function openSourceTask(record: DownloadRecord, tabId?: string): Pr
   }
 }
 
-export async function launchWrike(tabId: string, url?: string): Promise<void> {
+export async function launchWrike(tabId: string, url?: string, background = false): Promise<void> {
   if (desktopRuntime) {
     await invokeDesktop("launch_wrike", {
       tabId,
       url: url ?? null,
+      background,
     });
   }
 }

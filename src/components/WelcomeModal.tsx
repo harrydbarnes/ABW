@@ -1,112 +1,172 @@
+import { useLayoutEffect, useRef, useState } from "react";
+import { openFeedback } from "../lib/desktop";
+import { AbwWordmark } from "./AbwWordmark";
+
 interface WelcomeModalProps {
-  onDismiss: () => void;
-  onOpenSettings: () => void;
+  onContinue: (openSettings: boolean) => void;
 }
 
-const TEAMS_CHAT_URL =
-  "https://teams.microsoft.com/l/chat/0/0?users=harry.barnes@wppmedia.com";
+const icons = {
+  bell: <path d="M18 8a6 6 0 0 0-12 0c0 6-3 7-3 9h18c0-2-3-3-3-9M10 21h4" />,
+  sleep: <path d="M20.5 14.2a8.6 8.6 0 0 1-10.7-10.7 8.6 8.6 0 1 0 10.7 10.7Z" />,
+  file: <path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10Zm0 0v7h7M8 14h8m-8 3h6" />,
+  tabs: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="M3 9h18m-9 0v10" />
+    </>
+  ),
+  po: (
+    <>
+      <rect x="5" y="5" width="14" height="16" rx="2" />
+      <rect x="9" y="3" width="6" height="4" rx="1" />
+      <path d="m9 14 2 2 4-4" />
+    </>
+  ),
+  check: <path d="m5 12 4 4L19 6M5 20h14" />,
+};
 
-export function WelcomeModal({ onDismiss, onOpenSettings }: WelcomeModalProps) {
+const features = [
+  {
+    icon: "sleep",
+    title: "Tabs sleep when idle",
+    description: "Tabs sleep after 30 minutes of inactivity and when ABW is minimised to the tray.",
+  },
+  {
+    icon: "file",
+    title: "File previews",
+    description: "View images and PDFs in Wrike. Find spreadsheets and downloads in the Files tab.",
+  },
+  {
+    icon: "bell",
+    title: "Windows notifications",
+    description: "Get alerts for mentions, Inbox updates and downloads. Alerts continue in the tray.",
+  },
+  {
+    icon: "tabs",
+    title: "Tabs, split view and history",
+    description: "Open tabs side by side, star favourite tasks and search your history.",
+  },
+  {
+    icon: "po",
+    title: "Check PO",
+    description: "Pair with Ops Toolshed to check Wrike task POs against Prisma.",
+    status: "In testing",
+  },
+  {
+    icon: "check",
+    title: "Spell check and updates",
+    description: "Check spelling as you type. The app flags updates, and you can install them without admin rights.",
+  },
+] as const;
+
+function WelcomeIcon({ name }: { name: keyof typeof icons }) {
   return (
-    <div
-      className="welcome-modal-backdrop"
-      role="dialog"
-      aria-modal="true"
+    <svg className="welcome-icon" aria-hidden="true" viewBox="0 0 24 24">
+      {icons[name]}
+    </svg>
+  );
+}
+
+export function WelcomeModal({ onContinue }: WelcomeModalProps) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const closingRef = useRef(false);
+  const [feedbackError, setFeedbackError] = useState("");
+
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    dialog?.querySelector("h1")?.focus({ preventScroll: true });
+    return () => dialog?.close();
+  }, []);
+
+  async function handleContinue(openSettings: boolean) {
+    const dialog = dialogRef.current;
+    if (!dialog || closingRef.current) return;
+    closingRef.current = true;
+    dialog.classList.add("is-leaving");
+    // Wait for the panel and backdrop to clear before showing the native webview.
+    await Promise.allSettled(
+      dialog.getAnimations({ subtree: true }).map((animation) => animation.finished),
+    );
+    if (dialogRef.current !== dialog) return;
+    dialog.close();
+    onContinue(openSettings);
+  }
+
+  async function handleFeedback(channel: "teams" | "email") {
+    if (closingRef.current) return;
+    setFeedbackError("");
+    try {
+      await openFeedback(channel);
+    } catch {
+      setFeedbackError(channel === "teams" ? "Couldn’t open Teams. Try email." : "Couldn’t open your email app.");
+    }
+  }
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="welcome-modal"
       aria-labelledby="abw-welcome-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        void handleContinue(false);
+      }}
     >
-      <div className="welcome-modal">
-        <div className="welcome-header">
-          <h2 id="abw-welcome-title">Welcome to ABW</h2>
-          <p>
-            A faster, leaner way to use Wrike on Windows — built to use less CPU and memory than
-            Chrome or the standard Wrike app, alongside features to improve your day-to-day work.
-          </p>
-        </div>
-
-        <div className="welcome-callout">
-          <strong>🔔 Avoid duplicate Wrike notifications</strong>
-          <p>
-            ABW now sends Windows pop-ups when someone <code>@mentions</code> you or updates your
-            Wrike Inbox:
-          </p>
-          <ul>
-            <li>
-              <strong>Old Wrike desktop app:</strong> quit it (or turn off its notifications) so you
-              don&apos;t get the same alert twice.
-            </li>
-            <li>
-              <strong>Wrike in Chrome:</strong> turn off browser notifications for{" "}
-              <code>wrike.com</code>.
-            </li>
+      <div className="welcome-content">
+        <header className="welcome-header">
+          <AbwWordmark className="welcome-wordmark" />
+          <h1 id="abw-welcome-title" tabIndex={-1}>A faster, lighter Wrike app for Windows</h1>
+        </header>
+        <section className="welcome-callout" aria-labelledby="abw-welcome-alerts">
+          <span className="welcome-callout-icon"><WelcomeIcon name="bell" /></span>
+          <div>
+            <h2 id="abw-welcome-alerts">Avoid duplicate Wrike alerts</h2>
+            <ul>
+              <li>Quit the <strong>Wrike desktop app</strong> or turn off its notifications.</li>
+              <li>In <strong>Chrome</strong>, turn off notifications for <code>wrike.com</code>.</li>
+            </ul>
+          </div>
+        </section>
+        <section aria-labelledby="abw-welcome-features">
+          <div className="welcome-section-title">
+            <h2 id="abw-welcome-features">What’s set up for you</h2>
+            <p>Change these anytime in Settings</p>
+          </div>
+          <ul className="welcome-features">
+            {features.map((feature) => (
+              <li className="welcome-feature" key={feature.icon}>
+                <span className="welcome-feature-icon"><WelcomeIcon name={feature.icon} /></span>
+                <div>
+                  <h3>
+                    {feature.title}
+                    {"status" in feature && <span className="welcome-testing">{feature.status}</span>}
+                  </h3>
+                  <p>{feature.description}</p>
+                </div>
+              </li>
+            ))}
           </ul>
-        </div>
-
-        <div className="welcome-section-title">
-          What&apos;s set up for you <span>(change anytime in Settings)</span>
-        </div>
-
-        <div className="welcome-grid">
-          <div className="welcome-card">
-            <strong>⚡ Faster &amp; leaner on CPU &amp; memory</strong>
-            <p>
-              Inactive tabs sleep automatically after 30 mins and when minimized to the tray,
-              keeping your PC responsive.
-            </p>
-          </div>
-          <div className="welcome-card">
-            <strong>📄 Faster file &amp; spreadsheet previews</strong>
-            <p>
-              Images &amp; PDFs open right inside Wrike. Spreadsheets and saved files live in your{" "}
-              <strong>Files</strong> tab and preview much faster than Wrike.
-            </p>
-          </div>
-          <div className="welcome-card">
-            <strong>🔔 Wrike &amp; Download alerts</strong>
-            <p>
-              Windows pop-ups for <code>@mentions</code>, Inbox updates, and saved files. Closing
-              the window tucks ABW into the system tray so alerts keep arriving.
-            </p>
-          </div>
-          <div className="welcome-card">
-            <strong>🗂️ Tabs, Split View &amp; History</strong>
-            <p>
-              Open multiple Wrike tabs side-by-side, star favourite tickets, and search your visited{" "}
-              <strong>History</strong>.
-            </p>
-          </div>
-          <div className="welcome-card">
-            <strong>🧾 Check PO (In Testing)</strong>
-            <p>
-              Checks Wrike task POs against Prisma automatically when paired with Ops Toolshed.{" "}
-              <em>Currently in testing — feedback welcome!</em>
-            </p>
-          </div>
-          <div className="welcome-card">
-            <strong>✅ Spell check &amp; easy updates</strong>
-            <p>
-              Checks spelling as you type, and updates don&apos;t require admin rights (unlike the
-              Wrike app). Look out for updates via an in-app banner!
-            </p>
-          </div>
-        </div>
-
-        <div className="welcome-feedback">
-          Any feedback? Speak to{" "}
-          <a href={TEAMS_CHAT_URL} target="_blank" rel="noreferrer">
-            Harry Barnes on Teams
-          </a>
-          .
-        </div>
-
-        <div className="welcome-actions">
-          <button className="welcome-btn secondary" type="button" onClick={onOpenSettings}>
-            Review all settings
-          </button>
-          <button className="welcome-btn primary" type="button" onClick={onDismiss}>
-            Got it — Open Wrike
-          </button>
-        </div>
+        </section>
       </div>
-    </div>
+      <footer className="welcome-footer">
+        <div className="welcome-feedback">
+          Feedback?{" "}
+          <button type="button" onClick={() => void handleFeedback("teams")}>Harry Barnes on Teams</button>
+          <span aria-hidden="true"> · </span>
+          <button type="button" onClick={() => void handleFeedback("email")}>Email</button>
+          {feedbackError && <p role="status">{feedbackError}</p>}
+        </div>
+        <div className="welcome-actions">
+          <button className="welcome-btn" type="button" onClick={() => void handleContinue(true)}>
+            Review settings
+          </button>
+          <button className="welcome-btn primary" type="button" onClick={() => void handleContinue(false)}>
+            Open ABW <span aria-hidden="true">→</span>
+          </button>
+        </div>
+      </footer>
+    </dialog>
   );
 }

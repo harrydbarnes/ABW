@@ -148,7 +148,8 @@ struct Settings {
     auto_match_wrike_theme: bool,
     #[serde(default)]
     enable_finance_tab: bool,
-    #[serde(default)]
+    // Settings written before onboarding existed belong to an existing profile.
+    #[serde(default = "default_true")]
     has_seen_welcome: bool,
     #[serde(default)]
     suspend_inactive_tabs_minutes: u32,
@@ -947,6 +948,7 @@ async fn update_settings(app: AppHandle, mut settings: Settings) -> Result<Setti
             }
         }
         settings.last_wrike_session = previous.last_wrike_session.clone();
+        settings.has_seen_welcome |= previous.has_seen_welcome;
 
         let startup_changed = settings.open_abw_at_system_startup != startup::enabled()?
             || (settings.open_abw_at_system_startup
@@ -959,9 +961,9 @@ async fn update_settings(app: AppHandle, mut settings: Settings) -> Result<Setti
         }
 
         if !settings.preferences_equal(&previous) || !settings_path(&app)?.exists() {
-            let prefs_only = settings.preferences_only();
             persistence::update::<Settings, _>(&settings_path(&app)?, |stored| {
-                *stored = prefs_only;
+                settings.has_seen_welcome |= stored.has_seen_welcome;
+                *stored = settings.preferences_only();
                 Ok(())
             })?;
         }
@@ -1052,19 +1054,46 @@ async fn update_last_wrike_session(app: AppHandle, session: WrikeSession) -> Res
 }
 
 #[tauri::command]
+async fn mark_welcome_seen(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        persistence::update::<Settings, _>(&settings_path(&app)?, |settings| {
+            settings.has_seen_welcome = true;
+            Ok(())
+        })?;
+        refresh_cached_settings(&app)?;
+        Ok(())
+    })
+    .await
+    .map_err(|error| format!("Unable to record onboarding: {error}"))?
+}
+
+#[tauri::command]
+async fn open_feedback(channel: String) -> Result<(), String> {
+    let destination = match channel.as_str() {
+        "teams" => "https://teams.microsoft.com/l/chat/0/0?users=harry.barnes%40wppmedia.com",
+        "email" => "mailto:harry.barnes@wppmedia.com?subject=ABW%20feedback",
+        _ => return Err("Unknown feedback channel.".into()),
+    };
+    open::that_detached(destination).map_err(|error| format!("Unable to open feedback: {error}"))
+}
+
+#[tauri::command]
 async fn reset_app(app: AppHandle) -> Result<Settings, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let previous = get_cached_settings(&app).unwrap_or_default();
-        let defaults = Settings::default();
+        let mut defaults = Settings {
+            has_seen_welcome: previous.has_seen_welcome,
+            ..Settings::default()
+        };
         if startup::enabled()? != defaults.open_abw_at_system_startup {
             let _ = startup::set_enabled(
                 defaults.open_abw_at_system_startup,
                 defaults.start_minimized_to_tray,
             );
         }
-        let prefs_only = defaults.preferences_only();
         persistence::update::<Settings, _>(&settings_path(&app)?, |stored| {
-            *stored = prefs_only;
+            defaults.has_seen_welcome |= stored.has_seen_welcome;
+            *stored = defaults.preferences_only();
             Ok(())
         })?;
         persistence::update::<WorkspaceState, _>(&workspace_state_path(&app)?, |workspace| {
@@ -1438,6 +1467,7 @@ async fn launch_wrike(
     state: State<'_, AppState>,
     tab_id: String,
     url: Option<String>,
+    background: Option<bool>,
 ) -> Result<(), String> {
     open_wrike_at(
         &app,
@@ -1445,6 +1475,7 @@ async fn launch_wrike(
         &tab_id,
         url.as_deref().unwrap_or(WRIKE_HOME),
         false,
+        !background.unwrap_or(false),
     )
 }
 
@@ -1581,7 +1612,14 @@ async fn open_source_task(
         .filter(|id| !id.is_empty())
         .unwrap_or("home");
     wrike_tab_label(target_tab_id)?;
-    open_wrike_at(&app, state.inner(), target_tab_id, parsed.as_str(), true)
+    open_wrike_at(
+        &app,
+        state.inner(),
+        target_tab_id,
+        parsed.as_str(),
+        true,
+        true,
+    )
 }
 
 #[tauri::command]
@@ -1664,6 +1702,7 @@ fn open_wrike_at(
     tab_id: &str,
     destination: &str,
     navigate_existing: bool,
+    show: bool,
 ) -> Result<(), String> {
     let label = wrike_tab_label(tab_id)?;
     let parsed = Url::parse(destination).map_err(|error| format!("Invalid Wrike URL: {error}"))?;
@@ -1671,6 +1710,9 @@ fn open_wrike_at(
         return Err("Only HTTPS or about:blank URLs may be opened inside ABW.".into());
     }
     if let Some(webview) = app.get_webview(&label) {
+        if !show {
+            return Ok(());
+        }
         if let Ok(mut suspended) = state.suspended_tabs.lock() {
             suspended.remove(tab_id);
         }
@@ -1710,7 +1752,11 @@ fn open_wrike_at(
     let host = app
         .get_window("main")
         .ok_or_else(|| "Unable to locate the ABW application window.".to_owned())?;
-    let (content_position, content_size) = wrike_content_geometry(app, WrikePane::Full)?;
+    let (mut content_position, content_size) = wrike_content_geometry(app, WrikePane::Full)?;
+    if !show {
+        // Native child views sit above the shell, including its HTML dialog.
+        content_position.x = -content_size.width;
+    }
     let (spell_check, custom_context_menu, use_native_wrike_image_viewer) =
         get_cached_settings(app)
             .map(|stored| {
@@ -1741,6 +1787,7 @@ fn open_wrike_at(
     }
 
     let builder = WebviewBuilder::new(label, WebviewUrl::External(parsed))
+        .focused(show)
         .zoom_hotkeys_enabled(true)
         .initialization_script(if custom_context_menu {
             "window.__abwCustomContextMenuEnabled = true;"
@@ -2055,14 +2102,23 @@ fn open_wrike_at(
             None,
             false,
         ));
-    if let Err(error) = host.add_child(builder, content_position, content_size) {
-        if let Ok(mut tabs) = state.wrike_tabs.lock() {
-            tabs.remove(tab_id);
+    let webview = match host.add_child(builder, content_position, content_size) {
+        Ok(webview) => webview,
+        Err(error) => {
+            if let Ok(mut tabs) = state.wrike_tabs.lock() {
+                tabs.remove(tab_id);
+            }
+            return Err(format!("Unable to open Wrike workspace: {error}"));
         }
-        return Err(format!("Unable to open Wrike workspace: {error}"));
-    }
-    if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
-        visible.insert(tab_id.to_owned());
+    };
+    if show {
+        if let Ok(mut visible) = state.visible_wrike_tabs.lock() {
+            visible.insert(tab_id.to_owned());
+        }
+    } else {
+        webview
+            .hide()
+            .map_err(|error| format!("Unable to hide the Wrike workspace: {error}"))?;
     }
     emit_wrike_tab_update(app, &context);
     Ok(())
@@ -2292,7 +2348,8 @@ fn read_records(app: &AppHandle) -> Result<Vec<DownloadRecord>, String> {
 }
 
 fn read_settings(app: &AppHandle) -> Result<Settings, String> {
-    let mut settings: Settings = persistence::read(&settings_path(app)?)?;
+    let prefs_path = settings_path(app)?;
+    let mut settings: Settings = persistence::read(&prefs_path)?;
     settings.open_abw_at_system_startup = startup::enabled()?;
 
     let ws_path = workspace_state_path(app)?;
@@ -2320,6 +2377,9 @@ fn read_settings(app: &AppHandle) -> Result<Settings, String> {
             WorkspaceState::default()
         }
     };
+    if !prefs_path.exists() && workspace.last_wrike_session.is_some() {
+        settings.has_seen_welcome = true;
+    }
     settings.merge_workspace_state(&workspace);
     Ok(settings)
 }
@@ -3394,9 +3454,11 @@ pub fn run() {
             list_downloads,
             load_spreadsheet_images,
             load_spreadsheet_sheet,
+            mark_welcome_seen,
             notify_update_available,
             open_download,
             open_downloads_folder,
+            open_feedback,
             open_source_task,
             preview_spreadsheet,
             read_download_head,
@@ -3449,6 +3511,17 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn onboarding_distinguishes_new_and_existing_profiles() {
+        assert!(!Settings::default().has_seen_welcome);
+        let legacy: Settings = serde_json::from_str("{}").unwrap();
+        assert!(legacy.has_seen_welcome);
+        let unseen: Settings = serde_json::from_str(r#"{"hasSeenWelcome":false}"#).unwrap();
+        assert!(!unseen.has_seen_welcome);
+        let completed: Settings = serde_json::from_str(r#"{"hasSeenWelcome":true}"#).unwrap();
+        assert!(completed.has_seen_welcome);
+    }
 
     #[test]
     fn file_kind_classifies_supported_extensions() {

@@ -15,6 +15,7 @@ import {
 import { Menu } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { MaterialIcon, NavIcon, WindowControls } from "./components/AppIcons";
+import { AbwWordmark } from "./components/AbwWordmark";
 import { WelcomeModal } from "./components/WelcomeModal";
 import { DEFAULT_SETTINGS } from "./data/demo";
 import { FilesLibrary } from "./features/files/FilesLibrary";
@@ -34,6 +35,7 @@ import {
   loadDownloads,
   loadSettings,
   loadStorageHealth,
+  markWelcomeSeen,
   notifyUpdateAvailable,
   openDownloadsFolder,
   openSourceTask,
@@ -242,6 +244,7 @@ export function App() {
   const [clearingDownloads, setClearingDownloads] = useState(false);
   const [ticketModal, setTicketModal] = useState<"favorites" | "history" | null>(null);
   const [showWelcomeModal, setShowWelcomeModal] = useState(false);
+  const pendingStartupLinksRef = useRef<string[] | null>([]);
   const [appUpdate, setAppUpdate] = useState<AppUpdateState>({
     phase: "idle",
     latestVersion: null,
@@ -327,7 +330,7 @@ export function App() {
   }, [storageWarning]);
 
   useEffect(() => {
-    if (!isDesktopRuntime()) {
+    if (!isDesktopRuntime() || pendingStartupLinksRef.current !== null) {
       return;
     }
     void resizeWrikeTabs(
@@ -558,6 +561,15 @@ export function App() {
   }
 
   useEffect(() => {
+    let cancelled = false;
+    const openIncomingTab = (url: string) => {
+      const pending = pendingStartupLinksRef.current;
+      if (pending) {
+        pending.push(url);
+      } else {
+        void addWrikeTab(url);
+      }
+    };
     const refresh = () => {
       void loadDownloads().then((records) => {
         setDownloads(records);
@@ -566,14 +578,26 @@ export function App() {
     };
     refresh();
     void Promise.all([loadSettings(), loadStorageHealth()]).then(async ([next, warnings]) => {
+      if (cancelled) return;
+      settingsRef.current = next;
       setSettings(next);
-      if (!next.hasSeenWelcome) {
-        setShowWelcomeModal(true);
-      }
+      const shouldShowWelcome = !next.hasSeenWelcome;
+      const finishStartup = () => {
+        if (shouldShowWelcome) {
+          setShowWelcomeModal(true);
+          void markWelcomeSeen().then(() => {
+            setSettings((current) => ({ ...current, hasSeenWelcome: true }));
+          }).catch((error) => setNotice(`Unable to record onboarding: ${String(error)}`));
+        } else {
+          void openPendingStartupLinks();
+        }
+        setStartupReadyMs(Date.now() - launchBootAtRef.current);
+        setIsLaunchSplashVisible(false);
+      };
       if (warnings.length) {
         setStorageWarning(warnings.join(" "));
         setScreen("settings");
-        setIsLaunchSplashVisible(false);
+        finishStartup();
         return;
       }
       if (isDesktopRuntime() && next.autoCheckForUpdates) {
@@ -601,29 +625,23 @@ export function App() {
           });
         }
       }
+      if (cancelled) return;
       if (next.launchWrikeOnStart) {
-        await openStartupTabs(next.startupTabUrls);
-        if (!next.hasSeenWelcome) {
-          await hideWrike(wrikeTabsRef.current.map((tab) => tab.id));
-        }
-        setStartupReadyMs(Date.now() - launchBootAtRef.current);
-        setIsLaunchSplashVisible(false);
-        if (!canRestoreSession) {
-          canPersistSessionRef.current = true;
-        }
+        await openStartupTabs(next.startupTabUrls, shouldShowWelcome);
       } else {
         setScreen("files");
-        setStartupReadyMs(Date.now() - launchBootAtRef.current);
-        setIsLaunchSplashVisible(false);
-        if (!canRestoreSession) {
-          canPersistSessionRef.current = true;
-        }
       }
+      if (cancelled) return;
+      if (!canRestoreSession) {
+        canPersistSessionRef.current = true;
+      }
+      finishStartup();
     }).catch((error) => {
+      if (cancelled) return;
+      void openPendingStartupLinks();
       setIsLaunchSplashVisible(false);
       setStorageWarning(`Unable to load preferences: ${String(error)}`);
     });
-    let cancelled = false;
     const unsubscribers: Array<() => void> = [];
     const registerUnsubscriber = (promise: Promise<() => void>) => {
       void promise.then((unsubscribe) => {
@@ -736,19 +754,14 @@ export function App() {
       subscribeToSettingsUpdates((next) => {
         settingsRef.current = next;
         setSettings(next);
-        if (!next.hasSeenWelcome) {
-          setShowWelcomeModal(true);
-        }
       }),
     );
     registerUnsubscriber(
-      subscribeToOpenInNewTab((url) => {
-        void addWrikeTab(url);
-      }),
+      subscribeToOpenInNewTab(openIncomingTab),
     );
     void takePendingDeepLink().then((url) => {
-      if (url && !cancelled) {
-        void addWrikeTab(url);
+      if (url) {
+        openIncomingTab(url);
       }
     });
     registerUnsubscriber(
@@ -908,7 +921,7 @@ export function App() {
     let maxCheckTimer: number | undefined;
     let unlistenResize: (() => void) | undefined;
     const syncWrikeBounds = () => {
-      if (!isDesktopRuntime()) {
+      if (!isDesktopRuntime() || pendingStartupLinksRef.current !== null) {
         return;
       }
       window.clearTimeout(resizeTimer);
@@ -1048,7 +1061,12 @@ export function App() {
     };
   }
 
-  async function openWrikeTabSet(nextTabs: WrikeTab[], nextActiveTabId: string, nextSplit: WrikeSplit | null) {
+  async function openWrikeTabSet(
+    nextTabs: WrikeTab[],
+    nextActiveTabId: string,
+    nextSplit: WrikeSplit | null,
+    background = false,
+  ) {
     const nextIds = new Set(nextTabs.map((tab) => tab.id));
     const oldTabs = wrikeTabsRef.current.filter((tab) => !nextIds.has(tab.id));
     await Promise.all(oldTabs.map((tab) => closeWrikeTab(tab.id).catch(() => undefined)));
@@ -1077,11 +1095,12 @@ export function App() {
     ];
     await Promise.all(
       launchOrder.map(async (tab) => {
-        await launchWrike(tab.id, tab.mode === "readOnly" ? READ_ONLY_URL : tab.url ?? WRIKE_HOME);
+        await launchWrike(tab.id, tab.mode === "readOnly" ? READ_ONLY_URL : tab.url ?? WRIKE_HOME, background);
         initializedTabIdsRef.current.add(tab.id);
         tabLastActiveAtRef.current.set(tab.id, Date.now());
       }),
     );
+    if (background) return;
     const currentVisibleIds = visibleWrikeTabIds();
     await resizeWrikeTabs(
       currentWrikeLayouts(),
@@ -1102,11 +1121,11 @@ export function App() {
     }
   }
 
-  async function openStartupTabs(urls = settings.startupTabUrls) {
+  async function openStartupTabs(urls = settings.startupTabUrls, background = false) {
     const nextTabs = normalizedStartupUrls(urls).map((url, index) =>
       createWrikeTab(index === 0 ? "home" : `startup-${Date.now().toString(36)}-${index}`, index === 0 ? "Wrike" : `Startup tab ${index + 1}`, url),
     );
-    await openWrikeTabSet(nextTabs, nextTabs[0].id, null);
+    await openWrikeTabSet(nextTabs, nextTabs[0].id, null, background);
   }
 
   async function restorePreviousSession(session: WrikeSession) {
@@ -1317,13 +1336,26 @@ export function App() {
     }
   }
 
+  async function openPendingStartupLinks() {
+    const pending = pendingStartupLinksRef.current ?? [];
+    pendingStartupLinksRef.current = null;
+    for (const url of pending) {
+      await addWrikeTab(url).catch((error) => setNotice(`Unable to open Wrike link: ${String(error)}`));
+    }
+  }
+
   async function dismissWelcomeModal(openSettings: boolean) {
     setShowWelcomeModal(false);
-    await updateSettings({ ...settings, hasSeenWelcome: true });
-    if (openSettings) {
-      await showLocalScreen("settings");
-    } else if (screen === "wrike") {
-      await restoreWrikeView();
+    try {
+      if (openSettings) {
+        await showLocalScreen("settings");
+      } else if (screen === "wrike") {
+        await restoreWrikeView();
+      }
+    } catch (error) {
+      setNotice(`Unable to open the workspace: ${String(error)}`);
+    } finally {
+      await openPendingStartupLinks();
     }
   }
 
@@ -3002,10 +3034,7 @@ export function App() {
         </Suspense>
       ) : null}
       {showWelcomeModal && !isLaunchSplashVisible ? (
-        <WelcomeModal
-          onDismiss={() => void dismissWelcomeModal(false)}
-          onOpenSettings={() => void dismissWelcomeModal(true)}
-        />
+        <WelcomeModal onContinue={(openSettings) => void dismissWelcomeModal(openSettings)} />
       ) : null}
     </div>
     {isLaunchSplashVisible ? (
@@ -3015,45 +3044,7 @@ export function App() {
             <img src="/abw.svg" alt="" />
           </div>
           <div className="launch-splash-title-clip">
-            <div className="launch-splash-brand-title" aria-label="A Better Wrike">
-              <svg className="splash-letter splash-letter-a" viewBox="16 54 348 313" aria-hidden="true">
-                <defs>
-                  <linearGradient id="splash-bright" x1="16" y1="370" x2="1056" y2="52" gradientUnits="userSpaceOnUse">
-                    <stop stopColor="#03bb69" />
-                    <stop offset=".52" stopColor="#05cb63" />
-                    <stop offset="1" stopColor="#45dc68" />
-                  </linearGradient>
-                  <linearGradient id="splash-shadow" x1="248" y1="55" x2="985" y2="372" gradientUnits="userSpaceOnUse">
-                    <stop stopColor="#00ad72" />
-                    <stop offset="1" stopColor="#00a56c" />
-                  </linearGradient>
-                  <linearGradient id="splash-fold" x1="98" y1="370" x2="690" y2="116" gradientUnits="userSpaceOnUse">
-                    <stop stopColor="#18c874" />
-                    <stop offset="1" stopColor="#42dd69" />
-                  </linearGradient>
-                </defs>
-                <path fill="url(#splash-bright)" d="M18 365 151 56h62L84 365Z" />
-                <path fill="url(#splash-shadow)" d="M151 56h62l149 309h-68L181 134Z" />
-                <path fill="url(#splash-fold)" d="M84 365h40l82-91-22-48h-34L62 327l-19 38Z" />
-              </svg>
-              <span className="splash-word">
-                <svg className="splash-letter splash-letter-b" viewBox="351 54 280 313" aria-hidden="true">
-                  <path fill="url(#splash-shadow)" d="M353 56h71v159h-71Z" />
-                  <path fill="url(#splash-bright)" d="M424 56h89c70 0 112 38 112 97 0 34-16 60-45 82 31 18 49 47 49 83 0 30-12 47-31 47h-170l58-58h59c15 0 25-12 25-26 0-18-14-30-33-30h-58l53-56h16c15 0 24-12 24-26 0-15-10-25-28-25h-100Z" />
-                  <path fill="url(#splash-fold)" d="M353 230 401 272 483 192h54L373 365h-20Z" />
-                </svg>
-                <span className="splash-word-tail">etter</span>
-              </span>
-              <span className="splash-word">
-                <svg className="splash-letter splash-letter-w" viewBox="658 54 508 313" aria-hidden="true">
-                  <g transform="translate(0 7) scale(1 .875)">
-                    <path fill="url(#splash-shadow)" d="M660 56h67l88 215 60-116 37 79-90 175h-57Z" />
-                    <path fill="url(#splash-bright)" d="M875 155h64l55 116 94-215h76L1004 409h-57Z" />
-                  </g>
-                </svg>
-                <span className="splash-word-tail">rike</span>
-              </span>
-            </div>
+            <AbwWordmark className="launch-splash-brand-title" />
           </div>
         </div>
       </div>
