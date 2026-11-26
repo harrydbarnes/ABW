@@ -3644,15 +3644,25 @@ mod tests {
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData><row r="1"><c r="A1" t="s" s="0"><v>1</v></c></row></sheetData>
 </worksheet>"#;
-        let file = write_test_xlsx(&[
-            ("xl/workbook.xml", workbook_xml),
-            ("xl/_rels/workbook.xml.rels", rels_xml),
-            ("xl/sharedStrings.xml", sst_xml),
-            ("xl/styles.xml", styles_xml),
-            ("xl/worksheets/sheet1.xml", sheet1_xml),
-            ("xl/worksheets/sheet2.xml", sheet2_xml),
-        ]);
-        let preview = preview_file(file.path()).unwrap();
+        let temp = tempfile::Builder::new().suffix(".xlsx").tempfile().unwrap();
+        {
+            let file = temp.reopen().unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            for (name, content) in [
+                ("xl/workbook.xml", workbook_xml.as_bytes()),
+                ("xl/_rels/workbook.xml.rels", rels_xml.as_bytes()),
+                ("xl/sharedStrings.xml", sst_xml.as_bytes()),
+                ("xl/styles.xml", styles_xml.as_bytes()),
+                ("xl/worksheets/sheet1.xml", sheet1_xml.as_bytes()),
+                ("xl/worksheets/sheet2.xml", sheet2_xml.as_bytes()),
+            ] {
+                zip.start_file(name, options).unwrap();
+                zip.write_all(content).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        let preview = preview_file(temp.path()).unwrap();
         assert_eq!(preview.active_sheet, 1);
         assert_eq!(preview.sheets.len(), 2);
         assert!(preview.sheets[0].deferred);
@@ -3660,7 +3670,7 @@ mod tests {
         assert!(!preview.sheets[1].deferred);
         assert_eq!(preview.sheets[1].rows[0].cells[0].value, "Active Cell");
 
-        let loaded_first = load_sheet(file.path(), 0).unwrap();
+        let loaded_first = load_sheet(temp.path(), 0).unwrap();
         assert!(!loaded_first.deferred);
         assert_eq!(loaded_first.name, "First");
         assert_eq!(loaded_first.rows[0].cells[0].value, "Deferred Cell");
