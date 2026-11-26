@@ -60,6 +60,40 @@
   let lastPanelEl = null;
   let lastPanelFingerprint = '';
   let lastValues = null;
+  let basePageTitle = '';
+  let appliedTaskTitle = '';
+  function extractTaskTitle(el) {
+    if (!el) return '';
+    if (typeof el.querySelector === 'function') {
+      const titleEl = el.querySelector(
+        'textarea[aria-label*="title" i], [data-test-id*="title" i], [data-testid*="title" i], h1, [role="heading"], textarea'
+      );
+      const raw = titleEl ? (titleEl.value ?? titleEl.textContent ?? '') : '';
+      const clean = String(raw).replace(/\s+/g, ' ').trim();
+      if (clean.length >= 2 && clean.length <= 200) return clean;
+    }
+    const firstLine = String(el.innerText || '').split(/\n/).map(s => s.trim()).find(Boolean) || '';
+    return firstLine.length >= 2 && firstLine.length <= 200 ? firstLine : '';
+  }
+  function syncTaskTitle(activePanel) {
+    if (!activePanel) {
+      if (appliedTaskTitle && basePageTitle && document.title === appliedTaskTitle) {
+        document.title = basePageTitle;
+      }
+      appliedTaskTitle = '';
+      return;
+    }
+    const title = extractTaskTitle(activePanel);
+    if (!title) return;
+    const nextDocTitle = `${title} - Wrike`;
+    if (document.title !== nextDocTitle) {
+      if (!appliedTaskTitle || document.title !== appliedTaskTitle) {
+        basePageTitle = document.title;
+      }
+      appliedTaskTitle = nextDocTitle;
+      document.title = nextDocTitle;
+    }
+  }
   const requiredKeys = ['client', 'po', 'start', 'end', 'total', 'plan'];
   const handoff = 'https://go.mediaocean.com/robots.txt#abw-check-po?';
   function clearPending() {
@@ -110,7 +144,8 @@
       }
       if (anchor) break;
     }
-    if (!anchor) {button.remove(); lastBooking = ''; clearPending(); pendingManualCheck = undefined; expandedMoreFor = ''; lastPanelEl = null; lastPanelFingerprint = ''; lastValues = null; return;}
+    if (!anchor) {button.remove(); syncTaskTitle(null); lastBooking = ''; clearPending(); pendingManualCheck = undefined; expandedMoreFor = ''; lastPanelEl = null; lastPanelFingerprint = ''; lastValues = null; return;}
+    syncTaskTitle(panel);
     const r = anchor.getBoundingClientRect();
     button.style.zIndex = '2147483645';
     button.style.top = (r.bottom + 8) + 'px';

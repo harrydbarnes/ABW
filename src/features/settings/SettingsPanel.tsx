@@ -454,8 +454,8 @@ export const SettingsPanel = memo(function SettingsPanel({
           <AnimatedSettingItem visible={showNativeImageViewer || showAbwPrefsHeader}>
             <SettingToggle
               checked={settings.useNativeWrikeImageViewer}
-              description="Open image attachments in Wrike's built-in viewer instead of downloading them into ABW's file preview."
-              label="Use native Wrike viewer for images"
+              description="Open image and PDF attachments in Wrike's built-in viewer instead of downloading them into ABW's file preview."
+              label="Use native Wrike viewer for images & PDFs"
               onChange={(useNativeWrikeImageViewer) =>
                 onChange({ ...settings, useNativeWrikeImageViewer })
               }
