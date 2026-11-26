@@ -217,7 +217,11 @@ fn process_in(root: &Path, request: Value) -> io::Result<Value> {
                     }
                 }
             }
-            Ok(json!({ "jobs": jobs, "financeJobs": finance_jobs }))
+            if finance_jobs.is_empty() {
+                Ok(json!({ "jobs": jobs }))
+            } else {
+                Ok(json!({ "jobs": jobs, "financeJobs": finance_jobs }))
+            }
         }
         Some("complete") => {
             let id = request["id"]
