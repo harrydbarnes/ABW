@@ -1184,7 +1184,7 @@
           display: flex;
           align-items: center;
           gap: 12px;
-          max-width: min(420px, calc(100vw - 48px));
+          max-width: min(520px, calc(100vw - 48px));
           padding: 13px 18px;
           border-radius: 10px;
           background: #ffffff;
@@ -1247,6 +1247,16 @@
     window.addEventListener("pagehide", abwHidePreviewLoading);
     window.__abwPreviewLoadingListeners = true;
   }
+  const abwMarkPreviewIntent = () => {
+    if (abwAutoDownload || !abwIsWrikeHost()) return;
+    if (document.readyState && document.readyState !== "complete") {
+      if (typeof abwEmitScheme === "function") {
+        abwEmitScheme("abw-preview-intent://mark");
+      }
+      return;
+    }
+    window.location.href = "abw-preview-intent://mark";
+  };
   const abwCancelQueuedPreviewDownload = () => {
     window.clearInterval(abwPreviewDownloadTimer);
     abwPreviewDownloadRequest += 1;
@@ -1295,13 +1305,15 @@
         if (download) {
           window.clearInterval(abwPreviewDownloadTimer);
           abwExpectingDownloadUntil = Date.now() + 5000;
-          if (root !== document && typeof abwEmitScheme === "function") {
-            abwEmitScheme("abw-preview-intent://mark");
-          }
-          download.click();
           if (root !== document) {
-            window.setTimeout(() => abwDismissPreviewOverlay(root), 150);
+            abwMarkPreviewIntent();
           }
+          window.setTimeout(() => {
+            download.click();
+            if (root !== document) {
+              window.setTimeout(() => abwDismissPreviewOverlay(root), 150);
+            }
+          }, 0);
           return;
         }
       }
@@ -1385,10 +1397,10 @@
           abwCancelQueuedPreviewDownload();
           abwShowPreviewLoading(matchedName);
           abwExpectingDownloadUntil = Date.now() + 5000;
-          if (typeof abwEmitScheme === "function") {
-            abwEmitScheme("abw-preview-intent://mark");
-          }
-          inlineDownload.click();
+          abwMarkPreviewIntent();
+          window.setTimeout(() => {
+            inlineDownload.click();
+          }, 0);
         } else {
           abwQueuePreviewDownload(matchedName);
         }
