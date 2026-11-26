@@ -974,10 +974,10 @@ fn parse_shared_strings<R: Read + Seek>(
 }
 
 const DEFAULT_THEME_COLORS: [(u8, u8, u8); 12] = [
-    (0x00, 0x00, 0x00), // 0: dk1
-    (0xff, 0xff, 0xff), // 1: lt1
-    (0x44, 0x54, 0x6a), // 2: dk2
-    (0xe7, 0xe6, 0xe6), // 3: lt2
+    (0xff, 0xff, 0xff), // 0: lt1
+    (0x00, 0x00, 0x00), // 1: dk1
+    (0xe7, 0xe6, 0xe6), // 2: lt2
+    (0x44, 0x54, 0x6a), // 3: dk2
     (0x5b, 0x9b, 0xd5), // 4: accent1
     (0xed, 0x7d, 0x31), // 5: accent2
     (0xa5, 0xa5, 0xa5), // 6: accent3
@@ -1021,10 +1021,10 @@ fn parse_theme_colors<R: Read + Seek>(
         {
             Event::Start(ref e) => match e.local_name().as_ref() {
                 "clrScheme" => in_scheme = true,
-                "dk1" if in_scheme => current_slot = Some(0),
-                "lt1" if in_scheme => current_slot = Some(1),
-                "dk2" if in_scheme => current_slot = Some(2),
-                "lt2" if in_scheme => current_slot = Some(3),
+                "lt1" if in_scheme => current_slot = Some(0),
+                "dk1" if in_scheme => current_slot = Some(1),
+                "lt2" if in_scheme => current_slot = Some(2),
+                "dk2" if in_scheme => current_slot = Some(3),
                 "accent1" if in_scheme => current_slot = Some(4),
                 "accent2" if in_scheme => current_slot = Some(5),
                 "accent3" if in_scheme => current_slot = Some(6),

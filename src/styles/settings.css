@@ -1425,6 +1425,10 @@
   cursor: default;
 }
 
+.sheet-find-bar .sheet-find-close {
+  margin-left: auto;
+}
+
 .sheet td.sheet-match {
   background-color: #fff3bf !important;
 }
