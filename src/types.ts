@@ -40,6 +40,7 @@ export interface Settings {
   launchWrikeOnStart: boolean;
   showLaunchSplash: boolean;
   downloadNotifications: boolean;
+  wrikeNotifications: boolean;
   openAbwAtSystemStartup: boolean;
   startMinimizedToTray: boolean;
   closeToNotificationArea: boolean;

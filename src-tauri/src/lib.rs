@@ -129,6 +129,8 @@ struct Settings {
     #[serde(default = "default_true")]
     show_launch_splash: bool,
     download_notifications: bool,
+    #[serde(default = "default_true")]
+    wrike_notifications: bool,
     open_abw_at_system_startup: bool,
     #[serde(default)]
     start_minimized_to_tray: bool,
@@ -212,6 +214,7 @@ impl Default for Settings {
             launch_wrike_on_start: true,
             show_launch_splash: true,
             download_notifications: true,
+            wrike_notifications: true,
             open_abw_at_system_startup: false,
             start_minimized_to_tray: false,
             close_to_notification_area: true,
@@ -253,6 +256,7 @@ impl Settings {
             && self.launch_wrike_on_start == other.launch_wrike_on_start
             && self.show_launch_splash == other.show_launch_splash
             && self.download_notifications == other.download_notifications
+            && self.wrike_notifications == other.wrike_notifications
             && self.open_abw_at_system_startup == other.open_abw_at_system_startup
             && self.start_minimized_to_tray == other.start_minimized_to_tray
             && self.close_to_notification_area == other.close_to_notification_area
@@ -1856,6 +1860,28 @@ fn open_wrike_at(
                         .wrike_inbox_unread
                         .store(has_unread, Ordering::Relaxed);
                     sync_taskbar_badge(&navigation_app, state.inner());
+                }
+                return false;
+            }
+            if url.scheme() == "abw-notify" {
+                let enabled = get_cached_settings(&navigation_app)
+                    .map(|settings| settings.wrike_notifications)
+                    .unwrap_or(true);
+                if enabled {
+                    let title = url
+                        .query_pairs()
+                        .find_map(|(key, value)| (key == "title").then(|| value.trim().to_owned()))
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or_else(|| "Wrike".to_owned());
+                    let body = url
+                        .query_pairs()
+                        .find_map(|(key, value)| (key == "body").then(|| value.trim().to_owned()))
+                        .unwrap_or_default();
+                    let mut builder = navigation_app.notification().builder().title(title);
+                    if !body.is_empty() {
+                        builder = builder.body(body);
+                    }
+                    let _ = builder.show();
                 }
                 return false;
             }

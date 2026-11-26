@@ -520,6 +520,15 @@ export const SettingsPanel = memo(function SettingsPanel({
             />
           </AnimatedSettingItem>
           <AnimatedSettingItem visible={showWrikeNotifications || showNotificationsHeader}>
+            <SettingToggle
+              checked={settings.wrikeNotifications}
+              description="Show native Windows notifications when Wrike sends @mentions, Inbox updates, or task alerts."
+              label="Wrike Inbox & @mention notifications"
+              onChange={(wrikeNotifications) => onChange({ ...settings, wrikeNotifications })}
+              query={query}
+            />
+          </AnimatedSettingItem>
+          <AnimatedSettingItem visible={showWrikeNotifications || showNotificationsHeader}>
             <div className="notification-note">
               <div>
                 <h3><HighlightText query={query} text="Wrike notifications" /></h3>

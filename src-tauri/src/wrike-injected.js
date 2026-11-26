@@ -664,6 +664,59 @@
         abwEmitScheme(`abw-inbox://unread?hasUnread=${hasUnread ? "true" : "false"}`);
       }
     }
+    if (
+      !window.__abwNotificationBridgeInstalled &&
+      /(^|\.)wrike\.com$/i.test(window.location.hostname || "")
+    ) {
+      window.__abwNotificationBridgeInstalled = true;
+      const NativeNotification = window.Notification;
+      class AbwWrikeNotification extends EventTarget {
+        static permission = "granted";
+        static requestPermission(cb) {
+          if (typeof cb === "function") {
+            try {
+              cb("granted");
+            } catch {}
+          }
+          return Promise.resolve("granted");
+        }
+        constructor(title, options = {}) {
+          super();
+          this.title = String(title || "Wrike").slice(0, 160);
+          this.body = String(options?.body || "").slice(0, 320);
+          this.tag = options?.tag || "";
+          this.data = options?.data ?? null;
+          this.onclick = null;
+          this.onclose = null;
+          this.onerror = null;
+          this.onshow = null;
+          const params = new URLSearchParams({
+            title: this.title,
+            body: this.body,
+          });
+          abwEmitScheme(`abw-notify://show?${params.toString()}`);
+          window.setTimeout(() => {
+            if (typeof this.onshow === "function") {
+              try {
+                this.onshow(new Event("show"));
+              } catch {}
+            }
+          }, 0);
+        }
+        close() {}
+      }
+      try {
+        Object.defineProperty(window, "Notification", {
+          configurable: true,
+          writable: true,
+          value: AbwWrikeNotification,
+        });
+      } catch {
+        if (NativeNotification) {
+          window.Notification = AbwWrikeNotification;
+        }
+      }
+    }
     const detected = abwDetectWrikeThemeFromDom();
     if (!detected) return null;
     if (window.__abwLastDetectedWrikeTheme === detected) {
