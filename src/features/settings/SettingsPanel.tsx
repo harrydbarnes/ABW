@@ -282,6 +282,15 @@ export const SettingsPanel = memo(function SettingsPanel({
   const showSpellSection =
     showSpellHeader || showSpellCheckToggle || showSpellCheckTopbar || showDictionary;
 
+  const showAdvancedSection = matchesSearch(
+    query,
+    "Advanced",
+    "Finance tab",
+    "MQS",
+    "Prisma",
+    "Beta",
+  );
+
   const showDiagnosticsSection =
     Boolean(diagnostics) &&
     matchesSearch(
@@ -631,6 +640,31 @@ export const SettingsPanel = memo(function SettingsPanel({
               words={settings.customDictionary}
             />
           </AnimatedSettingItem>
+        </div>
+      </AnimatedSettingItem>
+
+      <AnimatedSettingItem className="setting-section-item" visible={showAdvancedSection}>
+        <div className="setting-group">
+          <div className="setting-group-header">
+            <h2><HighlightText query={query} text="Advanced" /></h2>
+            <p><HighlightText query={query} text="Experimental and opt-in workspace features." /></p>
+          </div>
+          <label className="setting-row">
+            <div>
+              <strong><HighlightText query={query} text="Finance tab (Beta)" /></strong>
+              <p>
+                <HighlightText
+                  query={query}
+                  text="Show the Finance tab for MX MQS invoice queries, Prisma Orders risk tracking, and Excel exports."
+                />
+              </p>
+            </div>
+            <input
+              checked={settings.enableFinanceTab}
+              onChange={(event) => onChange({ ...settings, enableFinanceTab: event.target.checked })}
+              type="checkbox"
+            />
+          </label>
         </div>
       </AnimatedSettingItem>
 

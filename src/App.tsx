@@ -2484,17 +2484,19 @@ export function App() {
               <MaterialIcon kind="description" />
               Files
             </button>
-            <button
-              className={`nav-item ${!ticketModal && screen === "finance" ? "selected" : ""}`}
-              onClick={() => void showLocalScreen("finance")}
-              title="MQS Invoice Queries & Prisma Orders"
-            >
-              <MaterialIcon kind="finance" />
-              Finance
-              {financeBadgeCount > 0 ? (
-                <span className="finance-nav-badge">{financeBadgeCount}</span>
-              ) : null}
-            </button>
+            {settings.enableFinanceTab ? (
+              <button
+                className={`nav-item ${!ticketModal && screen === "finance" ? "selected" : ""}`}
+                onClick={() => void showLocalScreen("finance")}
+                title="MQS Invoice Queries & Prisma Orders"
+              >
+                <MaterialIcon kind="finance" />
+                Finance
+                {financeBadgeCount > 0 ? (
+                  <span className="finance-nav-badge">{financeBadgeCount}</span>
+                ) : null}
+              </button>
+            ) : null}
             <button
               className={`nav-item ${!ticketModal && screen === "settings" ? "selected" : ""}`}
               onClick={() => void showLocalScreen("settings")}
@@ -2564,16 +2566,18 @@ export function App() {
               <MaterialIcon kind="description" />
               <span>Files</span>
             </button>
-            <button
-              className={`topbar-menu-item ${!ticketModal && screen === "finance" ? "selected" : ""}`}
-              onClick={() => void showLocalScreen("finance")}
-            >
-              <MaterialIcon kind="finance" />
-              <span>Finance</span>
-              {financeBadgeCount > 0 ? (
-                <span className="finance-nav-badge">{financeBadgeCount}</span>
-              ) : null}
-            </button>
+            {settings.enableFinanceTab ? (
+              <button
+                className={`topbar-menu-item ${!ticketModal && screen === "finance" ? "selected" : ""}`}
+                onClick={() => void showLocalScreen("finance")}
+              >
+                <MaterialIcon kind="finance" />
+                <span>Finance</span>
+                {financeBadgeCount > 0 ? (
+                  <span className="finance-nav-badge">{financeBadgeCount}</span>
+                ) : null}
+              </button>
+            ) : null}
             <button
               className={`topbar-menu-item ${!ticketModal && screen === "settings" ? "selected" : ""}`}
               onClick={() => void showLocalScreen("settings")}
@@ -2915,8 +2919,15 @@ export function App() {
               />
             </Suspense>
           </div>
-        ) : screen === "finance" ? (
-          <Suspense fallback={<div className="finance-screen">Loading Finance dashboard...</div>}>
+        ) : screen === "finance" && settings.enableFinanceTab ? (
+          <Suspense
+            fallback={
+              <div className="finance-screen finance-loading-shell">
+                <div className="finance-loading-spinner" />
+                <span>Opening Finance workspace…</span>
+              </div>
+            }
+          >
             <FinanceDashboard
               onBadgeCountChange={setFinanceBadgeCount}
               onNotify={(message) => setNotice(message)}

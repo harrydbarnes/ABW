@@ -51,6 +51,7 @@ export interface Settings {
   useNativeWrikeImageViewer: boolean;
   autoCheckForUpdates: boolean;
   autoMatchWrikeTheme: boolean;
+  enableFinanceTab: boolean;
   suspendInactiveTabsMinutes: number;
   theme: AppThemeId;
   customDictionary: string[];

@@ -126,7 +126,9 @@ export default function FinanceDashboard({
   const [mxBuyers, setMxBuyers] = useState<MxBuyerEntry[]>([]);
   const [subTab, setSubTab] = useState<FinanceSubTab>("overview");
   const [search, setSearch] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
+  const [syncingMx, setSyncingMx] = useState(false);
+  const [syncingPrisma, setSyncingPrisma] = useState(false);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
   const [selectedTicketNo, setSelectedTicketNo] = useState<string | null>(null);
   const [editingFav, setEditingFav] = useState<FinanceFavouriteFilter | "new" | null>(null);
   const [showPasteModal, setShowPasteModal] = useState(false);
@@ -306,8 +308,15 @@ export default function FinanceDashboard({
     onNotify?.("Deleted favourite filter.");
   }
 
+  function clearBannerError() {
+    setSnapshot((prev) =>
+      prev ? { ...prev, syncStatus: { ...prev.syncStatus, lastError: null } } : prev,
+    );
+  }
+
   async function runSyncMx() {
-    setBusy("mx");
+    clearBannerError();
+    setSyncingMx(true);
     try {
       const next = await financeSyncMx();
       applySnapshot(next);
@@ -317,12 +326,13 @@ export default function FinanceDashboard({
     } catch (err) {
       onNotify?.(`MX sync failed: ${String(err)}`);
     } finally {
-      setBusy(null);
+      setSyncingMx(false);
     }
   }
 
   async function runSyncPrisma() {
-    setBusy("prisma");
+    clearBannerError();
+    setSyncingPrisma(true);
     try {
       const next = await financeSyncPrisma();
       applySnapshot(next);
@@ -332,13 +342,18 @@ export default function FinanceDashboard({
     } catch (err) {
       onNotify?.(`Prisma sync failed: ${String(err)}`);
     } finally {
-      setBusy(null);
+      setSyncingPrisma(false);
     }
+  }
+
+  async function runSyncAll() {
+    await Promise.all([runSyncMx(), runSyncPrisma()]);
   }
 
   async function handlePasteImport() {
     if (!pasteText.trim()) return;
-    setBusy("paste");
+    clearBannerError();
+    setBusyAction("paste");
     try {
       const next = await financeImportMqsText(pasteText, "manualImport");
       applySnapshot(next);
@@ -348,12 +363,13 @@ export default function FinanceDashboard({
     } catch (err) {
       onNotify?.(String(err));
     } finally {
-      setBusy(null);
+      setBusyAction(null);
     }
   }
 
   async function handleImportFile() {
-    setBusy("file");
+    clearBannerError();
+    setBusyAction("file");
     try {
       const next = await financeImportMqsFile();
       applySnapshot(next);
@@ -361,12 +377,13 @@ export default function FinanceDashboard({
     } catch (err) {
       onNotify?.(String(err));
     } finally {
-      setBusy(null);
+      setBusyAction(null);
     }
   }
 
   async function handlePickDigestFolder() {
-    setBusy("folder");
+    clearBannerError();
+    setBusyAction("folder");
     try {
       const next = await financePickDigestFolder();
       applySnapshot(next);
@@ -378,12 +395,12 @@ export default function FinanceDashboard({
     } catch (err) {
       onNotify?.(String(err));
     } finally {
-      setBusy(null);
+      setBusyAction(null);
     }
   }
 
   async function handleExportXlsx() {
-    setBusy("export");
+    setBusyAction("export");
     try {
       const saved = await financeExportXlsx(activeFav.id);
       if (saved) {
@@ -392,7 +409,7 @@ export default function FinanceDashboard({
     } catch (err) {
       onNotify?.(`Export failed: ${String(err)}`);
     } finally {
-      setBusy(null);
+      setBusyAction(null);
     }
   }
 
@@ -404,7 +421,7 @@ export default function FinanceDashboard({
       );
       if (!confirmed) return;
     }
-    setBusy("mx-action");
+    setBusyAction("mx-action");
     try {
       const res = await financeRunMxAction({
         ticketNo: selectedTicket.ticket.ticketNo,
@@ -418,7 +435,7 @@ export default function FinanceDashboard({
     } catch (err) {
       onNotify?.(String(err));
     } finally {
-      setBusy(null);
+      setBusyAction(null);
     }
   }
 
@@ -431,7 +448,7 @@ export default function FinanceDashboard({
       `Trigger "${label}" on Prisma order ${orderVer} via Ops Toolshed?`,
     );
     if (!confirmed) return;
-    setBusy(`prisma-${orderVer}`);
+    setBusyAction(`prisma-${orderVer}`);
     try {
       const res = await financeRunPrismaAction({ orderVer, action, reason: "" });
       onNotify?.(res.message);
@@ -442,7 +459,7 @@ export default function FinanceDashboard({
     } catch (err) {
       onNotify?.(String(err));
     } finally {
-      setBusy(null);
+      setBusyAction(null);
     }
   }
 
@@ -454,7 +471,12 @@ export default function FinanceDashboard({
   }
 
   if (!snapshot) {
-    return <div className="finance-screen">Loading Finance dashboard...</div>;
+    return (
+      <div className="finance-screen finance-loading-shell">
+        <div className="finance-loading-spinner" />
+        <span>Loading Finance workspace…</span>
+      </div>
+    );
   }
 
   return (
@@ -498,15 +520,23 @@ export default function FinanceDashboard({
           <button
             type="button"
             className="finance-btn"
-            disabled={busy !== null}
-            onClick={() => void runSyncMx()}
+            disabled={syncingMx || syncingPrisma}
+            onClick={() => void runSyncAll()}
           >
-            {busy === "mx" ? "Syncing MX..." : "Sync MX"}
+            {syncingMx && syncingPrisma ? "Syncing Both..." : "Sync Both"}
           </button>
           <button
             type="button"
             className="finance-btn"
-            disabled={busy !== null}
+            disabled={syncingMx}
+            onClick={() => void runSyncMx()}
+          >
+            {syncingMx ? "Syncing MX..." : "Sync MX"}
+          </button>
+          <button
+            type="button"
+            className="finance-btn"
+            disabled={busyAction !== null}
             onClick={() => setShowPasteModal(true)}
           >
             Paste MQS
@@ -514,7 +544,7 @@ export default function FinanceDashboard({
           <button
             type="button"
             className="finance-btn"
-            disabled={busy !== null}
+            disabled={busyAction !== null}
             onClick={() => void handleImportFile()}
           >
             Import Digest/File
@@ -522,7 +552,7 @@ export default function FinanceDashboard({
           <button
             type="button"
             className="finance-btn"
-            disabled={busy !== null}
+            disabled={busyAction !== null}
             onClick={() => void handlePickDigestFolder()}
             title={snapshot.digestFolder ?? "Choose a folder where MQS email digests are saved"}
           >
@@ -531,18 +561,18 @@ export default function FinanceDashboard({
           <button
             type="button"
             className="finance-btn"
-            disabled={busy !== null}
+            disabled={syncingPrisma}
             onClick={() => void runSyncPrisma()}
           >
-            {busy === "prisma" ? "Syncing Prisma..." : "Sync Prisma"}
+            {syncingPrisma ? "Syncing Prisma..." : "Sync Prisma"}
           </button>
           <button
             type="button"
             className="finance-btn primary"
-            disabled={busy !== null}
+            disabled={busyAction !== null}
             onClick={() => void handleExportXlsx()}
           >
-            {busy === "export" ? "Exporting..." : "Export Excel (.xlsx)"}
+            {busyAction === "export" ? "Exporting..." : "Export Excel (.xlsx)"}
           </button>
         </div>
       </div>
@@ -687,7 +717,7 @@ export default function FinanceDashboard({
                                   type="button"
                                   className="finance-btn"
                                   style={{ padding: "3px 7px", fontSize: 11 }}
-                                  disabled={busy !== null}
+                                  disabled={busyAction !== null}
                                   onClick={() =>
                                     void handlePrismaAction(row.order.orderVer, "agency_accept")
                                   }
@@ -698,7 +728,7 @@ export default function FinanceDashboard({
                                   type="button"
                                   className="finance-btn"
                                   style={{ padding: "3px 7px", fontSize: 11 }}
-                                  disabled={busy !== null}
+                                  disabled={busyAction !== null}
                                   onClick={() =>
                                     void handlePrismaAction(row.order.orderVer, "request_revision")
                                   }
@@ -906,7 +936,7 @@ export default function FinanceDashboard({
               <button
                 type="button"
                 className="finance-btn"
-                disabled={busy !== null}
+                disabled={busyAction !== null}
                 onClick={() => void handleMxAction(false)}
               >
                 Pre-fill in MX
@@ -914,7 +944,7 @@ export default function FinanceDashboard({
               <button
                 type="button"
                 className="finance-btn primary"
-                disabled={busy !== null}
+                disabled={busyAction !== null}
                 onClick={() => void handleMxAction(true)}
               >
                 Submit in MX
@@ -978,7 +1008,7 @@ export default function FinanceDashboard({
               <button
                 type="button"
                 className="finance-btn primary"
-                disabled={!pasteText.trim() || busy !== null}
+                disabled={!pasteText.trim() || busyAction !== null}
                 onClick={() => void handlePasteImport()}
               >
                 Import MQS Rows

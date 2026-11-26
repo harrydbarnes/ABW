@@ -398,3 +398,41 @@
   font-weight: 700;
   margin-left: 4px;
 }
+
+@keyframes financeFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes financeSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.finance-screen {
+  animation: financeFadeIn 160ms ease-out;
+}
+
+.finance-loading-shell {
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--muted, #5c6b82);
+  font-size: 13px;
+}
+
+.finance-loading-spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2.5px solid var(--border, #d5dce8);
+  border-top-color: var(--accent, #2457d6);
+  animation: financeSpin 0.75s linear infinite;
+}

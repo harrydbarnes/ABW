@@ -109,6 +109,7 @@ pub async fn finance_load_state(app: AppHandle) -> Result<FinanceSnapshot, Strin
         state.sync_status.mx_environment = mx_bridge::active_mx_environment();
         state.sync_status.prisma_paired = po_bridge::is_paired();
         state.sync_status.digest_folder = state.digest_folder.clone();
+        state.sync_status.last_error = None;
         Ok(build_snapshot(&state))
     })
     .await

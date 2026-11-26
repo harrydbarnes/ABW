@@ -64,6 +64,7 @@ export const DEFAULT_SETTINGS: Settings = {
   useNativeWrikeImageViewer: true,
   autoCheckForUpdates: true,
   autoMatchWrikeTheme: true,
+  enableFinanceTab: false,
   suspendInactiveTabsMinutes: 0,
   theme: "default",
   customDictionary: [],
