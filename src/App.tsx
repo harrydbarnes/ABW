@@ -121,11 +121,12 @@ function extractWrikeTicketMetadata(title: string, url: string): { client?: stri
   }
   return {
     client,
-    details: detailsParts.length ? detailsParts.join(" Â· ") : undefined,
+    details: detailsParts.length ? detailsParts.join(" Ã‚Â· ") : undefined,
   };
 }
 const READ_ONLY_URL = "https://login.wrike.com/login/?forceLogin=false&read";
 const APP_VERSION = import.meta.env.VITE_APP_VERSION;
+const LAUNCH_SPLASH_REVEAL_MS = 2080;
 const LAUNCH_SPLASH_FALLBACK_MS = 2800;
 const PERIODIC_UPDATE_CHECK_MS = 4 * 60 * 60 * 1000;
 const FOCUS_UPDATE_CHECK_MIN_AGE_MS = 60 * 60 * 1000;
@@ -585,7 +586,7 @@ export function App() {
       if (next.showLaunchSplash) {
         const remainingSplashMs = Math.max(
           0,
-          LAUNCH_SPLASH_FALLBACK_MS - (Date.now() - launchBootAtRef.current),
+          LAUNCH_SPLASH_REVEAL_MS - (Date.now() - launchBootAtRef.current),
         );
         if (remainingSplashMs > 0) {
           await new Promise<void>((resolve) => {
@@ -2390,7 +2391,7 @@ export function App() {
                 title="Swap left and right tabs"
                 type="button"
               >
-                â‡„
+                Ã¢â€¡â€ž
               </button>
               <button
                 aria-label="Exit split view"
@@ -2630,7 +2631,7 @@ export function App() {
       {showVpnBanner ? (
         <div className="vpn-banner" role="alert" aria-live="assertive">
           <div className="vpn-banner-copy">
-            <strong>Connection blocked â€” Connect to Cisco VPN</strong>
+            <strong>Connection blocked Ã¢â‚¬â€ Connect to Cisco VPN</strong>
             <span>
               If you aren&apos;t connected to Cisco VPN yet, connect now and reload this tab.
             </span>
@@ -2767,7 +2768,7 @@ export function App() {
                 onDoubleClick={() => void resetWrikeSplitRatio()}
                 onPointerDown={startWrikeSplitResize}
                 role="separator"
-                title="Drag to resize split Â· Double-click to reset 50/50"
+                title="Drag to resize split Ã‚Â· Double-click to reset 50/50"
               />
             ) : null}
             {draggedTabId && wrikeTabs.length > 1 ? (
@@ -2780,13 +2781,17 @@ export function App() {
                 </span>
               </div>
             ) : null}
-            <NavIcon kind="home" />
-            <h1>Wrike</h1>
-            <p>
-              {isDesktopRuntime()
-                ? "Loading your live workspace..."
-                : "Your live Wrike workspace displays here in the desktop app."}
-            </p>
+            {!isLaunchSplashVisible ? (
+              <>
+                <NavIcon kind="home" />
+                <h1>Wrike</h1>
+                <p>
+                  {isDesktopRuntime()
+                    ? "Loading your live workspace..."
+                    : "Your live Wrike workspace displays here in the desktop app."}
+                </p>
+              </>
+            ) : null}
           </section>
         ) : screen === "files" ? (
           <div

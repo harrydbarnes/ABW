@@ -644,7 +644,7 @@
       return null;
     }
     const now = Date.now();
-    if (!force && now - abwLastFullReportAt < 350) {
+    if (!force && now - abwLastFullReportAt < 150) {
       return window.__abwLastDetectedWrikeTheme || null;
     }
     abwLastFullReportAt = now;
@@ -672,7 +672,12 @@
       if (!force) {
         return detected;
       }
-    } else if (!force && typeof window.__abwLastDetectedWrikeTheme === "string") {
+    } else if (
+      !force &&
+      typeof window.__abwLastDetectedWrikeTheme === "string" &&
+      abwLastThemeEmitAt > 0 &&
+      now - abwLastThemeEmitAt < 1500
+    ) {
       if (abwPendingThemeCandidate === detected) {
         abwPendingThemeHits += 1;
       } else {
@@ -691,7 +696,7 @@
     abwEmitScheme(`abw-theme://detected?theme=${encodeURIComponent(detected)}`);
     return detected;
   };
-  const abwScheduleThemeDetect = (delay = 250) => {
+  const abwScheduleThemeDetect = (delay = 80) => {
     if (abwAutoDownload || !abwIsWrikeHost() || document.hidden || abwThemeDetectTimer) return;
     abwThemeDetectTimer = window.setTimeout(() => {
       abwThemeDetectTimer = 0;

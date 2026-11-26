@@ -290,7 +290,7 @@ test('injected theme, corner, and custom-scheme IPC are gated to wrike.com hosts
     'const abwScheduleCornerSync = () => {\n    if (abwAutoDownload || !abwIsWrikeHost()',
     'const abwSyncWrikeContentCorner = (fast = false) => {\n    if (abwAutoDownload || !abwIsWrikeHost()',
     'const abwReportWrikeTheme = (force = false) => {\n    if (abwAutoDownload || !abwIsWrikeHost()',
-    'const abwScheduleThemeDetect = (delay = 250) => {\n    if (abwAutoDownload || !abwIsWrikeHost()',
+    'const abwScheduleThemeDetect = (delay = 80) => {\n    if (abwAutoDownload || !abwIsWrikeHost()',
   ]) {
     const normalizedSource = source.replace(/\r\n/g, '\n');
     assert.ok(normalizedSource.includes(fnMarker), `Expected host gate in: ${fnMarker}`);
