@@ -4,46 +4,41 @@ ABW (A Better Wrike client) is a lightweight Windows desktop client built design
 
 ## Why ABW
 
-- Up to 375x lower observed RAM usage than the official Wrike Desktop in testing: 4 MB vs 1.5 GB.
-- Up to 68x smaller installed size: 10 MB vs 684 MB.
+- Lightweight Tauri 2 desktop host (~3 MB NSIS installer, ~7.7 MB executable, ~10–12 MB private host process) using Windows' built-in WebView2 runtime rather than bundling a separate Electron/Chromium distribution.
+- Lazy background tab creation on session restore plus automatic WebView2 `TrySuspend` for inactive tabs to keep multi-tab memory low.
+- Native Rust workbook parsing and streaming PDF preview with byte-bounded caching, so attachments open quickly without stalling the Wrike workspace.
 
 ## Product Direction
 
 A live Wrike surface below ABW's tab bar renders the real, current Wrike web application, while
 the trusted local surfaces own functionality where the official desktop experience is weakest:
 
-- A persistent `Files` library for downloads made in the Wrike workspace.
+- Multi-tab Wrike workspace with split view, session restore, `Ctrl+T`/`Ctrl+W`/`Ctrl+Tab`/`Ctrl+1–9` shortcuts, `wrikeapp://` deep links, favourites, and visit history.
+- Immediate visible-tab startup with lazy background tab initialization and automatic inactive-tab suspension.
+- A persistent `Files` library for downloads made in the Wrike workspace, with search, pinning, keyboard navigation, and half-screen compact layout support (`>= 760 px` window width).
 - Captured download date/time and the current Wrike task link for every downloaded file.
-- Fast in-app preview or `Open in Windows` for each file.
-- PDF rendering with page and zoom controls, loaded only when a PDF is opened.
-- Spreadsheet previews with worksheets, grid navigation, and zoom; workbook parsing happens in
-  native Rust with `calamine`, not inside the remote webview.
-- A spell-check preference applied to ABW controls and text editing fields in the Wrike webview.
-- Native download-complete notifications, with a Settings test action and an opt-out toggle.
+- Fast in-app preview or `Open in Windows` for each file (PDFs, spreadsheets, and images, with a setting to keep Wrike's native viewer for images).
+- PDF rendering via `pdfjs-dist` loaded only when needed, range streaming for larger PDFs, zoom/fit/rotation controls, and a 48 MiB byte-bounded page bitmap cache.
+- Native Rust spreadsheet preview (`zip` + `quick-xml` streaming OOXML for `.xlsx`/`.xlsm`, streaming RFC-4180 `.csv`/`.tsv`, and `calamine` fallback for `.xls`/`.xlsb`/`.ods`) with worksheets, theme/indexed styling, merges, on-demand embedded images, in-sheet find, cell copy (`Ctrl+C`), and zoom.
+- A spell-check preference and custom dictionary applied to ABW controls and Wrike text fields without full-DOM observer scans during typing.
+- Native download-complete notifications, taskbar unread/update badge, close-to-notification-area support, and signed GitHub Releases in-app updates.
 
 Downloaded files are stored per-user below ABW's application data directory; they never require
 administrator permissions or a shared machine-wide location.
 
 ## Current Status
 
-ABW now contains the minimum viable product workflow in code: a first-run Wrike workspace/login
-surface below the ABW tab bar, taskbar-hidden HTTPS sign-in surfaces for SSO/MFA that fold back
-into the workspace after a completed Wrike redirect, compact Files/Settings controls, and native
-download-complete notifications. It still needs a built Windows smoke test with a real Wrike
-account before it should be distributed as a validated desktop replacement.
-
-| Desktop capability | Current status |
+| Desktop capability | Status |
 | --- | --- |
-| Embedded WebView2 Wrike workspace tab | Implemented in code; login/account QA not run |
-| Sign-in, SSO/MFA and session persistence | Taskbar-hidden HTTPS pop-up flow implemented; completed workspace redirects close into the embedded tab; live-account QA pending |
-| Download tracking and enhanced local file library | Implemented in code; UI verified using representative data |
-| PDF and spreadsheet preview; open in Windows | Implemented in code; UI verified using representative data |
-| Spell-check toggle | Implemented in code; Wrike editor behaviour not validated against a live account |
-| Open-Wrike-at-launch preference | Selects the live Wrike tab at startup by default; desktop build QA pending |
-| Native ABW download-complete notifications | Implemented with opt-out and Settings test button; installed-app QA pending |
-| Wrike comment/mention/assignment web notifications | WebView2 default notification UI is available while the Wrike tab remains open; account QA pending |
-| Multiple native Wrike tabs/tab restoration | Tab-strip space reserved; additional tabs not implemented |
-| Background push while ABW is closed; taskbar unread badge | Not implemented |
+| Multi-tab WebView2 Wrike workspace & split view | Implemented and shipped (`v0.1.60`) |
+| Sign-in, SSO/MFA, `wrikeapp://` deep links & session restore | Implemented with lazy background tab creation |
+| Inactive-tab suspension & low-memory targeting | Implemented using confirmed WebView2 `TrySuspend` / `Resume` |
+| Download capture, `Files` library & source-task reopening | Implemented with compact half-screen (`>= 760 px`) layout |
+| PDF, spreadsheet & image previews; `Open in Windows` | Implemented with byte/row/column budgets and fallback |
+| Spell-check toggle & custom Windows dictionary | Implemented with subtree-scoped mutation observer |
+| Taskbar unread inbox badge & in-app signed updates | Implemented via `abw-inbox://` detection and Tauri updater |
+| Automatic PO checks via Chrome Ops Toolshed bridge | Implemented via `--register-po-host` native messaging |
+| Background push while ABW is fully closed | Outside scope (use close-to-tray to keep alerts active) |
 
 ### Notification Constraint
 
@@ -133,11 +128,12 @@ on a Windows runner when local Rust/MSVC build tools are unavailable.
   bootstrap page needed by authentication flows); the remote webview has no local ABW command
   permissions.
 - Preview/open commands resolve only files present in ABW's tracked download directory.
-- PDF preview is capped at 512 MB with a displayed size explanation when exceeded; spreadsheet
-  output is capped to 250 rows and 50 columns per sheet in the current viewer to keep the UI
-  responsive.
-- Workbooks are parsed in the trusted Rust process using `calamine 0.38`, rather than executing a
-  large JavaScript parser in the UI or Wrike webview.
+- PDF preview is capped at 128 MB, image preview at 32 MB, and spreadsheet preview at 64 MB
+  (with a 500-row, 50-column, 128-sheet budget and ZIP compression-ratio checks) with a displayed
+  explanation and `Open in Windows` fallback when exceeded.
+- Workbooks are parsed in the trusted Rust process (streaming OOXML via `zip`/`quick-xml`,
+  streaming CSV/TSV, and `calamine 0.38` for legacy formats) rather than executing a large
+  JavaScript parser in the UI or Wrike webview.
 - In-app updates download `latest.json` and the NSIS installer from HTTPS GitHub Releases and verify
   a cryptographic Tauri minisign signature against the embedded public key in `src-tauri/tauri.conf.json`
   before launching passive upgrades.
